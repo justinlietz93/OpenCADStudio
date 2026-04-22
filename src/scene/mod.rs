@@ -429,11 +429,6 @@ impl Scene {
     }
 
     /// Decide whether an entity should be drawn as direct content of `block_handle`.
-    ///
-    /// Normal case: entity.owner_handle equals the active layout/model block.
-    /// Fallback: if owner is null, allow it only when the handle is not listed
-    /// under any other block record. This prevents block-definition geometry
-    /// from leaking into the viewport when malformed files omit owner handles.
     fn belongs_to_visible_block(
         &self,
         entity_handle: Handle,
@@ -450,6 +445,17 @@ impl Scene {
             return false;
         }
 
+        // owner_handle is null (common in DXF files that omit group code 330).
+        // Use the current layout's entity_handles as the authoritative list when
+        // available — this prevents block-definition geometry from leaking into
+        // the viewport even when owner handles are missing.
+        if let Some(br) = self.document.block_records.iter().find(|br| br.handle == block_handle) {
+            if !br.entity_handles.is_empty() {
+                return br.entity_handles.contains(&entity_handle);
+            }
+        }
+
+        // entity_handles not populated: fall back to "not listed in any other block".
         !self
             .document
             .block_records
