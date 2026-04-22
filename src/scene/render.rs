@@ -3,11 +3,11 @@
 
 use acadrust::tables::LineType;
 use acadrust::types::{Color as AcadColor, LineWeight};
-use acadrust::EntityType;
+use acadrust::{EntityType, Handle};
 use glam::Mat4;
 use iced::mouse;
 use iced::widget::shader::{self, Viewport};
-use iced::{Event, Rectangle, Size};
+use iced::{Rectangle, Size};
 
 use super::pipeline::viewcube::{hover_id, VIEWCUBE_PX};
 use super::pipeline::Pipeline;
@@ -38,84 +38,6 @@ pub struct Primitive {
     pub(super) hover_region: Option<usize>,
     /// Background color used to clear the MSAA buffer at the start of each frame.
     pub(super) bg_color: [f32; 4],
-}
-
-// ── shader::Program impl ──────────────────────────────────────────────────
-
-impl<Msg: std::fmt::Debug + Clone> shader::Program<Msg> for Scene {
-    type State = CameraState;
-    type Primitive = Primitive;
-
-    fn draw(
-        &self,
-        state: &Self::State,
-        _cursor: mouse::Cursor,
-        bounds: Rectangle,
-    ) -> Self::Primitive {
-        let cam = self.camera.borrow();
-        self.selection.borrow_mut().vp_size = (bounds.width, bounds.height);
-
-        let mut all_wires = self.entity_wires();
-        if let Some(iw) = &self.interim_wire {
-            all_wires.push(iw.clone());
-        }
-        all_wires.extend(self.preview_wires.iter().cloned());
-
-        let bg_color = if self.current_layout == "Model" {
-            self.bg_color
-        } else {
-            self.paper_bg_color
-        };
-
-        Primitive {
-            wires: all_wires,
-            hatches: self.synced_hatch_models(),
-            wipeout_hatches: self.wipeout_models(),
-            images: self.images.values().cloned().collect(),
-            meshes: self.meshes.values().cloned().collect(),
-            uniforms: Uniforms::new(&cam, bounds),
-            cam_rotation: cam.view_rotation_mat(),
-            hover_region: state.hover_region,
-            bg_color,
-        }
-    }
-
-    fn update(
-        &self,
-        state: &mut Self::State,
-        event: &Event,
-        bounds: Rectangle,
-        cursor: mouse::Cursor,
-    ) -> Option<iced::widget::Action<Msg>> {
-        let pos = cursor.position_in(bounds);
-        let cam_rotation = { self.camera.borrow().view_rotation_mat() };
-        if let Some(p) = pos {
-            state.hover_region = hover_id(
-                p.x,
-                p.y,
-                bounds.width,
-                bounds.height,
-                cam_rotation,
-                VIEWCUBE_PX,
-            );
-        } else {
-            state.hover_region = None;
-        }
-        let _ = event;
-        None
-    }
-
-    fn mouse_interaction(
-        &self,
-        state: &Self::State,
-        _b: Rectangle,
-        _c: mouse::Cursor,
-    ) -> mouse::Interaction {
-        if state.hover_region.is_some() {
-            return mouse::Interaction::Pointer;
-        }
-        mouse::Interaction::default()
-    }
 }
 
 // ── shader::Primitive impl ────────────────────────────────────────────────
@@ -232,6 +154,142 @@ impl Scene {
                 .unwrap_or("Continuous")
         } else {
             elt.as_str()
+        }
+    }
+}
+
+// ── Primitive builder helpers (called by ViewportPane's shader::Program impl) ──
+
+impl Scene {
+    /// Build a full-scene Primitive for the model or paper view (the camera
+    /// stored in `self.camera` is used as-is).
+    pub(super) fn build_primitive(
+        &self,
+        hover_region: Option<usize>,
+        bounds: Rectangle,
+    ) -> Primitive {
+        let cam = self.camera.borrow();
+        self.selection.borrow_mut().vp_size = (bounds.width, bounds.height);
+
+        let mut all_wires = self.entity_wires();
+        if let Some(iw) = &self.interim_wire {
+            all_wires.push(iw.clone());
+        }
+        all_wires.extend(self.preview_wires.iter().cloned());
+
+        let bg_color = if self.current_layout == "Model" {
+            self.bg_color
+        } else {
+            self.paper_bg_color
+        };
+
+        Primitive {
+            wires: all_wires,
+            hatches: self.synced_hatch_models(),
+            wipeout_hatches: self.wipeout_models(),
+            images: self.images.values().cloned().collect(),
+            meshes: self.meshes.values().cloned().collect(),
+            uniforms: Uniforms::new(&cam, bounds),
+            cam_rotation: cam.view_rotation_mat(),
+            hover_region,
+            bg_color,
+        }
+    }
+
+    /// Build a Primitive for the paper-sheet background: paper-space entities
+    /// (title blocks, frames, borders) using the paper-space camera.
+    /// Viewport content is NOT included — it is rendered by separate
+    /// `ViewportPane::Paper` widgets stacked on top.
+    pub(super) fn build_paper_sheet_primitive(
+        &self,
+        hover_region: Option<usize>,
+        bounds: Rectangle,
+    ) -> Primitive {
+        let cam = self.camera.borrow();
+        self.selection.borrow_mut().vp_size = (bounds.width, bounds.height);
+
+        let mut wires = self.paper_sheet_wires();
+        if let Some(iw) = &self.interim_wire {
+            wires.push(iw.clone());
+        }
+        wires.extend(self.preview_wires.iter().cloned());
+
+        Primitive {
+            wires,
+            hatches: self.synced_hatch_models(),
+            wipeout_hatches: self.wipeout_models(),
+            images: self.images.values().cloned().collect(),
+            meshes: self.meshes.values().cloned().collect(),
+            uniforms: Uniforms::new(&cam, bounds),
+            cam_rotation: cam.view_rotation_mat(),
+            hover_region,
+            bg_color: self.paper_bg_color,
+        }
+    }
+
+    /// Build a Primitive that renders model-space content through a specific
+    /// paper-space viewport's camera, applying its layer-freeze list.
+    pub(super) fn build_viewport_primitive(
+        &self,
+        vp_handle: Handle,
+        hover_region: Option<usize>,
+        bounds: Rectangle,
+    ) -> Primitive {
+        let cam = match self.camera_for_viewport(vp_handle) {
+            Some(c) => c,
+            None => return self.build_primitive(hover_region, bounds),
+        };
+
+        let mut all_wires = self.model_wires_for_viewport(vp_handle);
+        if let Some(iw) = &self.interim_wire {
+            all_wires.push(iw.clone());
+        }
+        all_wires.extend(self.preview_wires.iter().cloned());
+
+        Primitive {
+            wires: all_wires,
+            hatches: self.synced_hatch_models(),
+            wipeout_hatches: self.wipeout_models(),
+            images: self.images.values().cloned().collect(),
+            meshes: self.meshes.values().cloned().collect(),
+            uniforms: Uniforms::new(&cam, bounds),
+            cam_rotation: cam.view_rotation_mat(),
+            hover_region,
+            bg_color: self.bg_color,
+        }
+    }
+
+    /// Update viewcube hover state from cursor position within `bounds`.
+    pub(super) fn update_viewcube_state(
+        &self,
+        state: &mut CameraState,
+        bounds: Rectangle,
+        cursor: mouse::Cursor,
+    ) {
+        let pos = cursor.position_in(bounds);
+        let cam_rotation = self.camera.borrow().view_rotation_mat();
+        if let Some(p) = pos {
+            state.hover_region = hover_id(
+                p.x,
+                p.y,
+                bounds.width,
+                bounds.height,
+                cam_rotation,
+                VIEWCUBE_PX,
+            );
+        } else {
+            state.hover_region = None;
+        }
+    }
+
+    pub(super) fn viewcube_mouse_interaction(
+        &self,
+        state: &CameraState,
+    ) -> mouse::Interaction {
+        if state.hover_region.is_some() {
+            mouse::Interaction::Pointer
+        } else {
+            mouse::Interaction::default()
         }
     }
 }

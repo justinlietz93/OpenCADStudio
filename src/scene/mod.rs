@@ -18,6 +18,7 @@ pub mod solid3d_tess;
 pub mod tessellate;
 pub mod transform;
 pub mod truck_tess;
+pub mod viewport_pane;
 pub mod wire_model;
 
 use camera::Camera;
@@ -2095,6 +2096,156 @@ impl Scene {
     }
 
     pub fn update(&mut self, _dt: Duration) {}
+
+    // ── Paper-space coordinate helpers ───────────────────────────────────
+
+    /// Convert a paper-space Viewport entity's position/size into a pixel
+    /// `Rectangle` relative to the top-left of the paper canvas.
+    ///
+    /// `canvas_px`  — the pixel dimensions of the area that shows the paper.
+    /// Paper limits from the current layout define the paper-space extent;
+    /// the viewport is mapped linearly into that area (Y-axis flipped).
+    /// Returns `None` if the viewport handle is invalid or paper limits are missing.
+    pub fn viewport_screen_rect(
+        &self,
+        vp_handle: Handle,
+        canvas_px: (f32, f32),
+    ) -> Option<iced::Rectangle> {
+        let ((px0, py0), (px1, py1)) = self.paper_limits()?;
+        let paper_w = (px1 - px0) as f32;
+        let paper_h = (py1 - py0) as f32;
+        if paper_w < 1e-6 || paper_h < 1e-6 {
+            return None;
+        }
+
+        let vp = match self.document.get_entity(vp_handle) {
+            Some(EntityType::Viewport(vp)) => vp,
+            _ => return None,
+        };
+
+        let (canvas_w, canvas_h) = canvas_px;
+        let sx = canvas_w / paper_w;
+        let sy = canvas_h / paper_h;
+
+        let cx = vp.center.x as f32;
+        let cy = vp.center.y as f32;
+        let hw = (vp.width / 2.0) as f32;
+        let hh = (vp.height / 2.0) as f32;
+
+        // Map paper coords (origin = paper min, Y up) → screen (Y down).
+        let screen_x = (cx - hw - px0 as f32) * sx;
+        let screen_y = (py1 as f32 - (cy + hh)) * sy;
+
+        Some(iced::Rectangle {
+            x: screen_x,
+            y: screen_y,
+            width: vp.width as f32 * sx,
+            height: vp.height as f32 * sy,
+        })
+    }
+
+    // ── ViewportPane helpers ──────────────────────────────────────────────
+
+    /// Paper-space entity wires only (title blocks, frames, borders).
+    /// Does NOT include viewport content projection — that is handled by
+    /// individual ViewportPane::Paper widgets layered on top.
+    pub(super) fn paper_sheet_wires(&self) -> Vec<WireModel> {
+        let layout_block = self.current_layout_block_handle();
+        let mut wires = self.wires_for_block(layout_block);
+        if let Some(((x0, y0), (x1, y1))) = self.paper_limits() {
+            wires.insert(0, paper_boundary_wire(x0 as f32, y0 as f32, x1 as f32, y1 as f32));
+        }
+        wires
+    }
+
+    /// Build a Camera oriented and scaled to match a paper-space Viewport entity.
+    /// Used by `ViewportPane::Paper` to render model-space content through the
+    /// viewport's own view direction and scale.
+    fn camera_for_viewport(&self, vp_handle: Handle) -> Option<camera::Camera> {
+        let vp = match self.document.get_entity(vp_handle) {
+            Some(EntityType::Viewport(vp)) => vp,
+            _ => return None,
+        };
+
+        let vd = glam::Vec3::new(
+            vp.view_direction.x as f32,
+            vp.view_direction.y as f32,
+            vp.view_direction.z as f32,
+        )
+        .normalize_or(glam::Vec3::Z);
+
+        let pitch = vd.z.clamp(-0.999, 0.999).asin();
+        let yaw = vd.x.atan2(vd.y);
+
+        let target = glam::Vec3::new(
+            vp.view_target.x as f32,
+            vp.view_target.y as f32,
+            vp.view_target.z as f32,
+        );
+
+        let fov_y = 45.0_f32.to_radians();
+        let view_height = if vp.view_height.abs() > 1e-9 {
+            vp.view_height as f32
+        } else {
+            vp.height as f32
+        };
+        // ortho_size = distance * tan(fov_y/2)  =>  distance = view_height/2 / tan(fov_y/2)
+        let distance = ((view_height / 2.0) / (fov_y * 0.5).tan()).max(0.001);
+
+        Some(camera::Camera {
+            target,
+            rotation: camera::yaw_pitch_to_quat(yaw, pitch),
+            distance,
+            fov_y,
+            projection: camera::Projection::Orthographic,
+            yaw,
+            pitch,
+        })
+    }
+
+    /// Collect model-space WireModels visible through `vp_handle`, respecting
+    /// global layer visibility and the viewport's per-viewport layer freeze list.
+    fn model_wires_for_viewport(&self, vp_handle: Handle) -> Vec<WireModel> {
+        use std::collections::HashSet as HSet;
+
+        let frozen: HSet<Handle> = match self.document.get_entity(vp_handle) {
+            Some(EntityType::Viewport(vp)) => vp.frozen_layers.iter().cloned().collect(),
+            _ => HSet::new(),
+        };
+
+        let model_block = self.model_space_block_handle();
+
+        self.document
+            .entities()
+            .filter(|e| {
+                let c = e.common();
+                if c.invisible || matches!(e, EntityType::Viewport(_)) {
+                    return false;
+                }
+                if !self.belongs_to_visible_block(c.handle, c.owner_handle, model_block) {
+                    return false;
+                }
+                if self
+                    .document
+                    .layers
+                    .get(&c.layer)
+                    .map(|l| l.flags.off || l.flags.frozen)
+                    .unwrap_or(false)
+                {
+                    return false;
+                }
+                if !frozen.is_empty() {
+                    if let Some(lh) = self.document.layers.get(&c.layer).map(|l| l.handle) {
+                        if frozen.contains(&lh) {
+                            return false;
+                        }
+                    }
+                }
+                true
+            })
+            .flat_map(|e| self.tessellate_one(e))
+            .collect()
+    }
 }
 
 impl Default for Scene {
