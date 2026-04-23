@@ -100,7 +100,7 @@ impl shader::Primitive for Primitive {
         pipeline: &mut Pipeline,
         device: &iced::wgpu::Device,
         queue: &iced::wgpu::Queue,
-        _bounds: &Rectangle,
+        bounds: &Rectangle,
         viewport: &Viewport,
     ) {
         let phys = viewport.physical_size();
@@ -109,8 +109,8 @@ impl shader::Primitive for Primitive {
         // not the full surface — so the MSAA resolve can't overwrite other widgets.
         let scale = viewport.scale_factor() as f32;
         let clip_size = Size::new(
-            (_bounds.width * scale).ceil() as u32,
-            (_bounds.height * scale).ceil() as u32,
+            (bounds.width * scale).ceil() as u32,
+            (bounds.height * scale).ceil() as u32,
         );
         pipeline.ensure_depth_texture(device, clip_size);
         pipeline.viewcube.ensure_depth_texture(device, full_size);
@@ -120,12 +120,11 @@ impl shader::Primitive for Primitive {
         pipeline.upload_images(device, queue, &self.images);
         pipeline.upload_meshes(device, &self.meshes);
         pipeline.upload_wires(device, &self.wires);
-        let logical = viewport.logical_size();
         pipeline.viewcube.upload(
             queue,
             self.cam_rotation,
-            logical.width as u32,
-            logical.height as u32,
+            bounds.width as u32,
+            bounds.height as u32,
             self.hover_region,
         );
     }
