@@ -1062,9 +1062,19 @@ impl H7CAD {
                     if sel.right_dragging {
                         if let Some(last) = sel.right_last_pos {
                             let (dx, dy) = (p.x - last.x, p.y - last.y);
-                            self.tabs[i].scene.camera.borrow_mut().orbit(dx, dy);
+                            if self.tabs[i].scene.active_viewport.is_some() {
+                                // Update position before dropping the borrow.
+                                sel.right_last_pos = Some(p);
+                                drop(sel);
+                                self.tabs[i].scene.orbit_active_viewport(dx, dy);
+                                return Task::none();
+                            } else {
+                                self.tabs[i].scene.camera.borrow_mut().orbit(dx, dy);
+                                sel.right_last_pos = Some(p);
+                            }
+                        } else {
+                            sel.right_last_pos = Some(p);
                         }
-                        sel.right_last_pos = Some(p);
                     }
                 }
 
@@ -1803,10 +1813,10 @@ impl H7CAD {
 
             Message::ViewportClick => {
                 let i = self.active_tab;
-                let cam = self.tabs[i].scene.camera.borrow();
+                let rot = self.tabs[i].scene.active_view_rotation_mat();
                 let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
                 if let Some(region) = scene::hit_test(
-                    self.cursor_pos.x, self.cursor_pos.y, vw, vh, cam.view_rotation_mat(), VIEWCUBE_PX,
+                    self.cursor_pos.x, self.cursor_pos.y, vw, vh, rot, VIEWCUBE_PX,
                 ) {
                     return Task::done(Message::ViewCubeSnap(region));
                 }
@@ -1821,15 +1831,31 @@ impl H7CAD {
             Message::ViewCubeSnap(region) => {
                 let i = self.active_tab;
                 let mut region = region;
-                {
-                    let mut cam = self.tabs[i].scene.camera.borrow_mut();
+                let (yaw, pitch) = {
                     let (target_yaw, target_pitch) = region.snap_angles();
-                    if angle_close(cam.yaw, target_yaw, 0.01)
-                        && angle_close(cam.pitch, target_pitch, 0.01)
+                    // Check current orientation to detect "already there → flip to opposite".
+                    let already_there = if let Some((cur_yaw, cur_pitch)) =
+                        self.tabs[i].scene.active_viewport_yaw_pitch()
                     {
+                        angle_close(cur_yaw, target_yaw, 0.01)
+                            && angle_close(cur_pitch, target_pitch, 0.01)
+                    } else if self.tabs[i].scene.active_viewport.is_some() {
+                        false
+                    } else {
+                        let cam = self.tabs[i].scene.camera.borrow();
+                        angle_close(cam.yaw, target_yaw, 0.01)
+                            && angle_close(cam.pitch, target_pitch, 0.01)
+                    };
+                    if already_there {
                         region = region.opposite();
                     }
-                    let (yaw, pitch) = region.snap_angles();
+                    region.snap_angles()
+                };
+
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    self.tabs[i].scene.snap_active_viewport_to_angles(yaw, pitch);
+                } else {
+                    let mut cam = self.tabs[i].scene.camera.borrow_mut();
                     cam.snap_to_angles(yaw, pitch);
                 }
                 self.tabs[i].scene.camera_generation += 1;

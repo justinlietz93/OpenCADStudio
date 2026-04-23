@@ -976,6 +976,72 @@ impl Scene {
         }
     }
 
+    /// Orbit the active viewport's view direction by the given screen-pixel delta.
+    /// No-op when there is no active viewport or it is locked.
+    pub fn orbit_active_viewport(&mut self, delta_x: f32, delta_y: f32) {
+        let vp_handle = match self.active_viewport {
+            Some(h) => h,
+            None => return,
+        };
+        let mut cam = match self.camera_for_viewport(vp_handle) {
+            Some(c) => c,
+            None => return,
+        };
+        cam.orbit(delta_x, delta_y);
+        // Write the new view direction back to the viewport entity.
+        let eye = cam.rotation * glam::Vec3::Z;
+        if let Some(acadrust::EntityType::Viewport(vp)) =
+            self.document.get_entity_mut(vp_handle)
+        {
+            if vp.status.locked {
+                return;
+            }
+            vp.view_direction.x = eye.x as f64;
+            vp.view_direction.y = eye.y as f64;
+            vp.view_direction.z = eye.z as f64;
+        }
+    }
+
+    /// Snap the active viewport's view direction to a canonical yaw/pitch.
+    /// No-op when there is no active viewport or it is locked.
+    pub fn snap_active_viewport_to_angles(&mut self, yaw: f32, pitch: f32) {
+        let vp_handle = match self.active_viewport {
+            Some(h) => h,
+            None => return,
+        };
+        let cos_p = pitch.cos();
+        let eye = glam::Vec3::new(cos_p * yaw.sin(), cos_p * yaw.cos(), pitch.sin());
+        if let Some(acadrust::EntityType::Viewport(vp)) =
+            self.document.get_entity_mut(vp_handle)
+        {
+            if vp.status.locked {
+                return;
+            }
+            vp.view_direction.x = eye.x as f64;
+            vp.view_direction.y = eye.y as f64;
+            vp.view_direction.z = eye.z as f64;
+        }
+    }
+
+    /// View-rotation matrix for the active viewport (MSPACE), or the
+    /// paper-space camera's matrix when not in MSPACE.
+    /// Used by ViewCube hit-testing so clicks map to the correct camera.
+    pub fn active_view_rotation_mat(&self) -> glam::Mat4 {
+        if let Some(h) = self.active_viewport {
+            if let Some(cam) = self.camera_for_viewport(h) {
+                return cam.view_rotation_mat();
+            }
+        }
+        self.camera.borrow().view_rotation_mat()
+    }
+
+    /// Return (yaw, pitch) of the active viewport's camera, or None if PSPACE.
+    pub fn active_viewport_yaw_pitch(&self) -> Option<(f32, f32)> {
+        let h = self.active_viewport?;
+        let cam = self.camera_for_viewport(h)?;
+        Some((cam.yaw, cam.pitch))
+    }
+
     /// Return the handle of the user viewport whose bounding rectangle contains
     /// the given paper-space point, or `None` if no viewport matches.
     pub fn viewport_at_paper_point(&self, px: f32, py: f32) -> Option<Handle> {
