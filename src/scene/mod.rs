@@ -2311,7 +2311,7 @@ impl Scene {
         // Build rotation: canonical eye is +Z, rotate to eye_dir.
         cam.rotation = glam::Quat::from_rotation_arc(Vec3::Z, eye_dir);
         // Sync yaw/pitch from new rotation (for ViewCube).
-        let pitch = eye_dir.z.clamp(-0.999, 0.999).asin();
+        let pitch = eye_dir.z.clamp(-1.0, 1.0).asin();
         let yaw = eye_dir.x.atan2(eye_dir.y);
         cam.yaw = yaw;
         cam.pitch = pitch;
@@ -2380,9 +2380,65 @@ impl Scene {
         self.camera_generation += 1;
     }
 
+    /// Apply camera state from an acadrust View table entry.
+    /// `model_space`: if true, subtracts world_offset from target (wire-space).
+    fn apply_camera_from_view_entry(&mut self, view: &acadrust::tables::View, model_space: bool) -> bool {
+        if view.height.abs() < 1e-9 {
+            return false;
+        }
+        let vd = glam::Vec3::new(
+            view.direction.x as f32,
+            view.direction.y as f32,
+            view.direction.z as f32,
+        ).normalize_or(glam::Vec3::Z);
+        let pitch = vd.z.clamp(-1.0, 1.0).asin();
+        let yaw = if vd.x.abs() < 1e-6 && vd.y.abs() < 1e-6 {
+            0.0_f32
+        } else {
+            vd.x.atan2(-vd.y)
+        };
+        let rotation  = camera::yaw_pitch_to_quat(yaw, pitch);
+        let view_right = rotation * glam::Vec3::X;
+        let view_up    = rotation * glam::Vec3::Y;
+        let base = if model_space {
+            glam::Vec3::new(
+                (view.target.x - self.world_offset[0]) as f32,
+                (view.target.y - self.world_offset[1]) as f32,
+                (view.target.z - self.world_offset[2]) as f32,
+            )
+        } else {
+            glam::Vec3::new(
+                view.target.x as f32,
+                view.target.y as f32,
+                view.target.z as f32,
+            )
+        };
+        let target = base
+            + view_right * view.center.x as f32
+            + view_up    * view.center.y as f32;
+        let fov_y    = 45.0_f32.to_radians();
+        let distance = ((view.height as f32 / 2.0) / (fov_y * 0.5).tan()).max(0.001);
+        let mut cam = self.camera.borrow_mut();
+        cam.target     = target;
+        cam.rotation   = rotation;
+        cam.distance   = distance;
+        cam.yaw        = yaw;
+        cam.pitch      = pitch;
+        cam.fov_y      = fov_y;
+        cam.projection = camera::Projection::Orthographic;
+        drop(cam);
+        self.camera_generation += 1;
+        true
+    }
+
     /// Set the model-space camera from the VPORT table's *Active entry.
     /// Returns true if the entry was found and the camera was set.
     fn apply_active_vport_camera(&mut self) -> bool {
+        // Prefer our named View entry — survives DWG save without being overridden.
+        let saved_view = self.document.views.iter().find(|v| v.name == "H7CAD_Camera_Model").cloned();
+        if let Some(view) = saved_view {
+            return self.apply_camera_from_view_entry(&view, true);
+        }
         let vp = match self.document.vports.iter().find(|v| v.name == "*Active") {
             Some(v) => v.clone(),
             None => return false,
@@ -2399,8 +2455,15 @@ impl Scene {
         )
         .normalize_or(glam::Vec3::Z);
 
-        let pitch = vd.z.clamp(-0.999, 0.999).asin();
-        let yaw = vd.x.atan2(-vd.y);
+        let pitch = vd.z.clamp(-1.0, 1.0).asin();
+        // view_dir = (sin(yaw)*cos(pitch), -cos(yaw)*cos(pitch), sin(pitch))
+        // → yaw = atan2(x, -y), but when looking straight up/down cos(pitch)≈0
+        //   both x and y are near zero and atan2(0, -0.0) = π due to IEEE 754.
+        let yaw = if vd.x.abs() < 1e-6 && vd.y.abs() < 1e-6 {
+            0.0_f32 // plan/nadir view: yaw is undefined, default to 0
+        } else {
+            vd.x.atan2(-vd.y)
+        };
         let rotation = camera::yaw_pitch_to_quat(yaw, pitch);
         let view_right = rotation * glam::Vec3::X;
         let view_up    = rotation * glam::Vec3::Y;
@@ -2435,6 +2498,13 @@ impl Scene {
     /// Set the paper-space camera from the sheet viewport's stored view.
     /// Returns true if a valid sheet viewport was found and the camera was set.
     fn apply_sheet_viewport_camera(&mut self) -> bool {
+        // Prefer our named View entry — survives DWG save without being overridden.
+        let view_name = format!("H7CAD_Camera_{}", self.current_layout);
+        let saved_view = self.document.views.iter().find(|v| v.name == view_name).cloned();
+        if let Some(view) = saved_view {
+            return self.apply_camera_from_view_entry(&view, false);
+        }
+
         let layout_block = self.current_layout_block_handle();
         if layout_block.is_null() {
             return false;
@@ -2462,8 +2532,15 @@ impl Scene {
         )
         .normalize_or(glam::Vec3::Z);
 
-        let pitch = vd.z.clamp(-0.999, 0.999).asin();
-        let yaw = vd.x.atan2(-vd.y);
+        let pitch = vd.z.clamp(-1.0, 1.0).asin();
+        // view_dir = (sin(yaw)*cos(pitch), -cos(yaw)*cos(pitch), sin(pitch))
+        // → yaw = atan2(x, -y), but when looking straight up/down cos(pitch)≈0
+        //   both x and y are near zero and atan2(0, -0.0) = π due to IEEE 754.
+        let yaw = if vd.x.abs() < 1e-6 && vd.y.abs() < 1e-6 {
+            0.0_f32 // plan/nadir view: yaw is undefined, default to 0
+        } else {
+            vd.x.atan2(-vd.y)
+        };
         let rotation = camera::yaw_pitch_to_quat(yaw, pitch);
         let view_right = rotation * glam::Vec3::X;
         let view_up    = rotation * glam::Vec3::Y;
@@ -2501,61 +2578,79 @@ impl Scene {
         let cam = self.camera.borrow().clone();
         let view_dir = cam.rotation * glam::Vec3::Z;
         let view_height = cam.ortho_size() * 2.0;
+        let vd3 = acadrust::types::Vector3 {
+            x: view_dir.x as f64,
+            y: view_dir.y as f64,
+            z: view_dir.z as f64,
+        };
 
         if self.current_layout == "Model" {
-            // Write back to the *Active VPort entry.
-            let vp = match self.document.vports.iter_mut().find(|v| v.name == "*Active") {
-                Some(v) => v,
-                None => return false,
-            };
-            // cam.target is in wire-space; convert back to raw model WCS.
-            vp.view_target = acadrust::types::Vector3 {
+            let target_wcs = acadrust::types::Vector3 {
                 x: (cam.target.x as f64) + self.world_offset[0],
                 y: (cam.target.y as f64) + self.world_offset[1],
                 z: (cam.target.z as f64) + self.world_offset[2],
             };
-            vp.view_center  = acadrust::types::Vector2::ZERO;
-            vp.view_direction = acadrust::types::Vector3 {
-                x: view_dir.x as f64,
-                y: view_dir.y as f64,
-                z: view_dir.z as f64,
-            };
-            vp.view_height = view_height as f64;
+
+            // Write back to the *Active VPort entry (may be overridden by DWG writer).
+            if let Some(vp) = self.document.vports.iter_mut().find(|v| v.name == "*Active") {
+                vp.view_target    = target_wcs;
+                vp.view_center    = acadrust::types::Vector2::ZERO;
+                vp.view_direction = vd3;
+                vp.view_height    = view_height as f64;
+            }
+
+            // Also write to View table — survives DWG save without override.
+            self.write_camera_view_entry("H7CAD_Camera_Model", target_wcs, vd3, view_height);
             true
         } else {
+            let target_wcs = acadrust::types::Vector3 {
+                x: cam.target.x as f64,
+                y: cam.target.y as f64,
+                z: cam.target.z as f64,
+            };
+            let view_name = format!("H7CAD_Camera_{}", self.current_layout);
+
             // Write back to the sheet viewport entity.
             let layout_block = self.current_layout_block_handle();
-            if layout_block.is_null() { return false; }
+            if !layout_block.is_null() {
+                let sheet_handle = self.document.entities()
+                    .filter_map(|e| if let EntityType::Viewport(vp) = e { Some(vp) } else { None })
+                    .find(|vp| vp.common.owner_handle == layout_block && !Self::is_content_viewport(vp))
+                    .map(|vp| vp.common.handle);
 
-            let sheet_handle = self.document.entities()
-                .filter_map(|e| if let EntityType::Viewport(vp) = e { Some(vp) } else { None })
-                .find(|vp| vp.common.owner_handle == layout_block && !Self::is_content_viewport(vp))
-                .map(|vp| vp.common.handle);
-
-            let handle = match sheet_handle {
-                Some(h) => h,
-                None => return false,
-            };
-
-            if let Some(EntityType::Viewport(vp)) = self.document.get_entity_mut(handle) {
-                // Paper-space entities have no world_offset; target is raw paper coords.
-                vp.view_target = acadrust::types::Vector3 {
-                    x: cam.target.x as f64,
-                    y: cam.target.y as f64,
-                    z: cam.target.z as f64,
-                };
-                vp.view_center  = acadrust::types::Vector3::ZERO;
-                vp.view_direction = acadrust::types::Vector3 {
-                    x: view_dir.x as f64,
-                    y: view_dir.y as f64,
-                    z: view_dir.z as f64,
-                };
-                vp.view_height = view_height as f64;
-                true
-            } else {
-                false
+                if let Some(handle) = sheet_handle {
+                    if let Some(EntityType::Viewport(vp)) = self.document.get_entity_mut(handle) {
+                        vp.view_target    = target_wcs;
+                        vp.view_center    = acadrust::types::Vector3::ZERO;
+                        vp.view_direction = vd3;
+                        vp.view_height    = view_height as f64;
+                    }
+                }
             }
+
+            // Also write to View table — survives DWG save without override.
+            self.write_camera_view_entry(&view_name, target_wcs, vd3, view_height);
+            true
         }
+    }
+
+    /// Upsert a named View entry with the given camera fields.
+    fn write_camera_view_entry(
+        &mut self,
+        name: &str,
+        target: acadrust::types::Vector3,
+        direction: acadrust::types::Vector3,
+        height: f32,
+    ) {
+        let existing_handle = self.document.views.iter().find(|v| v.name == name).map(|v| v.handle);
+        let mut entry = acadrust::tables::View::new(name);
+        entry.handle    = existing_handle.unwrap_or_else(|| self.document.allocate_handle());
+        entry.target    = target;
+        entry.direction = direction;
+        entry.height    = height as f64;
+        entry.width     = height as f64;
+        entry.center    = acadrust::types::Vector3::ZERO;
+        self.document.views.add_or_replace(entry);
     }
 
     /// Restore the camera from the file's saved view (called once on open).
@@ -2720,8 +2815,15 @@ impl Scene {
         )
         .normalize_or(glam::Vec3::Z);
 
-        let pitch = vd.z.clamp(-0.999, 0.999).asin();
-        let yaw = vd.x.atan2(-vd.y);
+        let pitch = vd.z.clamp(-1.0, 1.0).asin();
+        // view_dir = (sin(yaw)*cos(pitch), -cos(yaw)*cos(pitch), sin(pitch))
+        // → yaw = atan2(x, -y), but when looking straight up/down cos(pitch)≈0
+        //   both x and y are near zero and atan2(0, -0.0) = π due to IEEE 754.
+        let yaw = if vd.x.abs() < 1e-6 && vd.y.abs() < 1e-6 {
+            0.0_f32 // plan/nadir view: yaw is undefined, default to 0
+        } else {
+            vd.x.atan2(-vd.y)
+        };
 
         let rotation = camera::yaw_pitch_to_quat(yaw, pitch);
         let view_right = rotation * glam::Vec3::X;
