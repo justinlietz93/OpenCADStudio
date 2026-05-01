@@ -181,7 +181,11 @@ impl H7CAD {
                 let name = block_name.clone();
                 Task::perform(
                     async move {
-                        let path = crate::io::pick_folder("").await.map(|f| f.join("drawing.dwg"));
+                        let path = rfd::AsyncFileDialog::new()
+                            .set_title("Save Block As")
+                            .set_file_name("block.dwg")
+                            .add_filter("DWG Files", &["dwg"])
+                            .save_file().await.map(|h| h.path().to_path_buf());
                         (name, path)
                     },
                     |(name, path)| Message::WblockSaveResult(name, path),
@@ -425,7 +429,6 @@ impl H7CAD {
             }
 
             Message::SaveDialogFormatChanged(fmt) => {
-                // Keep filename extension in sync with format choice.
                 let (ext, _) = crate::io::parse_save_format(&fmt);
                 let stem = std::path::Path::new(&self.save_dialog_filename)
                     .file_stem()
@@ -441,64 +444,48 @@ impl H7CAD {
                 Task::none()
             }
 
-            Message::SaveDialogFolderChanged(folder) => {
-                self.save_dialog_folder = folder;
+            Message::SaveDialogNavigate(path) => {
+                self.save_dialog_folder = path.clone();
+                self.save_dialog_entries = crate::io::read_dir_entries(&path);
                 Task::none()
             }
 
-            Message::SaveDialogBrowse => {
-                let folder = self.save_dialog_folder.clone();
-                Task::perform(
-                    async move { crate::io::pick_folder(&folder).await },
-                    Message::SaveDialogFolderPicked,
-                )
-            }
-
-            Message::SaveDialogFolderPicked(Some(p)) => {
-                self.save_dialog_folder = p.to_string_lossy().into_owned();
+            Message::SaveDialogEntryClicked(path, is_dir) => {
+                if is_dir {
+                    self.save_dialog_folder = path.clone();
+                    self.save_dialog_entries = crate::io::read_dir_entries(&path);
+                } else {
+                    // Fill filename from clicked file.
+                    if let Some(name) = path.file_name() {
+                        self.save_dialog_filename = name.to_string_lossy().into_owned();
+                    }
+                }
                 Task::none()
             }
-
-            Message::SaveDialogFolderPicked(None) => Task::none(),
 
             Message::SaveDialogConfirm => {
-                let folder = std::path::Path::new(&self.save_dialog_folder);
-                let path = folder.join(&self.save_dialog_filename);
+                let path = self.save_dialog_folder.join(&self.save_dialog_filename);
                 let (_, version) = crate::io::parse_save_format(&self.save_dialog_format);
                 let close = self.close_save_dialog_window();
-                if self.save_dialog_for_unsaved {
-                    let result = crate::io::save_as_version(
-                        &self.tabs[self.active_tab].scene.document, &path, version,
-                    );
-                    match result {
-                        Ok(()) => {
-                            let i = self.active_tab;
-                            self.command_line.push_output(&format!("Saved: {}", path.display()));
-                            self.tabs[i].current_path = Some(path.clone());
-                            self.tabs[i].dirty = false;
-                            let close_tab_or_quit = self.update(Message::UnsavedPickedSavePath(Some(path)));
-                            return Task::batch([close, close_tab_or_quit]);
+                let i = self.active_tab;
+                match crate::io::save_as_version(&self.tabs[i].scene.document, &path, version) {
+                    Ok(()) => {
+                        self.command_line.push_output(&format!("Saved: {}", path.display()));
+                        self.tabs[i].current_path = Some(path.clone());
+                        self.tabs[i].dirty = false;
+                        if self.save_dialog_for_unsaved {
+                            let next = self.update(Message::UnsavedPickedSavePath(Some(path)));
+                            return Task::batch([close, next]);
                         }
-                        Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
                     }
-                    close
-                } else {
-                    let i = self.active_tab;
-                    match crate::io::save_as_version(&self.tabs[i].scene.document, &path, version) {
-                        Ok(()) => {
-                            self.command_line.push_output(&format!("Saved: {}", path.display()));
-                            self.tabs[i].current_path = Some(path);
-                            self.tabs[i].dirty = false;
-                        }
-                        Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
-                    }
-                    close
+                    Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
                 }
+                close
             }
 
             Message::SaveDialogCancel => self.close_save_dialog_window(),
 
-            Message::PickedSavePath(Some(_)) | Message::PickedSavePath(None) => Task::none(),
+
 
             Message::ClearScene => {
                 let i = self.active_tab;
@@ -3922,23 +3909,24 @@ impl H7CAD {
         if let Some(id) = self.save_dialog_window {
             return window::gain_focus(id);
         }
-        // Pre-fill filename from current path or tab name.
-        let (filename, folder) = if let Some(p) = &self.tabs[tab_idx].current_path {
-            let name = p.file_name().map(|n| n.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "drawing.dwg".to_string());
-            let dir = p.parent().map(|d| d.to_string_lossy().into_owned())
-                .unwrap_or_else(|| self.save_dialog_folder.clone());
-            (name, dir)
+        // Pre-fill filename and folder from current path or defaults.
+        if let Some(p) = &self.tabs[tab_idx].current_path.clone() {
+            if let Some(name) = p.file_name() {
+                self.save_dialog_filename = name.to_string_lossy().into_owned();
+            }
+            if let Some(dir) = p.parent() {
+                self.save_dialog_folder = dir.to_path_buf();
+            }
         } else {
             let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
-            let name = format!("{}.{ext}", self.tabs[tab_idx].tab_display_name());
-            (name, self.save_dialog_folder.clone())
-        };
-        self.save_dialog_filename = filename;
-        self.save_dialog_folder = folder;
+            self.save_dialog_filename =
+                format!("{}.{ext}", self.tabs[tab_idx].tab_display_name());
+        }
+        self.save_dialog_entries =
+            crate::io::read_dir_entries(&self.save_dialog_folder.clone());
         let (id, task) = window::open(window::Settings {
-            size: iced::Size::new(500.0, 220.0),
-            resizable: false,
+            size: iced::Size::new(560.0, 480.0),
+            resizable: true,
             ..Default::default()
         });
         self.save_dialog_window = Some(id);

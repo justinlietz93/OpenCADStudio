@@ -78,14 +78,33 @@ pub fn load_file(path: &Path) -> Result<CadDocument, String> {
     }
 }
 
-// ── Folder picker (used by the custom Save As dialog) ────────────────────
+// ── Directory listing (used by the custom Save As dialog) ────────────────
 
-pub async fn pick_folder(start: &str) -> Option<PathBuf> {
-    let mut dlg = rfd::AsyncFileDialog::new().set_title("Choose folder");
-    if !start.is_empty() {
-        dlg = dlg.set_directory(start);
+/// Read `dir` and return sorted entries: `(display_name, is_dir, full_path)`.
+/// Directories come first, then files.  Hidden entries (`.`) are skipped.
+pub fn read_dir_entries(dir: &std::path::Path) -> Vec<(String, bool, PathBuf)> {
+    let mut dirs: Vec<(String, bool, PathBuf)> = Vec::new();
+    let mut files: Vec<(String, bool, PathBuf)> = Vec::new();
+
+    if let Some(parent) = dir.parent() {
+        dirs.push(("..".to_string(), true, parent.to_path_buf()));
     }
-    dlg.pick_folder().await.map(|h| h.path().to_path_buf())
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for entry in rd.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') { continue; }
+            let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+            if is_dir {
+                dirs.push((name, true, entry.path()));
+            } else {
+                files.push((name, false, entry.path()));
+            }
+        }
+    }
+    dirs.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    files.sort_by(|a, b| a.0.to_lowercase().cmp(&b.0.to_lowercase()));
+    dirs.extend(files);
+    dirs
 }
 
 // ── Save ──────────────────────────────────────────────────────────────────
@@ -166,15 +185,6 @@ pub fn save(doc: &CadDocument, path: &Path) -> Result<(), String> {
     save_as_version(doc, path, doc.version)
 }
 
-pub fn save_dwg(doc: &CadDocument, path: &Path) -> Result<(), String> {
-    DwgWriter::write_to_file(path, doc).map_err(|e| e.to_string())
-}
-
-pub fn save_dxf(doc: &CadDocument, path: &Path) -> Result<(), String> {
-    DxfWriter::new(doc)
-        .write_to_file(path)
-        .map_err(|e| e.to_string())
-}
 
 // ── Post-load fixups ──────────────────────────────────────────────────────
 

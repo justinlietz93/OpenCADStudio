@@ -154,14 +154,16 @@ pub(super) struct H7CAD {
     unsaved_dialog_window: Option<window::Id>,
 
     // ── Custom Save-As dialog ─────────────────────────────────────────────
-    /// OS window for the custom Save As dialog (format + filename + folder).
+    /// OS window for the custom Save As dialog.
     save_dialog_window: Option<window::Id>,
     /// Currently selected format string, e.g. "DWG 2013".
     save_dialog_format: String,
     /// Editable filename (without path), e.g. "drawing.dwg".
     save_dialog_filename: String,
-    /// Target folder path (as a string for editing).
-    save_dialog_folder: String,
+    /// Currently browsed folder (PathBuf for reliable fs ops).
+    save_dialog_folder: std::path::PathBuf,
+    /// Cached directory listing: (display_name, is_dir, full_path).
+    save_dialog_entries: Vec<(String, bool, std::path::PathBuf)>,
     /// True when triggered from the unsaved-changes flow.
     save_dialog_for_unsaved: bool,
 
@@ -212,13 +214,13 @@ pub enum Message {
     FileOpened(Result<(String, PathBuf, CadDocument), String>),
     SaveFile,
     SaveAs,
-    PickedSavePath(Option<PathBuf>),
     // ── Custom Save-As dialog ─────────────────────────────────────────────
     SaveDialogFormatChanged(String),
     SaveDialogFilenameChanged(String),
-    SaveDialogFolderChanged(String),
-    SaveDialogBrowse,
-    SaveDialogFolderPicked(Option<std::path::PathBuf>),
+    /// Navigate the file-chooser to the given directory.
+    SaveDialogNavigate(std::path::PathBuf),
+    /// User clicked a file entry (fill filename) or directory entry (navigate).
+    SaveDialogEntryClicked(std::path::PathBuf, bool),
     SaveDialogConfirm,
     SaveDialogCancel,
     ClearScene,
@@ -649,7 +651,9 @@ impl H7CAD {
             save_dialog_filename: "drawing.dwg".to_string(),
             save_dialog_folder: std::env::var("HOME")
                 .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string()),
+                .unwrap_or_else(|_| ".".to_string())
+                .into(),
+            save_dialog_entries: Vec::new(),
             save_dialog_for_unsaved: false,
             // Plot style
             active_plot_style: None,
