@@ -2668,8 +2668,8 @@ impl H7CAD {
             Message::PageSetupOpen => {
                 let i = self.active_tab;
                 // Populate edit buffers from current paper limits.
-                let (w, h) = if let Some(((_, _), (x1, y1))) = self.tabs[i].scene.paper_limits() {
-                    (x1, y1)
+                let (w, h) = if let Some(((x0, y0), (x1, y1))) = self.tabs[i].scene.paper_limits() {
+                    (x1 - x0, y1 - y0)
                 } else {
                     (297.0, 210.0) // A4 default
                 };
