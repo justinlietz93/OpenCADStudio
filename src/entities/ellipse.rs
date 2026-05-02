@@ -15,12 +15,21 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
     let cx = ell.center.x;
     let cy = ell.center.y;
     let cz = ell.center.z;
-    let maj = glam::Vec3::new(
-        ell.major_axis.x as f32,
-        ell.major_axis.y as f32,
-        ell.major_axis.z as f32,
+    let normal = (ell.normal.x, ell.normal.y, ell.normal.z);
+    let (nx, ny, nz) = normal;
+
+    // Center in WCS.
+    let (cwx, cwy, cwz) = crate::scene::transform::ocs_point_to_wcs((cx, cy, cz), normal);
+
+    // Major axis vector rotated into WCS: maj_ocs.x*Ax + maj_ocs.y*Ay + maj_ocs.z*N
+    let (ax_basis, ay_basis) = crate::scene::transform::ocs_axes(normal);
+    let (mx, my, mz) = (ell.major_axis.x, ell.major_axis.y, ell.major_axis.z);
+    let wcs_maj = glam::Vec3::new(
+        (mx * ax_basis.0 + my * ay_basis.0 + mz * nx) as f32,
+        (mx * ax_basis.1 + my * ay_basis.1 + mz * ny) as f32,
+        (mx * ax_basis.2 + my * ay_basis.2 + mz * nz) as f32,
     );
-    let r_major = maj.length() as f64;
+    let r_major = wcs_maj.length() as f64;
     let r_minor = r_major * ell.minor_axis_ratio;
     let t0 = ell.start_parameter;
     let mut t1 = ell.end_parameter;
@@ -28,12 +37,14 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
         t1 += TAU;
     }
     let u = if r_major > 1e-9 {
-        glam::Vec3::from(maj) / maj.length()
+        wcs_maj / wcs_maj.length()
     } else {
         glam::Vec3::X
     };
-    let v_axis = glam::Vec3::Z.cross(u);
-    let center_v3 = Vec3::new(cx as f32, cy as f32, cz as f32);
+    // Minor axis direction: WCS_normal × u (both unit vectors, always perpendicular).
+    let wcs_normal = glam::Vec3::new(nx as f32, ny as f32, nz as f32);
+    let v_axis = wcs_normal.cross(u);
+    let center_v3 = Vec3::new(cwx as f32, cwy as f32, cwz as f32);
     let is_closed = (t1 - t0 - TAU).abs() < 1e-6;
 
     if is_closed {
@@ -44,9 +55,9 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
                 let lx = (r_major * t.cos()) as f32;
                 let lz = (r_minor * t.sin()) as f32;
                 Point3::new(
-                    cx + (lx * u.x + lz * v_axis.x) as f64,
-                    cy + (lx * u.y + lz * v_axis.y) as f64,
-                    cz + (lx * u.z + lz * v_axis.z) as f64,
+                    cwx + (lx * u.x + lz * v_axis.x) as f64,
+                    cwy + (lx * u.y + lz * v_axis.y) as f64,
+                    cwz + (lx * u.z + lz * v_axis.z) as f64,
                 )
             })
             .collect();
@@ -56,9 +67,9 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
                 let lx = (r_major * t.cos()) as f32;
                 let lz = (r_minor * t.sin()) as f32;
                 Point3::new(
-                    cx + (lx * u.x + lz * v_axis.x) as f64,
-                    cy + (lx * u.y + lz * v_axis.y) as f64,
-                    cz + (lx * u.z + lz * v_axis.z) as f64,
+                    cwx + (lx * u.x + lz * v_axis.x) as f64,
+                    cwy + (lx * u.y + lz * v_axis.y) as f64,
+                    cwz + (lx * u.z + lz * v_axis.z) as f64,
                 )
             })
             .collect();
@@ -71,12 +82,12 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
         let edge_upper = Edge::new(&v_pos, &v_neg, Curve::BSplineCurve(spl_u));
         let edge_lower = Edge::new(&v_neg, &v_pos, Curve::BSplineCurve(spl_l));
         let wire: Wire = [edge_upper, edge_lower].into_iter().collect();
-        // Quadrant points at ±major and ±minor axis endpoints.
+        // Quadrant points at ±major and ±minor axis endpoints in WCS.
         let q = |lx: f64, lz: f64| {
             Vec3::new(
-                (cx + lx * u.x as f64 + lz * v_axis.x as f64) as f32,
-                (cy + lx * u.y as f64 + lz * v_axis.y as f64) as f32,
-                cz as f32,
+                (cwx + lx * u.x as f64 + lz * v_axis.x as f64) as f32,
+                (cwy + lx * u.y as f64 + lz * v_axis.y as f64) as f32,
+                (cwz + lx * u.z as f64 + lz * v_axis.z as f64) as f32,
             )
         };
         let snap_pts = vec![
@@ -100,9 +111,9 @@ fn to_truck(ell: &Ellipse) -> TruckEntity {
                 let lx = (r_major * t.cos()) as f32;
                 let lz = (r_minor * t.sin()) as f32;
                 Point3::new(
-                    cx + (lx * u.x + lz * v_axis.x) as f64,
-                    cy + (lx * u.y + lz * v_axis.y) as f64,
-                    cz + (lx * u.z + lz * v_axis.z) as f64,
+                    cwx + (lx * u.x + lz * v_axis.x) as f64,
+                    cwy + (lx * u.y + lz * v_axis.y) as f64,
+                    cwz + (lx * u.z + lz * v_axis.z) as f64,
                 )
             })
             .collect();
