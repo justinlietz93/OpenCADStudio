@@ -72,8 +72,9 @@ Legend: ✅ Done · ⚠️ Partial · ❌ Not done
 | ✅ | **Ellipse** | `src/entities/ellipse.rs` |
 | ✅ | **LwPolyline** | `src/entities/lwpolyline.rs` |
 | ✅ | **Spline** | DXF spec: spline control points are already in WCS (normal field unused) |
-| ❌ | **Polyline (3D)** | tessellated in `src/scene/tessellate.rs` — vertices used as-is |
-| ❌ | **AttributeDefinition / AttributeEntity** | OCS insertion point not transformed |
+| ✅ | **Polyline2D** | `src/entities/polyline.rs` — elevation + normal applied |
+| ✅ | **Polyline3D** | Vertices already in WCS per DXF spec (no OCS transform needed) |
+| ✅ | **AttributeDefinition / AttributeEntity** | OCS→WCS applied to insertion snap point — `src/entities/attribute.rs` |
 | ❌ | **Hatch** | elevation applied but normal not used for OCS→WCS in wire outline |
 | ❌ | **MLine / Leader** | no OCS transform |
 
@@ -206,13 +207,13 @@ These are fixed in our post-load `fix_dxf_dimension_rotations()` in `src/io/mod.
 
 | Status | Count |
 |---|---|
-| ✅ Done | 35 |
-| ⚠️ Partial | 3 |
-| ❌ Not done | 5 |
+| ✅ Done | 39 |
+| ⚠️ Partial | 2 |
+| ❌ Not done | 2 |
 | **Total** | **43** |
 
 ### Remaining gaps by priority
 
-**Medium:** OCS→WCS for Polyline/Attribute/Hatch/Leader · Viewport interior view compositing
+**Medium:** OCS→WCS for Hatch wire outline and MLine/Leader · Viewport interior view compositing
 
 **Low:** LWPolyline plinegen (GPU shader change needed) · Complex linetype text shapes · OLE2Frame improvement · Shape rotation
