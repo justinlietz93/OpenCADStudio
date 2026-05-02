@@ -3160,7 +3160,7 @@ fn tessellate_entity(
         let (ins_color, ins_pat_len, ins_pat, ins_lw_px, _) =
             render::render_style_for(document, e);
         let ins_color = render::adapt_to_bg(ins_color, bg_color);
-        return ins
+        let mut wires: Vec<WireModel> = ins
             .explode_from_document(document)
             .iter()
             .cloned()
@@ -3191,6 +3191,28 @@ fn tessellate_entity(
                 vec![wire]
             })
             .collect();
+        // Insertion snap at the block reference origin.
+        let [ox, oy, oz] = world_offset;
+        let ip = glam::Vec3::new(
+            (ins.insert_point.x - ox) as f32,
+            (ins.insert_point.y - oy) as f32,
+            (ins.insert_point.z - oz) as f32,
+        );
+        wires.push(WireModel {
+            name: h.value().to_string(),
+            points: vec![],
+            color: entity_color,
+            selected: sel,
+            aci: 0,
+            pattern_length: 0.0,
+            pattern: [0.0; 8],
+            line_weight_px: 1.0,
+            snap_pts: vec![(ip, wire_model::SnapHint::Insertion)],
+            tangent_geoms: vec![],
+            key_vertices: vec![],
+            aabb: WireModel::UNBOUNDED_AABB,
+        });
+        return wires;
     }
 
     let aabb = entity_aabb(e, world_offset);
