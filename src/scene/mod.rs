@@ -1573,7 +1573,8 @@ impl Scene {
                     match &mut m.pattern {
                         hatch_model::HatchPattern::Pattern(_) => {
                             m.angle_offset = dxf.pattern_angle as f32;
-                            m.scale = dxf.pattern_scale as f32;
+                            let anno = if self.current_layout == "Model" { self.annotation_scale } else { 1.0 };
+                            m.scale = dxf.pattern_scale as f32 * anno;
                         }
                         hatch_model::HatchPattern::Gradient { angle_deg, .. } => {
                             *angle_deg = dxf.pattern_angle.to_degrees() as f32;

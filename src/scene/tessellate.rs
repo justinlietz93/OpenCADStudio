@@ -62,6 +62,25 @@ pub fn tessellate(
     };
     let name = handle.value().to_string();
 
+    // Determine effective annotation scale for this entity.
+    // AutoCAD marks annotative objects with "AcAnnoPO" xdata (R2007+).
+    // If no xdata at all: old file without annotation system → treat as annotative.
+    // If xdata present but no "AcAnnoPO": R2007+ file, entity is non-annotative → no scaling.
+    let anno_scale = {
+        let xdata = &entity.common().extended_data;
+        let is_annotative = if xdata.is_empty() {
+            // Old DXF / no annotation metadata — fall back to group-code-293 flag.
+            match entity {
+                EntityType::Text(t) => t.is_annotative,
+                EntityType::MText(m) => m.is_annotative,
+                _ => true,
+            }
+        } else {
+            xdata.get_record("AcAnnoPO").is_some()
+        };
+        if is_annotative { anno_scale } else { 1.0 }
+    };
+
     // MultiLeader/Leader need anno_scale for arrow/dogleg/text — handle before generic path.
     if let EntityType::MultiLeader(ml) = entity {
         return tessellate_multileader_single(

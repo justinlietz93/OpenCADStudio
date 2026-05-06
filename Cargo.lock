@@ -41,7 +41,6 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.3.4"
-source = "git+https://github.com/HakanSeven12/acadrust.git?branch=feat%2Flayout-paper-dimensions#2eaa7aacce3c5de4d6f15a0474fd365db0da9fba"
 dependencies = [
  "ahash",
  "anyhow",
