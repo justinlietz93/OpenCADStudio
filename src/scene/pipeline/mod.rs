@@ -600,7 +600,33 @@ impl Pipeline {
     }
 
     pub fn upload_wires(&mut self, device: &wgpu::Device, wires: &[WireModel]) {
-        self.gpu_wires = wires.iter().map(|w| WireGpu::new(device, w)).collect();
+        // Total segment budget: prevents a large file from exhausting GPU memory.
+        // Each segment → 6 GPU vertices × 96 bytes = 576 bytes; 3M segs ≈ 1.6 GB.
+        const MAX_TOTAL_SEGS: usize = 3_000_000;
+        let mut total_segs = 0usize;
+        let mut skipped = 0usize;
+
+        self.gpu_wires = wires
+            .iter()
+            .filter(|w| {
+                let segs = w.points.len().saturating_sub(1).min(wire_gpu::MAX_SEGS_PER_WIRE);
+                if total_segs + segs > MAX_TOTAL_SEGS {
+                    skipped += 1;
+                    false
+                } else {
+                    total_segs += segs;
+                    true
+                }
+            })
+            .map(|w| WireGpu::new(device, w))
+            .collect();
+
+        if skipped > 0 {
+            eprintln!(
+                "[H7CAD] upload_wires: skipped {skipped} wire(s) — total segment budget ({MAX_TOTAL_SEGS}) exceeded"
+            );
+        }
+
         // Full-brightness copies of selected wires, drawn on top of everything
         // in the selection overlay pass so they're always visible.
         self.gpu_selected_wires = wires
