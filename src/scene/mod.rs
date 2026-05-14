@@ -79,24 +79,6 @@ pub struct DerivedCaches {
 /// Build hatch / image / mesh caches from a document without needing `&mut Scene`.
 /// Intended to run on a background thread during file load.
 pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
-    // world_offset
-    let h = &doc.header;
-    let (min, max) = (h.model_space_extents_min, h.model_space_extents_max);
-    let valid = min.x < max.x && min.y < max.y;
-    let (world_offset, local_extent_max) = if valid {
-        let offset = [
-            (min.x + max.x) * 0.5,
-            (min.y + max.y) * 0.5,
-            (min.z + max.z) * 0.5,
-        ];
-        let hw = ((max.x - min.x) * 0.5) as f32;
-        let hh = ((max.y - min.y) * 0.5) as f32;
-        let hz = ((max.z - min.z) * 0.5).max(1.0) as f32;
-        (offset, hw.max(hh).max(hz) * 10.0)
-    } else {
-        ([0.0; 3], 1e9_f32)
-    };
-
     // model-space block handle (same logic as Scene::model_space_block_handle)
     let model_block = doc
         .objects
@@ -118,6 +100,25 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
                 .map(|br| br.handle)
                 .unwrap_or(Handle::NULL)
         });
+
+    // world_offset (from DXF header extents — fast and works when the
+    // writer correctly folded Insert→Block expansion into $EXTMIN/$EXTMAX).
+    let h = &doc.header;
+    let (min, max) = (h.model_space_extents_min, h.model_space_extents_max);
+    let valid = min.x < max.x && min.y < max.y;
+    let (world_offset, local_extent_max) = if valid {
+        let offset = [
+            (min.x + max.x) * 0.5,
+            (min.y + max.y) * 0.5,
+            (min.z + max.z) * 0.5,
+        ];
+        let hw = ((max.x - min.x) * 0.5) as f32;
+        let hh = ((max.y - min.y) * 0.5) as f32;
+        let hz = ((max.z - min.z) * 0.5).max(1.0) as f32;
+        (offset, hw.max(hh).max(hz) * 10.0)
+    } else {
+        ([0.0; 3], 1e9_f32)
+    };
 
     use rayon::prelude::*;
 
@@ -4030,6 +4031,13 @@ fn tessellate_entity(
         };
 
         if let Some(cache) = block_cache {
+            // Xrefs render with the same hue but faded toward `bg_color` so
+            // the user can recognise external-reference geometry at a glance.
+            let is_xref = document
+                .block_records
+                .get(&ins.block_name)
+                .map(|br| br.flags.is_xref || br.flags.is_xref_overlay)
+                .unwrap_or(false);
             if let Some(mut wires) = block_cache::expand_insert(
                 cache,
                 ins,
@@ -4043,6 +4051,8 @@ fn tessellate_entity(
                 pslt_factor,
                 view_aabb,
                 world_per_pixel,
+                is_xref,
+                bg_color,
             ) {
                 wires.push(marker);
                 return wires;
@@ -4053,11 +4063,11 @@ fn tessellate_entity(
         // but keep the safety bail-out for pathologically large blocks so
         // the UI doesn't hang on broken or unbounded sub-entity counts.
         const INSERT_SUB_LIMIT: usize = 5_000;
-        let sub_count = document
-            .block_records
-            .get(&ins.block_name)
-            .map(|br| br.entity_handles.len())
-            .unwrap_or(0);
+        let br = document.block_records.get(&ins.block_name);
+        let sub_count = br.map(|br| br.entity_handles.len()).unwrap_or(0);
+        let is_xref = br
+            .map(|br| br.flags.is_xref || br.flags.is_xref_overlay)
+            .unwrap_or(false);
         if sub_count > INSERT_SUB_LIMIT {
             return vec![marker];
         }
@@ -4077,6 +4087,11 @@ fn tessellate_entity(
                         ins_lw_px,
                     );
                 let sub_color = render::adapt_to_bg(sub_color, bg_color);
+                let sub_color = if is_xref && !sel {
+                    block_cache::fade_toward_bg(sub_color, bg_color)
+                } else {
+                    sub_color
+                };
                 let sub_aabb = entity_aabb(&sub, world_offset);
                 let sub_pattern_length = sub_pattern_length * pslt_factor;
                 let sub_pattern = sub_pattern.map(|v| v * pslt_factor);

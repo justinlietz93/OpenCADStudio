@@ -92,8 +92,17 @@ pub struct BlockDefn {
     pub subs: Vec<LocalSub>,
     /// Union of every sub's local AABB (including nested-INSERT contributions
     /// resolved at expand time via their own defn's `aabb_local`). XY only —
-    /// the wire renderer is 2D-dominant.
+    /// the wire renderer is 2D-dominant. Expressed in this defn's *offset*
+    /// frame (i.e. `local_offset` already subtracted).
     pub aabb_local: [f32; 4],
+    /// f64 constant subtracted from every coordinate stored inside this
+    /// defn (points, AABBs, text OBB corners, fill_tris, snap_pts, …).
+    /// Picks an origin near the defn's geometric centre so f32 storage
+    /// retains millimetre precision even when the source content lives at
+    /// large coordinates (xref data authored at UTM, MGRS, etc.). When the
+    /// defn is expanded the offset is re-added in f64 BEFORE the Insert
+    /// transform is applied — that's where precision matters.
+    pub local_offset: [f64; 3],
 }
 
 #[derive(Default, Debug)]
@@ -148,6 +157,15 @@ impl BlockCache {
         }
     }
 
+    /// Returns the union AABB for `block_name`'s defn, expressed in **that
+    /// defn's offset frame** (so its caller can store it in
+    /// `BlockDefn.aabb_local` without a coordinate-frame mismatch).
+    ///
+    /// LocalWire contributions are already in the parent defn's offset
+    /// frame. Nested-INSERT contributions live in the *child* defn's offset
+    /// frame, so we re-add `child.local_offset` (f64), apply the nested
+    /// Insert's transform to get parent-native coordinates, then subtract
+    /// `parent.local_offset` to land back in the parent's offset frame.
     fn defn_aabb_recursive(&self, block_name: &str, visited: &mut Vec<String>) -> [f32; 4] {
         if visited.iter().any(|n| n == block_name) {
             return [0.0, 0.0, 0.0, 0.0];
@@ -155,6 +173,7 @@ impl BlockCache {
         let Some(defn) = self.defns.get(block_name) else {
             return [0.0, 0.0, 0.0, 0.0];
         };
+        let parent_lo = defn.local_offset;
         visited.push(block_name.to_string());
         let mut acc = [0.0_f32, 0.0, 0.0, 0.0];
         for sub in &defn.subs {
@@ -162,7 +181,19 @@ impl BlockCache {
                 LocalSub::Wire(lw) => lw.aabb_local,
                 LocalSub::Nested(nref) => {
                     let nested_local = self.defn_aabb_recursive(&nref.block_name, visited);
-                    transform_aabb_xy(nested_local, &nref.xform)
+                    let child_lo = self
+                        .defns
+                        .get(&nref.block_name)
+                        .map(|d| d.local_offset)
+                        .unwrap_or([0.0; 3]);
+                    let parent_native =
+                        transform_offset_aabb_xy(nested_local, child_lo, &nref.xform);
+                    [
+                        parent_native[0] - parent_lo[0] as f32,
+                        parent_native[1] - parent_lo[1] as f32,
+                        parent_native[2] - parent_lo[0] as f32,
+                        parent_native[3] - parent_lo[1] as f32,
+                    ]
                 }
             };
             acc = aabb_union(acc, aabb);
@@ -214,6 +245,55 @@ fn build_defn(
         Some(br) => br,
         None => return BlockDefn::default(),
     };
+
+    // ── Pass 1: compute a defn-level offset near the geometric centre.
+    // Falling back to [0,0,0] for empty / nested-only defns is fine —
+    // precision is only at risk when stored points have large magnitudes,
+    // and those come from direct wire entities.
+    let mut min = [f64::INFINITY; 3];
+    let mut max = [f64::NEG_INFINITY; 3];
+    let mut have_any = false;
+    for &eh in &br.entity_handles {
+        let Some(entity) = doc.get_entity(eh) else {
+            continue;
+        };
+        if matches!(
+            entity,
+            EntityType::Block(_)
+                | EntityType::BlockEnd(_)
+                | EntityType::AttributeDefinition(_)
+                | EntityType::Insert(_)
+        ) {
+            continue;
+        }
+        let bb = entity.as_entity().bounding_box();
+        for i in 0..3 {
+            let lo = [bb.min.x, bb.min.y, bb.min.z][i];
+            let hi = [bb.max.x, bb.max.y, bb.max.z][i];
+            if !lo.is_finite() || !hi.is_finite() {
+                continue;
+            }
+            if lo < min[i] {
+                min[i] = lo;
+            }
+            if hi > max[i] {
+                max[i] = hi;
+            }
+            have_any = true;
+        }
+    }
+    let local_offset: [f64; 3] = if have_any {
+        [
+            (min[0] + max[0]) * 0.5,
+            (min[1] + max[1]) * 0.5,
+            (min[2] + max[2]) * 0.5,
+        ]
+    } else {
+        [0.0; 3]
+    };
+
+    // ── Pass 2: tessellate each sub with the chosen offset so stored
+    // coordinates fit into f32 without precision loss.
     let cap = br.entity_handles.len();
     let mut subs: Vec<LocalSub> = Vec::with_capacity(cap);
     for &eh in &br.entity_handles {
@@ -228,7 +308,9 @@ fn build_defn(
                 subs.push(LocalSub::Nested(build_nested_ref(nested_ins, doc, bg_color)));
             }
             _ => {
-                if let Some(lw) = tessellate_sub_local(doc, entity, anno_scale, bg_color) {
+                if let Some(lw) =
+                    tessellate_sub_local(doc, entity, anno_scale, bg_color, local_offset)
+                {
                     subs.push(LocalSub::Wire(lw));
                 }
             }
@@ -237,6 +319,7 @@ fn build_defn(
     BlockDefn {
         subs,
         aabb_local: [0.0; 4],
+        local_offset,
     }
 }
 
@@ -268,6 +351,7 @@ fn tessellate_sub_local(
     sub: &EntityType,
     anno_scale: f32,
     bg_color: [f32; 4],
+    local_offset: [f64; 3],
 ) -> Option<LocalWire> {
     let h = sub.common().handle;
 
@@ -286,8 +370,11 @@ fn tessellate_sub_local(
     let lt_is_byblock = sub.common().linetype.eq_ignore_ascii_case("byblock");
     let lw_is_byblock = matches!(sub.common().line_weight, LineWeight::ByBlock);
 
+    // Pass `local_offset` as the f64 world-offset so tessellate subtracts it
+    // before casting to f32 — same precision-preservation trick used for
+    // top-level entities, applied per-defn.
     let wire = tessellate::tessellate(
-        doc, h, sub, false, sub_color, pat_len, pat, lw_px, [0.0; 3], anno_scale,
+        doc, h, sub, false, sub_color, pat_len, pat, lw_px, local_offset, anno_scale,
     );
 
     if wire.points.len() > 100_000 {
@@ -304,16 +391,18 @@ fn tessellate_sub_local(
         _ => None,
     };
 
-    // Pre-compute the OBB corners (block-local f32) for Text / MText so the
-    // greek path can emit a rect that matches the entity's rotation instead
-    // of falling back to the axis-aligned `aabb_local`.
+    // Pre-compute the OBB corners (block-offset-frame f32) for Text / MText
+    // so the greek path can emit a rect that matches the entity's rotation
+    // instead of falling back to the axis-aligned `aabb_local`. Subtract the
+    // defn's `local_offset` in f64 first so distant text retains precision.
+    let [lo_x, lo_y, lo_z] = local_offset;
     let text_obb_local: Option<[[f32; 3]; 4]> =
         crate::scene::text_obb_corners_native(sub, anno_scale).map(|c| {
             [
-                [c[0][0] as f32, c[0][1] as f32, c[0][2] as f32],
-                [c[1][0] as f32, c[1][1] as f32, c[1][2] as f32],
-                [c[2][0] as f32, c[2][1] as f32, c[2][2] as f32],
-                [c[3][0] as f32, c[3][1] as f32, c[3][2] as f32],
+                [(c[0][0] - lo_x) as f32, (c[0][1] - lo_y) as f32, (c[0][2] - lo_z) as f32],
+                [(c[1][0] - lo_x) as f32, (c[1][1] - lo_y) as f32, (c[1][2] - lo_z) as f32],
+                [(c[2][0] - lo_x) as f32, (c[2][1] - lo_y) as f32, (c[2][2] - lo_z) as f32],
+                [(c[3][0] - lo_x) as f32, (c[3][1] - lo_y) as f32, (c[3][2] - lo_z) as f32],
             ]
         });
 
@@ -368,16 +457,19 @@ fn aabb_from_points_iter<I: IntoIterator<Item = [f32; 3]>>(pts: I) -> [f32; 4] {
 }
 
 /// Transform a local-space XY AABB by `t` and return the world-space XY AABB
-/// of the transformed corners. For non-rotated transforms the corners stay
-/// axis-aligned; for arbitrary OCS we still get a correct (looser) AABB by
-/// taking the min/max of the four transformed corner points.
-fn transform_aabb_xy(local: [f32; 4], t: &Transform) -> [f32; 4] {
+/// of the transformed corners. Re-adds an f64 `defn_lo` to each corner
+/// before transforming — when the input AABB is stored in a defn's *offset
+/// frame* (precision-preservation trick) the offset has to be applied in
+/// f64 to keep the world result accurate even for distant content. Pass
+/// `[0.0; 3]` for callers that don't use an offset frame.
+fn transform_offset_aabb_xy(local: [f32; 4], defn_lo: [f64; 3], t: &Transform) -> [f32; 4] {
     let [x0, y0, x1, y1] = local;
+    let [lo_x, lo_y, lo_z] = defn_lo;
     let corners = [
-        Vector3::new(x0 as f64, y0 as f64, 0.0),
-        Vector3::new(x1 as f64, y0 as f64, 0.0),
-        Vector3::new(x1 as f64, y1 as f64, 0.0),
-        Vector3::new(x0 as f64, y1 as f64, 0.0),
+        Vector3::new(x0 as f64 + lo_x, y0 as f64 + lo_y, lo_z),
+        Vector3::new(x1 as f64 + lo_x, y0 as f64 + lo_y, lo_z),
+        Vector3::new(x1 as f64 + lo_x, y1 as f64 + lo_y, lo_z),
+        Vector3::new(x0 as f64 + lo_x, y1 as f64 + lo_y, lo_z),
     ];
     let mut min_x = f64::INFINITY;
     let mut min_y = f64::INFINITY;
@@ -441,6 +533,11 @@ pub fn expand_insert(
     // World units per screen pixel. When `Some`, wires whose AABB projects
     // smaller than `MIN_PIXEL_SIZE` get skipped entirely (LOD).
     world_per_pixel: Option<f32>,
+    // True when `ins.block_name` resolves to an xref BlockRecord. All emitted
+    // colors are faded toward `bg_color` so xrefs are visually distinguishable
+    // from native content.
+    is_xref: bool,
+    bg_color: [f32; 4],
 ) -> Option<Vec<WireModel>> {
     let defn = cache.defn(&ins.block_name)?;
     let xform = ins.get_transform();
@@ -449,7 +546,10 @@ pub fn expand_insert(
     let mut visited: Vec<String> = Vec::with_capacity(8);
     let [ox, oy, _] = world_offset;
 
-    let insert_world = transform_aabb_xy(defn.aabb_local, &xform);
+    // `defn.aabb_local` is in the defn's offset frame — re-add
+    // `defn.local_offset` (f64) before transforming so the world AABB is
+    // accurate for distant content.
+    let insert_world = transform_offset_aabb_xy(defn.aabb_local, defn.local_offset, &xform);
     let insert_local = [
         insert_world[0] - ox as f32,
         insert_world[1] - oy as f32,
@@ -491,6 +591,8 @@ pub fn expand_insert(
             pslt_factor,
             view_aabb,
             world_per_pixel,
+            is_xref,
+            bg_color,
         };
         expand_defn(defn, &base_xform, &ctx, &mut batches, &mut visited, 0);
     }
@@ -506,16 +608,23 @@ fn emit_greeked_text(
     lw: &LocalWire,
     local_aabb: [f32; 4],
     accum_xform: &Transform,
+    defn_lo: [f64; 3],
     ctx: &ExpandCtx,
     out: &mut Batches,
 ) {
     let [ox, oy, oz] = ctx.world_offset;
+    let [lo_x, lo_y, lo_z] = defn_lo;
     let tris: [[f32; 3]; 6] = if let Some(obb) = lw.text_obb_local {
-        // Transform block-local corners → world via accum_xform, then
-        // subtract world_offset so the fill_tris sit in the same f32 space
-        // as everything else in the batch.
+        // Re-add the defn's `local_offset` in f64 before composing with
+        // `accum_xform` (the OBB corners are stored in offset frame f32 so
+        // they don't lose precision for distant text). Then subtract host
+        // `world_offset` so the fill_tris share the batch's f32 space.
         let xf = |p: [f32; 3]| -> [f32; 3] {
-            let w = accum_xform.apply(Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+            let w = accum_xform.apply(Vector3::new(
+                p[0] as f64 + lo_x,
+                p[1] as f64 + lo_y,
+                p[2] as f64 + lo_z,
+            ));
             [(w.x - ox) as f32, (w.y - oy) as f32, (w.z - oz) as f32]
         };
         let p00 = xf(obb[0]);
@@ -542,6 +651,13 @@ fn emit_greeked_text(
         ctx.ins_color
     } else {
         lw.color
+    };
+    // Apply the same xref fade as `emit_wire` BEFORE the face3d 0.45 boost,
+    // so the final on-screen color (boost × 0.45 dim) lands at the faded value.
+    let final_color = if ctx.is_xref && !ctx.selected {
+        fade_toward_bg(final_color, ctx.bg_color)
+    } else {
+        final_color
     };
     let boost = 1.0 / 0.45_f32;
     let [r, g, b, a] = final_color;
@@ -593,6 +709,24 @@ struct ExpandCtx<'a> {
     view_aabb: Option<[f32; 4]>,
     // World units per screen pixel. `None` = no pixel-size LOD.
     world_per_pixel: Option<f32>,
+    // True when this expansion descends from an xref INSERT. Causes emitted
+    // colors to be faded toward `bg_color` so the user can tell at a glance
+    // which geometry comes from an external reference.
+    is_xref: bool,
+    bg_color: [f32; 4],
+}
+
+/// Fade `color` toward `bg` by 50%, preserving alpha. Used to mark xref
+/// geometry — the hue stays recognizable but the contrast against the
+/// background drops, reading as "washed out".
+pub(super) fn fade_toward_bg(color: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
+    const T: f32 = 0.5;
+    [
+        color[0] * (1.0 - T) + bg[0] * T,
+        color[1] * (1.0 - T) + bg[1] * T,
+        color[2] * (1.0 - T) + bg[2] * T,
+        color[3],
+    ]
 }
 
 /// Style fingerprint used to group local wires into a single GPU buffer.
@@ -735,10 +869,14 @@ fn expand_defn(
         eprintln!("block_cache: nested-block depth > {MAX_NESTING_DEPTH}, truncating");
         return;
     }
+    let defn_lo = defn.local_offset;
     for sub in &defn.subs {
         match sub {
             LocalSub::Wire(lw) => {
-                let world = transform_aabb_xy(lw.aabb_local, accum_xform);
+                // `lw.aabb_local` is in the defn's offset frame; re-add
+                // `defn_lo` (in f64) before composing with `accum_xform`
+                // so culling uses correct world-space corners.
+                let world = transform_offset_aabb_xy(lw.aabb_local, defn_lo, accum_xform);
                 let [ox, oy, _] = ctx.world_offset;
                 let local = [
                     world[0] - ox as f32,
@@ -771,12 +909,12 @@ fn expand_defn(
                             continue;
                         }
                         if h_px < 4.0 {
-                            emit_greeked_text(lw, local, accum_xform, ctx, out);
+                            emit_greeked_text(lw, local, accum_xform, defn_lo, ctx, out);
                             continue;
                         }
                     }
                 }
-                emit_wire(lw, accum_xform, ctx, out);
+                emit_wire(lw, accum_xform, defn_lo, ctx, out);
             }
             LocalSub::Nested(nref) => {
                 if visited.iter().any(|n| n == &nref.block_name) {
@@ -788,8 +926,15 @@ fn expand_defn(
                 };
                 // Nested-INSERT cull: union AABB of the nested defn,
                 // transformed by composed xform, vs view rect + pixel size.
+                // `nested_defn.aabb_local` lives in the nested defn's offset
+                // frame — re-add `nested_defn.local_offset` in f64 before
+                // composing with the parent transforms.
                 let composed = nref.xform.then(accum_xform);
-                let world = transform_aabb_xy(nested_defn.aabb_local, &composed);
+                let world = transform_offset_aabb_xy(
+                    nested_defn.aabb_local,
+                    nested_defn.local_offset,
+                    &composed,
+                );
                 let [ox, oy, _] = ctx.world_offset;
                 let local = [
                     world[0] - ox as f32,
@@ -834,6 +979,8 @@ fn expand_defn(
                     pslt_factor: ctx.pslt_factor,
                     view_aabb: ctx.view_aabb,
                     world_per_pixel: ctx.world_per_pixel,
+                    is_xref: ctx.is_xref,
+                    bg_color: ctx.bg_color,
                 };
                 visited.push(nref.block_name.clone());
                 for offset in &nref.instance_offsets {
@@ -860,11 +1007,18 @@ fn expand_defn(
     }
 }
 
-fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut Batches) {
+fn emit_wire(
+    lw: &LocalWire,
+    accum_xform: &Transform,
+    defn_lo: [f64; 3],
+    ctx: &ExpandCtx,
+    out: &mut Batches,
+) {
     if lw.points.is_empty() && lw.fill_tris.is_empty() {
         return;
     }
     let [ox, oy, oz] = ctx.world_offset;
+    let [lo_x, lo_y, lo_z] = defn_lo;
 
     // Resolve final style for this LocalWire against the outer Insert ctx
     // before we hash it into a batch.
@@ -874,6 +1028,11 @@ fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut
         ctx.ins_color
     } else {
         lw.color
+    };
+    let final_color = if ctx.is_xref && !ctx.selected {
+        fade_toward_bg(final_color, ctx.bg_color)
+    } else {
+        final_color
     };
     let (final_pat_len, final_pat) = if lw.lt_is_byblock {
         (ctx.ins_pat_len, ctx.ins_pat)
@@ -931,7 +1090,11 @@ fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut
                 entry.points.push([f32::NAN; 3]);
                 continue;
             }
-            let v = accum_xform.apply(Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+            let v = accum_xform.apply(Vector3::new(
+                p[0] as f64 + lo_x,
+                p[1] as f64 + lo_y,
+                p[2] as f64 + lo_z,
+            ));
             let q = [(v.x - ox) as f32, (v.y - oy) as f32, (v.z - oz) as f32];
             if q[0] < entry.min_x {
                 entry.min_x = q[0];
@@ -950,13 +1113,21 @@ fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut
     }
 
     for p in &lw.key_vertices {
-        let v = accum_xform.apply(Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+        let v = accum_xform.apply(Vector3::new(
+            p[0] as f64 + lo_x,
+            p[1] as f64 + lo_y,
+            p[2] as f64 + lo_z,
+        ));
         entry
             .key_vertices
             .push([(v.x - ox) as f32, (v.y - oy) as f32, (v.z - oz) as f32]);
     }
     for (p, hint) in &lw.snap_pts {
-        let v = accum_xform.apply(Vector3::new(p.x as f64, p.y as f64, p.z as f64));
+        let v = accum_xform.apply(Vector3::new(
+            p.x as f64 + lo_x,
+            p.y as f64 + lo_y,
+            p.z as f64 + lo_z,
+        ));
         entry.snap_pts.push((
             glam::Vec3::new(
                 (v.x - ox) as f32,
@@ -969,10 +1140,14 @@ fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut
     for tg in &lw.tangent_geoms {
         entry
             .tangent_geoms
-            .push(transform_tangent(tg, accum_xform, [ox, oy, oz]));
+            .push(transform_tangent(tg, accum_xform, defn_lo, [ox, oy, oz]));
     }
     for p in &lw.fill_tris {
-        let v = accum_xform.apply(Vector3::new(p[0] as f64, p[1] as f64, p[2] as f64));
+        let v = accum_xform.apply(Vector3::new(
+            p[0] as f64 + lo_x,
+            p[1] as f64 + lo_y,
+            p[2] as f64 + lo_z,
+        ));
         entry
             .fill_tris
             .push([(v.x - ox) as f32, (v.y - oy) as f32, (v.z - oz) as f32]);
@@ -980,12 +1155,26 @@ fn emit_wire(lw: &LocalWire, accum_xform: &Transform, ctx: &ExpandCtx, out: &mut
 
 }
 
-fn transform_tangent(tg: &TangentGeom, t: &Transform, woff: [f64; 3]) -> TangentGeom {
+fn transform_tangent(
+    tg: &TangentGeom,
+    t: &Transform,
+    defn_lo: [f64; 3],
+    woff: [f64; 3],
+) -> TangentGeom {
     let [ox, oy, oz] = woff;
+    let [lo_x, lo_y, lo_z] = defn_lo;
     match tg {
         TangentGeom::Line { p1, p2 } => {
-            let q1 = t.apply(Vector3::new(p1[0] as f64, p1[1] as f64, p1[2] as f64));
-            let q2 = t.apply(Vector3::new(p2[0] as f64, p2[1] as f64, p2[2] as f64));
+            let q1 = t.apply(Vector3::new(
+                p1[0] as f64 + lo_x,
+                p1[1] as f64 + lo_y,
+                p1[2] as f64 + lo_z,
+            ));
+            let q2 = t.apply(Vector3::new(
+                p2[0] as f64 + lo_x,
+                p2[1] as f64 + lo_y,
+                p2[2] as f64 + lo_z,
+            ));
             TangentGeom::Line {
                 p1: [(q1.x - ox) as f32, (q1.y - oy) as f32, (q1.z - oz) as f32],
                 p2: [(q2.x - ox) as f32, (q2.y - oy) as f32, (q2.z - oz) as f32],
@@ -993,9 +1182,9 @@ fn transform_tangent(tg: &TangentGeom, t: &Transform, woff: [f64; 3]) -> Tangent
         }
         TangentGeom::Circle { center, radius } => {
             let c = t.apply(Vector3::new(
-                center[0] as f64,
-                center[1] as f64,
-                center[2] as f64,
+                center[0] as f64 + lo_x,
+                center[1] as f64 + lo_y,
+                center[2] as f64 + lo_z,
             ));
             let m = &t.matrix.m;
             let sx = ((m[0][0] * m[0][0] + m[0][1] * m[0][1] + m[0][2] * m[0][2]) as f64).sqrt();
