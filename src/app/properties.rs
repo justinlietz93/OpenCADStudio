@@ -174,7 +174,24 @@ impl H7CAD {
                             });
                         }
                     }
-                    let title = entity_type_label(entity);
+                    let title = match entity {
+                        acadrust::EntityType::Insert(ins) => {
+                            let is_xref = self.tabs[i]
+                                .scene
+                                .document
+                                .block_records
+                                .iter()
+                                .find(|br| br.name == ins.block_name)
+                                .map(|br| br.flags.is_xref || br.flags.is_xref_overlay)
+                                .unwrap_or(false);
+                            if is_xref {
+                                "External Reference".to_string()
+                            } else {
+                                entity_type_label(entity)
+                            }
+                        }
+                        _ => entity_type_label(entity),
+                    };
                     ui::PropertiesPanel {
                         choice_combos: sections
                             .iter()

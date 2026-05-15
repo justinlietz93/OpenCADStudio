@@ -17,6 +17,7 @@ pub enum XrefStatus {
     NotFound,
     /// XRef is marked Unloaded in the host DWG — we honor that and
     /// skip resolving the external file. The user can re-load via UI.
+    #[allow(dead_code)]
     Unloaded,
 }
 
