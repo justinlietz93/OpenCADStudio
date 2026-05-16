@@ -36,6 +36,19 @@
   </screenshots>
 
   <releases>
+    <release version="0.2.9" date="2026-05-16">
+      <description>
+        <ul>
+          <li>Fixed hatch boundaries with spline edges rendering hollow — DXF rational/NURBS spline weights are now honored and the curve is sampled adaptively instead of at a fixed 16 segments.</li>
+          <li>Fixed hatch boundary precision: polyline-bulge arc tessellation now runs in f64, so hatch edges on large (UTM-scale) drawings no longer appear wavy / jagged.</li>
+          <li>Fixed hatch pattern stripes mis-aligning between adjacent hatches by snapping each hatch's anchor to the family's perp/along grid in f64.</li>
+          <li>Fixed wrong hatch being selected on click: the point-in-polygon test now correctly handles NaN path separators in multi-path (island / hole) boundaries.</li>
+          <li>Clicking a hatch inside a block now selects the parent Insert, matching AutoCAD's block sub-entity behaviour.</li>
+          <li>Hatch boundary outlines also tessellate polyline bulges as arcs in the wire pass (was drawing straight chords), and arc segments adapt to the current zoom level.</li>
+          <li>Cleanup: dropped the INSERT_SUB_LIMIT fallback guard, removed several dead UI helpers / scene utilities / orphan toolbar stubs, and shortened stale legacy comments.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.2.8" date="2026-05-15">
       <description>
         <ul>
