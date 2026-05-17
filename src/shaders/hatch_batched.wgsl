@@ -100,10 +100,13 @@ fn corner_xy(c: u32, aabb: vec4<f32>) -> vec2<f32> {
     var o: VOut;
     let inst = instances[v.instance_index];
 
-    // CPU-driven visibility flag (Phase 4-B frustum skip). NaN clip
-    // position degenerates the triangle so no fragment runs for it.
+    // CPU-driven visibility flag (Phase 4-B frustum skip). Emit a clip
+    // position whose x/y exceed |w|, so the GPU frustum-culls the
+    // primitive and no fragment runs for it. (WGSL forbids literal NaN
+    // so we can't go that route; pushing the vertex out of the unit
+    // cube is the equivalent degenerate-triangle trick.)
     if inst.visible == 0u {
-        o.clip = vec4<f32>(0.0 / 0.0, 0.0 / 0.0, 0.0 / 0.0, 1.0);
+        o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         o.xz = vec2<f32>(0.0, 0.0);
         o.instance_index = v.instance_index;
         return o;

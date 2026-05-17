@@ -192,11 +192,16 @@ impl HatchBatchedGpu {
                             dashes.push(d);
                         }
                         let n_dashes = (dashes.len() as u32 - dash_offset).min(u32::MAX);
-                        let perp_step = -fam.dx * fam.angle_deg.to_radians().sin()
-                            + fam.dy * fam.angle_deg.to_radians().cos();
-                        let along_step = fam.dx * fam.angle_deg.to_radians().cos()
-                            + fam.dy * fam.angle_deg.to_radians().sin();
-                        let line_width = perp_step.abs() * 0.08;
+                        // QCAD PAT local-frame convention (mirrors
+                        // `build_family_batch` in hatch_gpu.rs): `dy` is
+                        // the perpendicular spacing, `dx` is the along-line
+                        // phase shift — both in family-local coords. The
+                        // shader applies cos_off/sin_off to rotate them.
+                        let perp_step = fam.dy;
+                        let along_step = fam.dx;
+                        // Screen-space derivative drives 1-px line width
+                        // in the shader; this stored field is unused.
+                        let line_width = 0.0_f32;
                         let period: f32 = fam.dashes.iter().map(|d| d.abs()).sum();
                         families.push(LineFamilyGpu {
                             cos_a: fam.angle_deg.to_radians().cos(),
@@ -208,7 +213,7 @@ impl HatchBatchedGpu {
                             perp_step,
                             along_step,
                             line_width,
-                            period,
+                            period: if n_dashes > 0 { period } else { 0.0 },
                             n_dashes,
                             dash_offset,
                         });
@@ -263,13 +268,13 @@ impl HatchBatchedGpu {
             // family origin. Mirrors the per-hatch shader's quad sizing
             // logic — `diag * 0.8 + max_spacing * 2 * scale`.
             let diag = ((max_x - min_x).powi(2) + (max_y - min_y).powi(2)).sqrt();
+            // `perp_step.abs()` per family — uses the same QCAD local-
+            // frame convention as `LineFamilyGpu.perp_step` above so
+            // the quad padding matches what the shader will sample.
             let max_spacing = match &h.pattern {
                 HatchPattern::Pattern(fs) => fs
                     .iter()
-                    .map(|f| {
-                        let a = f.angle_deg.to_radians();
-                        (-f.dx * a.sin() + f.dy * a.cos()).abs()
-                    })
+                    .map(|f| f.dy.abs())
                     .fold(0.0f32, f32::max),
                 _ => 5.0,
             };
