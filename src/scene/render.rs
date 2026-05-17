@@ -147,7 +147,7 @@ impl shader::Primitive for Primitive {
         pipeline.compute_hatch_scissors(self.uniforms.view_proj, clip_size.width, clip_size.height);
         pipeline.compute_wipeout_scissors(self.uniforms.view_proj, clip_size.width, clip_size.height);
         pipeline.compute_image_scissors(self.uniforms.view_proj, clip_size.width, clip_size.height);
-        pipeline.compute_hatch_lod(self.uniforms.view_proj, clip_size.width, clip_size.height);
+        pipeline.compute_hatch_lod(queue, self.uniforms.view_proj, clip_size.width, clip_size.height);
         pipeline.compute_wipeout_lod(self.uniforms.view_proj, clip_size.width, clip_size.height);
         pipeline.compute_mesh_lod(self.uniforms.view_proj, clip_size.width, clip_size.height);
         if self.show_viewcube {

@@ -745,7 +745,32 @@ impl Pipeline {
     /// fragment in the bounding quad. Pairs with the shader-side
     /// solid-fill substitution for hatches between 2 px and the dense
     /// pattern threshold.
-    pub fn compute_hatch_lod(&mut self, view_proj: glam::Mat4, clip_w: u32, clip_h: u32) {
+    pub fn compute_hatch_lod(
+        &mut self,
+        queue: &wgpu::Queue,
+        view_proj: glam::Mat4,
+        clip_w: u32,
+        clip_h: u32,
+    ) {
+        // Phase 4-B batched path — write the same skip rule (sub-pixel
+        // LOD OR offscreen) into the GPU visibility buffer. The vertex
+        // shader maps 0 → out-of-NDC clip → primitive culled before
+        // fragment stage; equivalent to the per-hatch `skip_flags`
+        // gate but at GPU-side cost.
+        if let Some(batch) = &mut self.gpu_hatch_batched {
+            // Same skip rule as the legacy per-hatch path: sub-pixel
+            // LOD (`aabb_below_pixel`) OR offscreen (`aabb_offscreen`).
+            // Walks the per-instance AABB mirror — no GPU readback.
+            for (i, aabb) in batch.instance_aabbs.iter().enumerate() {
+                let skip = aabb_below_pixel(*aabb, view_proj, clip_w, clip_h, 2.0)
+                    || aabb_offscreen(*aabb, view_proj, clip_w, clip_h);
+                batch.visibility[i] = if skip { 0 } else { 1 };
+            }
+            batch.upload_visibility(queue);
+            return;
+        }
+
+        // Per-hatch (legacy) fallback path.
         self.hatch_skip_flags = self
             .gpu_hatches
             .iter()

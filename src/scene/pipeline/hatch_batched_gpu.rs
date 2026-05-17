@@ -136,14 +136,25 @@ pub struct HatchBatchedGpu {
     pub boundary_buffer: wgpu::Buffer,
     pub family_buffer: wgpu::Buffer,
     pub dash_buffer: wgpu::Buffer,
+    /// Per-instance visibility flag (1=draw, 0=skip). Stored in its
+    /// own small storage buffer so per-frame updates don't have to
+    /// touch the large `instance_buffer`. Vertex shader reads
+    /// `visibility[instance_index]` — when 0 it emits an out-of-NDC
+    /// clip position so the GPU clips the primitive before the
+    /// fragment stage runs.
+    pub visibility_buffer: wgpu::Buffer,
     pub bind_group: wgpu::BindGroup,
     pub instance_count: u32,
-    /// CPU-side mirror of `HatchInstance.visible` — `compute_hatch_lod`
-    /// writes 0/1 here, then `upload_visibility` pushes the changed
-    /// `visible` field through to the GPU `instance_buffer`. Storing
-    /// just the flag (not the whole HatchInstance) keeps the per-frame
-    /// upload small.
+    /// CPU mirror — `update_visibility` re-uploads this whole slice
+    /// when any flag changes. ~4 B per hatch, so 40 KB / 10 k hatches
+    /// per pan tick. Far cheaper than touching the 112 B-per-instance
+    /// data.
     pub visibility: Vec<u32>,
+    /// CPU-side mirror of each instance's local-space AABB (world-
+    /// offset-subtracted, world_origin already added back). Used by
+    /// `compute_hatch_lod` to evaluate the sub-pixel + frustum cull
+    /// without reading back from the GPU.
+    pub instance_aabbs: Vec<[f32; 4]>,
 }
 
 impl HatchBatchedGpu {
@@ -350,6 +361,13 @@ impl HatchBatchedGpu {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        let visibility: Vec<u32> = instances.iter().map(|i| i.visible).collect();
+        let visibility_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("hatch_batched.visibility"),
+            contents: bytemuck::cast_slice(&visibility),
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+        });
+
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hatch_batched.bg"),
             layout: bgl,
@@ -370,10 +388,30 @@ impl HatchBatchedGpu {
                     binding: 3,
                     resource: dash_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: visibility_buffer.as_entire_binding(),
+                },
             ],
         });
 
-        let visibility = instances.iter().map(|i| i.visible).collect();
+        // CPU AABB mirror — local-space rect with world_origin added
+        // back, ready for `aabb_offscreen` / `aabb_below_pixel` to
+        // compare against the camera view_proj.
+        let instance_aabbs: Vec<[f32; 4]> = instances
+            .iter()
+            .map(|i| {
+                let ox = i.world_origin[0];
+                let oy = i.world_origin[1];
+                [
+                    i.aabb[0] + ox,
+                    i.aabb[1] + oy,
+                    i.aabb[2] + ox,
+                    i.aabb[3] + oy,
+                ]
+            })
+            .collect();
+
         Some(Self {
             vertex_buffer,
             vertex_count: verts.len() as u32,
@@ -381,10 +419,22 @@ impl HatchBatchedGpu {
             boundary_buffer,
             family_buffer,
             dash_buffer,
+            visibility_buffer,
             bind_group,
             instance_count: instances.len() as u32,
             visibility,
+            instance_aabbs,
         })
+    }
+
+    /// Push the CPU `visibility` slice to GPU. Call when any
+    /// element changes (typically per-frame from compute_hatch_lod).
+    pub fn upload_visibility(&self, queue: &wgpu::Queue) {
+        queue.write_buffer(
+            &self.visibility_buffer,
+            0,
+            bytemuck::cast_slice(&self.visibility),
+        );
     }
 
     /// Group-1 bind group layout — shared by the pipeline so it can be
@@ -404,7 +454,7 @@ impl HatchBatchedGpu {
         };
         device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("hatch_batched.bgl"),
-            entries: &[entry(0), entry(1), entry(2), entry(3)],
+            entries: &[entry(0), entry(1), entry(2), entry(3), entry(4)],
         })
     }
 }

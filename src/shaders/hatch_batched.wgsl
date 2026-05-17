@@ -63,10 +63,15 @@ struct LineFamily {
     dash_offset: u32,
 }
 
-@group(1) @binding(0) var<storage, read> instances: array<HatchInstance>;
-@group(1) @binding(1) var<storage, read> boundary:  array<vec4<f32>>;
-@group(1) @binding(2) var<storage, read> families:  array<LineFamily>;
-@group(1) @binding(3) var<storage, read> dashes:    array<f32>;
+@group(1) @binding(0) var<storage, read> instances:  array<HatchInstance>;
+@group(1) @binding(1) var<storage, read> boundary:   array<vec4<f32>>;
+@group(1) @binding(2) var<storage, read> families:   array<LineFamily>;
+@group(1) @binding(3) var<storage, read> dashes:     array<f32>;
+// Per-instance visibility (Phase 4-B sub-pixel + frustum skip).
+// CPU writes `1` to draw / `0` to skip every frame; vertex shader
+// emits an out-of-NDC clip position for 0-instances so the GPU
+// rasterizer culls the primitive before any fragment runs.
+@group(1) @binding(4) var<storage, read> visibility: array<u32>;
 
 // ── Vertex shader ────────────────────────────────────────────────────────
 
@@ -100,12 +105,12 @@ fn corner_xy(c: u32, aabb: vec4<f32>) -> vec2<f32> {
     var o: VOut;
     let inst = instances[v.instance_index];
 
-    // CPU-driven visibility flag (Phase 4-B frustum skip). Emit a clip
-    // position whose x/y exceed |w|, so the GPU frustum-culls the
-    // primitive and no fragment runs for it. (WGSL forbids literal NaN
-    // so we can't go that route; pushing the vertex out of the unit
-    // cube is the equivalent degenerate-triangle trick.)
-    if inst.visible == 0u {
+    // Per-frame visibility (CPU-driven sub-pixel + frustum skip).
+    // 0 → emit a clip position whose x/y exceed |w| so the GPU
+    // frustum-culls the primitive and no fragment runs. (WGSL
+    // forbids literal NaN so this out-of-NDC trick replaces the
+    // usual NaN-degenerate-triangle.)
+    if visibility[v.instance_index] == 0u {
         o.clip = vec4<f32>(2.0, 2.0, 2.0, 1.0);
         o.xz = vec2<f32>(0.0, 0.0);
         o.instance_index = v.instance_index;
