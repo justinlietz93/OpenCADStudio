@@ -32,12 +32,19 @@ pub struct Pipeline {
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
     hatch_pipeline: wgpu::RenderPipeline,
+    /// Phase 4-B — single-draw batched hatch pipeline. Per-instance
+    /// data lives in storage buffers; one draw call covers every
+    /// hatch in the frame.
+    hatch_batched_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     mesh_pipeline: wgpu::RenderPipeline,
     face3d_pipeline: wgpu::RenderPipeline,
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
     hatch_bgl1: wgpu::BindGroupLayout,
+    /// Group-1 layout for the batched hatch pipeline (storage buffers
+    /// for instances / boundary / families / dashes).
+    hatch_batched_bgl1: wgpu::BindGroupLayout,
     image_bgl1: wgpu::BindGroupLayout,
     depth_texture_size: Size<u32>,
     depth_view: wgpu::TextureView,
@@ -58,6 +65,10 @@ pub struct Pipeline {
     /// Ghost copies (25% alpha) of selected wires for the X-ray depth pass.
     gpu_selected_wires: Vec<WireGpu>,
     gpu_hatches: Vec<HatchGpu>,
+    /// Phase 4-B — single batched-hatch GPU resource. When `Some`, the
+    /// batched pipeline draws every hatch in one indexed call and the
+    /// per-hatch `gpu_hatches` path is skipped.
+    gpu_hatch_batched: Option<hatch_batched_gpu::HatchBatchedGpu>,
     /// Pixel scissor rects [x, y, w, h] for viewport-clipped hatches. Recomputed each frame.
     hatch_pixel_scissors: Vec<Option<[u32; 4]>>,
     /// `true` for hatches whose AABB projects to less than ~2 px at the
@@ -296,6 +307,59 @@ impl Pipeline {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &hatch_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── Hatch batched pipeline (Phase 4-B) ─────────────────────────────
+        let hatch_batched_bgl1 = hatch_batched_gpu::HatchBatchedGpu::bind_group_layout(device);
+        let hatch_batched_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("hatch_batched.pipeline_layout"),
+            bind_group_layouts: &[&frame_bgl, &hatch_batched_bgl1],
+            push_constant_ranges: &[],
+        });
+        let hatch_batched_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("hatch_batched.shader"),
+            source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                "../../shaders/hatch_batched.wgsl"
+            ))),
+        });
+        let hatch_batched_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("hatch_batched.pipeline"),
+            layout: Some(&hatch_batched_layout),
+            vertex: wgpu::VertexState {
+                module: &hatch_batched_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[hatch_batched_gpu::HatchBatchedVertex::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &hatch_batched_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -604,12 +668,14 @@ impl Pipeline {
             wire_pipeline,
             wire_xray_pipeline,
             hatch_pipeline,
+            hatch_batched_pipeline,
             image_pipeline,
             mesh_pipeline,
             face3d_pipeline,
             uniform_buffer,
             uniform_bind_group,
             hatch_bgl1,
+            hatch_batched_bgl1,
             image_bgl1,
             depth_texture_size: Size::new(1, 1),
             depth_view,
@@ -624,6 +690,7 @@ impl Pipeline {
             wire_pixel_scissors: vec![],
             gpu_selected_wires: vec![],
             gpu_hatches: vec![],
+            gpu_hatch_batched: None,
             hatch_pixel_scissors: vec![],
             hatch_skip_flags: vec![],
             gpu_wipeouts: vec![],
@@ -769,11 +836,14 @@ impl Pipeline {
     }
 
     pub fn upload_hatches(&mut self, device: &wgpu::Device, hatches: &[HatchModel]) {
-        self.gpu_hatches = hatches
-            .iter()
-            .filter(|h| h.boundary.len() >= 3)
-            .map(|h| HatchGpu::new(device, h, &self.hatch_bgl1))
-            .collect();
+        // Phase 4-B — build the single batched GPU resource. The
+        // per-hatch `gpu_hatches` Vec is left empty; the draw loop
+        // takes the batched path when `gpu_hatch_batched.is_some()`.
+        let renderable: Vec<HatchModel> =
+            hatches.iter().filter(|h| h.boundary.len() >= 3).cloned().collect();
+        self.gpu_hatches = vec![];
+        self.gpu_hatch_batched =
+            hatch_batched_gpu::HatchBatchedGpu::build(device, &self.hatch_batched_bgl1, &renderable);
     }
 
     pub fn upload_wipeouts(&mut self, device: &wgpu::Device, wipeouts: &[HatchModel]) {
@@ -844,12 +914,23 @@ impl Pipeline {
             });
             // MSAA texture is clip-bounds-sized, so viewport starts at (0, 0).
             pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
-            if !self.gpu_hatches.is_empty() {
+            // Phase 4-B — single batched draw covers every hatch.
+            // The vertex shader culls per-instance via the `visible`
+            // flag set by `compute_hatch_lod` (sub-pixel + offscreen).
+            // Viewport-clip scissors haven't been ported to the batched
+            // path yet; paper-space MSPACE rendering still uses the
+            // per-hatch fallback below when no batched resource exists.
+            if let Some(batch) = &self.gpu_hatch_batched {
+                pass.set_pipeline(&self.hatch_batched_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_bind_group(1, &batch.bind_group, &[]);
+                pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
+                pass.draw(0..batch.vertex_count, 0..1);
+            } else if !self.gpu_hatches.is_empty() {
                 pass.set_pipeline(&self.hatch_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 let mut scissor_active = false;
                 for (i, hatch) in self.gpu_hatches.iter().enumerate() {
-                    // Phase 3.3 LOD: skip hatches projecting to sub-pixel size.
                     if self.hatch_skip_flags.get(i).copied().unwrap_or(false) {
                         continue;
                     }
