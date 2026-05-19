@@ -56,6 +56,7 @@ impl EntityTypeOps for EntityType {
             EntityType::Face3D(f) => TruckConvertible::to_truck(f, document),
             EntityType::PolygonMesh(pm) => TruckConvertible::to_truck(pm, document),
             EntityType::PolyfaceMesh(pfm) => TruckConvertible::to_truck(pfm, document),
+            EntityType::Mesh(m) => TruckConvertible::to_truck(m, document),
             EntityType::Table(tbl) => TruckConvertible::to_truck(tbl, document),
             EntityType::Text(text) => TruckConvertible::to_truck(text, document),
             EntityType::MText(text) => TruckConvertible::to_truck(text, document),
@@ -93,6 +94,7 @@ impl EntityTypeOps for EntityType {
             EntityType::Face3D(f) => Grippable::grips(f),
             EntityType::PolygonMesh(pm) => Grippable::grips(pm),
             EntityType::PolyfaceMesh(pfm) => Grippable::grips(pfm),
+            EntityType::Mesh(m) => Grippable::grips(m),
             EntityType::Table(tbl) => Grippable::grips(tbl),
             EntityType::Point(pt) => Grippable::grips(pt),
             EntityType::Spline(spline) => Grippable::grips(spline),
@@ -185,6 +187,9 @@ impl EntityTypeOps for EntityType {
             EntityType::PolyfaceMesh(pfm) => {
                 Some(PropertyEditable::geometry_properties(pfm, text_style_names))
             }
+            EntityType::Mesh(m) => {
+                Some(PropertyEditable::geometry_properties(m, text_style_names))
+            }
             EntityType::Table(tbl) => {
                 Some(PropertyEditable::geometry_properties(tbl, text_style_names))
             }
@@ -265,6 +270,7 @@ impl EntityTypeOps for EntityType {
             EntityType::Face3D(f) => PropertyEditable::apply_geom_prop(f, field, value),
             EntityType::PolygonMesh(pm) => PropertyEditable::apply_geom_prop(pm, field, value),
             EntityType::PolyfaceMesh(pfm) => PropertyEditable::apply_geom_prop(pfm, field, value),
+            EntityType::Mesh(m) => PropertyEditable::apply_geom_prop(m, field, value),
             EntityType::Table(tbl) => PropertyEditable::apply_geom_prop(tbl, field, value),
             EntityType::Hatch(hatch) => PropertyEditable::apply_geom_prop(hatch, field, value),
             EntityType::Point(pt) => PropertyEditable::apply_geom_prop(pt, field, value),
@@ -308,6 +314,7 @@ impl EntityTypeOps for EntityType {
             EntityType::Face3D(f) => Grippable::apply_grip(f, grip_id, apply),
             EntityType::PolygonMesh(pm) => Grippable::apply_grip(pm, grip_id, apply),
             EntityType::PolyfaceMesh(pfm) => Grippable::apply_grip(pfm, grip_id, apply),
+            EntityType::Mesh(m) => Grippable::apply_grip(m, grip_id, apply),
             EntityType::Table(tbl) => Grippable::apply_grip(tbl, grip_id, apply),
             EntityType::Point(pt) => Grippable::apply_grip(pt, grip_id, apply),
             EntityType::Spline(spline) => Grippable::apply_grip(spline, grip_id, apply),
@@ -350,6 +357,7 @@ impl EntityTypeOps for EntityType {
             EntityType::Face3D(f) => Transformable::apply_transform(f, t),
             EntityType::PolygonMesh(pm) => Transformable::apply_transform(pm, t),
             EntityType::PolyfaceMesh(pfm) => Transformable::apply_transform(pfm, t),
+            EntityType::Mesh(m) => Transformable::apply_transform(m, t),
             EntityType::Table(tbl) => Transformable::apply_transform(tbl, t),
             EntityType::MText(text) => Transformable::apply_transform(text, t),
             EntityType::Point(pt) => Transformable::apply_transform(pt, t),

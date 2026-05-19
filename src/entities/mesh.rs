@@ -1,4 +1,4 @@
-use acadrust::entities::{polygon_mesh::PolygonMesh, Face3D, PolyfaceMesh};
+use acadrust::entities::{mesh::Mesh, polygon_mesh::PolygonMesh, Face3D, PolyfaceMesh};
 use glam::Vec3;
 
 use crate::command::EntityTransform;
@@ -277,12 +277,38 @@ impl Grippable for PolygonMesh {
 
 impl PropertyEditable for PolygonMesh {
     fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
+        let smooth = match self.smooth_type {
+            acadrust::entities::polygon_mesh::SurfaceSmoothType::NoSmooth => "None",
+            acadrust::entities::polygon_mesh::SurfaceSmoothType::Quadratic => "Quadratic",
+            acadrust::entities::polygon_mesh::SurfaceSmoothType::Cubic => "Cubic",
+            acadrust::entities::polygon_mesh::SurfaceSmoothType::Bezier => "Bezier",
+        };
         PropSection {
             title: "Geometry".into(),
             props: vec![
                 ro("M count", "pm_m", self.m_vertex_count.to_string()),
                 ro("N count", "pm_n", self.n_vertex_count.to_string()),
                 ro("Vertices", "pm_v", self.vertices.len().to_string()),
+                ro("Smooth Type", "pm_smooth", smooth),
+                ro(
+                    "Smooth M Density",
+                    "pm_smooth_m",
+                    self.m_smooth_density.to_string(),
+                ),
+                ro(
+                    "Smooth N Density",
+                    "pm_smooth_n",
+                    self.n_smooth_density.to_string(),
+                ),
+                ro("Elevation", "pm_elevation", format!("{:.4}", self.elevation)),
+                ro(
+                    "Normal",
+                    "pm_normal",
+                    format!(
+                        "{:.3}, {:.3}, {:.3}",
+                        self.normal.x, self.normal.y, self.normal.z
+                    ),
+                ),
             ],
         }
     }
@@ -399,11 +425,36 @@ impl Grippable for PolyfaceMesh {
 
 impl PropertyEditable for PolyfaceMesh {
     fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
+        let smooth = match self.smooth_surface {
+            acadrust::entities::PolyfaceSmoothType::None => "None",
+            acadrust::entities::PolyfaceSmoothType::Quadratic => "Quadratic",
+            acadrust::entities::PolyfaceSmoothType::Cubic => "Cubic",
+            acadrust::entities::PolyfaceSmoothType::Bezier => "Bezier",
+        };
         PropSection {
             title: "Geometry".into(),
             props: vec![
                 ro("Vertices", "pfm_v", self.vertices.len().to_string()),
                 ro("Faces", "pfm_f", self.faces.len().to_string()),
+                ro("Smooth Surface", "pfm_smooth", smooth),
+                ro(
+                    "Seqend",
+                    "pfm_seqend_handle",
+                    match self.seqend_handle {
+                        Some(h) if !h.is_null() => format!("{:X}", h.value()),
+                        _ => "(none)".to_string(),
+                    },
+                ),
+                ro("Elevation", "pfm_elevation", format!("{:.4}", self.elevation)),
+                ro(
+                    "Normal",
+                    "pfm_normal",
+                    format!(
+                        "{:.3}, {:.3}, {:.3}",
+                        self.normal.x, self.normal.y, self.normal.z
+                    ),
+                ),
+                ro("Thickness", "pfm_thickness", format!("{:.4}", self.thickness)),
             ],
         }
     }
@@ -421,6 +472,159 @@ impl Transformable for PolyfaceMesh {
                     p1,
                     p2,
                 );
+            }
+        });
+    }
+}
+
+// ── Mesh (SubD mesh) ──────────────────────────────────────────────────────────
+//
+// Modern subdivision mesh — distinct from PolygonMesh. The render path emits
+// the file's per-edge wireframe and triangulates each face into fill_tris so
+// solid views still draw a shaded surface. Subdivision-level smoothing is
+// honoured only as metadata; we don't run a Catmull-Clark refinement pass
+// here yet.
+
+impl TruckConvertible for Mesh {
+    fn to_truck(&self, _document: &acadrust::CadDocument) -> Option<TruckEntity> {
+        if self.vertices.is_empty() {
+            return None;
+        }
+        let get = |i: usize| -> Option<[f64; 3]> {
+            self.vertices.get(i).map(|v| [v.x, v.y, v.z])
+        };
+
+        let mut pts: Vec<[f64; 3]> = Vec::new();
+        if !self.edges.is_empty() {
+            for edge in &self.edges {
+                if let (Some(a), Some(b)) = (get(edge.start), get(edge.end)) {
+                    pts.push([f64::NAN; 3]);
+                    pts.push(a);
+                    pts.push(b);
+                }
+            }
+        } else {
+            for face in &self.faces {
+                if face.vertices.len() < 2 {
+                    continue;
+                }
+                pts.push([f64::NAN; 3]);
+                for &vi in &face.vertices {
+                    if let Some(p) = get(vi) {
+                        pts.push(p);
+                    }
+                }
+                if let Some(first) = face.vertices.first().and_then(|&i| get(i)) {
+                    pts.push(first);
+                }
+            }
+        }
+
+        // Fan-triangulate each face into fill_tris so shaded views render
+        // the mesh as a solid surface.
+        let mut fill_tris: Vec<[f64; 3]> = Vec::new();
+        for face in &self.faces {
+            if face.vertices.len() < 3 {
+                continue;
+            }
+            let v0 = match get(face.vertices[0]) {
+                Some(p) => p,
+                None => continue,
+            };
+            for tri in 1..(face.vertices.len() - 1) {
+                let v1 = match get(face.vertices[tri]) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let v2 = match get(face.vertices[tri + 1]) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                fill_tris.push(v0);
+                fill_tris.push(v1);
+                fill_tris.push(v2);
+            }
+        }
+
+        let snap_pts: Vec<(Vec3, SnapHint)> = self
+            .vertices
+            .iter()
+            .map(|v| (Vec3::new(v.x as f32, v.y as f32, v.z as f32), SnapHint::Node))
+            .collect();
+        let key_vertices: Vec<[f64; 3]> = self.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+
+        Some(TruckEntity {
+            object: TruckObject::Lines(pts),
+            snap_pts,
+            tangent_geoms: vec![],
+            key_vertices,
+            fill_tris,
+        })
+    }
+}
+
+impl Grippable for Mesh {
+    fn grips(&self) -> Vec<GripDef> {
+        self.vertices
+            .iter()
+            .enumerate()
+            .map(|(i, v)| {
+                square_grip(i, Vec3::new(v.x as f32, v.y as f32, v.z as f32))
+            })
+            .collect()
+    }
+
+    fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
+        if let Some(v) = self.vertices.get_mut(grip_id) {
+            match apply {
+                GripApply::Translate(d) => {
+                    v.x += d.x as f64;
+                    v.y += d.y as f64;
+                    v.z += d.z as f64;
+                }
+                GripApply::Absolute(p) => {
+                    v.x = p.x as f64;
+                    v.y = p.y as f64;
+                    v.z = p.z as f64;
+                }
+            }
+        }
+    }
+}
+
+impl PropertyEditable for Mesh {
+    fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
+        let creased_edges = self.edges.iter().filter(|e| e.has_crease()).count();
+        PropSection {
+            title: "Geometry".into(),
+            props: vec![
+                ro("Vertices", "msh_v", self.vertices.len().to_string()),
+                ro("Faces", "msh_f", self.faces.len().to_string()),
+                ro("Edges", "msh_e", self.edges.len().to_string()),
+                ro("Creased Edges", "msh_creased", creased_edges.to_string()),
+                ro("Version", "msh_version", self.version.to_string()),
+                ro(
+                    "Subdivision Level",
+                    "msh_subdiv",
+                    self.subdivision_level.to_string(),
+                ),
+                ro(
+                    "Blend Crease",
+                    "msh_blend_crease",
+                    if self.blend_crease { "Yes" } else { "No" },
+                ),
+            ],
+        }
+    }
+
+    fn apply_geom_prop(&mut self, _field: &str, _value: &str) {}
+}
+
+impl Transformable for Mesh {
+    fn apply_transform(&mut self, t: &EntityTransform) {
+        crate::scene::transform::apply_standard_entity_transform(self, t, |entity, p1, p2| {
+            for v in &mut entity.vertices {
+                crate::scene::transform::reflect_xy_point(&mut v.x, &mut v.y, p1, p2);
             }
         });
     }

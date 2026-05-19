@@ -520,10 +520,32 @@ impl Grippable for Polyline3D {
 
 impl PropertyEditable for Polyline3D {
     fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
+        use acadrust::entities::polyline3d::SmoothSurfaceType as SST;
+        let smooth = match self.smooth_type {
+            SST::None => "None",
+            SST::QuadraticBSpline => "Quadratic",
+            SST::CubicBSpline => "Cubic",
+            SST::Bezier => "Bezier",
+        };
         PropSection {
             title: "Geometry".into(),
             props: vec![
                 ro("Vertices", "vertices", self.vertices.len().to_string()),
+                edit("Default Start W", "pl3_start_w", self.default_start_width),
+                edit("Default End W", "pl3_end_w", self.default_end_width),
+                ro("Smooth", "pl3_smooth", smooth),
+                ro("Mesh M", "pl3_mesh_m", self.mesh_m_count.to_string()),
+                ro("Mesh N", "pl3_mesh_n", self.mesh_n_count.to_string()),
+                ro(
+                    "Smooth M Density",
+                    "pl3_smooth_m",
+                    self.smooth_m_density.to_string(),
+                ),
+                ro(
+                    "Smooth N Density",
+                    "pl3_smooth_n",
+                    self.smooth_n_density.to_string(),
+                ),
                 Property {
                     label: "Closed".into(),
                     field: "pl3_closed",
@@ -547,6 +569,14 @@ impl PropertyEditable for Polyline3D {
                 self.close();
             } else {
                 self.open();
+            }
+            return;
+        }
+        if let Ok(v) = value.trim().parse::<f64>() {
+            match field {
+                "pl3_start_w" if v >= 0.0 => self.default_start_width = v,
+                "pl3_end_w" if v >= 0.0 => self.default_end_width = v,
+                _ => {}
             }
         }
     }
