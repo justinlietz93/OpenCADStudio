@@ -143,6 +143,13 @@ fn merge_xref_into_block(
 ) {
     let prefix = xref_block_name;
 
+    // Carry the xref's INSUNITS onto the host BlockRecord. Used at INSERT
+    // time so the inserted xref scales to the host's units (INSUNITS).
+    let src_insunits = xref_doc.header.insertion_units;
+    if let Some(br) = doc.block_records.iter_mut().find(|b| b.handle == br_handle) {
+        br.units = src_insunits;
+    }
+
     // ── Layers ──────────────────────────────────────────────────────────
     // Prefix every xref layer (including "0"). Entity layer references are
     // remapped below so the resolver finds the merged copy. Host layers

@@ -15,6 +15,19 @@ impl H7CAD {
         let edit_buf = std::mem::take(&mut self.tabs[i].properties.edit_buf);
         let selected_group = self.tabs[i].properties.selected_group.clone();
 
+        // Seed the per-thread unit context from the document header so the
+        // entity property builders (which only see f64 values) can format
+        // lengths/angles per LUNITS / LUPREC / AUNITS / AUPREC.
+        {
+            let h = &self.tabs[i].scene.document.header;
+            crate::entities::common::set_unit_context(crate::entities::common::UnitContext {
+                lunits: h.linear_unit_format,
+                luprec: h.linear_unit_precision,
+                aunits: h.angular_unit_format,
+                auprec: h.angular_unit_precision,
+            });
+        }
+
         let layer_names: Vec<String> = self.tabs[i]
             .scene
             .document
@@ -428,6 +441,34 @@ impl H7CAD {
             entity.as_entity_mut().set_layer(layer.clone());
         }
 
+        // INSUNITS: when inserting a block whose BlockRecord.units differ
+        // from the host's header.insertion_units, scale the new INSERT so
+        // 1 source-unit equals the matching host length. When either side
+        // is unitless (0) AutoCAD falls back to MEASUREMENT (0 = Imperial /
+        // inches, 1 = Metric / mm); honour the same fallback.
+        if let acadrust::EntityType::Insert(ref mut ins) = entity {
+            let header = &self.tabs[i].scene.document.header;
+            let measurement_fallback = if header.measurement == 1 { 4 } else { 1 };
+            let host_raw = header.insertion_units;
+            let host_units = if host_raw == 0 { measurement_fallback } else { host_raw };
+            let src_raw = self.tabs[i]
+                .scene
+                .document
+                .block_records
+                .get(&ins.block_name)
+                .map(|br| br.units)
+                .unwrap_or(0);
+            let src_units = if src_raw == 0 { measurement_fallback } else { src_raw };
+            if src_units != host_units {
+                let ratio = insunits_to_mm(src_units) / insunits_to_mm(host_units);
+                if ratio.is_finite() && (ratio - 1.0).abs() > 1e-9 {
+                    ins.set_x_scale(ratio);
+                    ins.set_y_scale(ratio);
+                    ins.set_z_scale(ratio);
+                }
+            }
+        }
+
         crate::scene::dispatch::apply_color(&mut entity, self.ribbon.active_color);
         crate::scene::dispatch::apply_common_prop(
             &mut entity,
@@ -635,5 +676,34 @@ fn merge_prop_value(
             },
         ) if field == other_field => PropValue::ReadOnly(VARIES_LABEL.into()),
         _ => left.clone(),
+    }
+}
+
+/// Convert INSUNITS (DXF group 70) to millimetres.
+/// 0 = unitless / unknown: returns 1.0 so the caller treats it as "do not scale".
+fn insunits_to_mm(code: i16) -> f64 {
+    match code {
+        1 => 25.4,            // Inches
+        2 => 304.8,           // Feet
+        3 => 1_609_344.0,     // Miles
+        4 => 1.0,             // Millimeters
+        5 => 10.0,            // Centimeters
+        6 => 1_000.0,         // Meters
+        7 => 1_000_000.0,     // Kilometers
+        8 => 0.000_025_4,     // Microinches
+        9 => 0.025_4,         // Mils
+        10 => 914.4,          // Yards
+        11 => 1.0e-7,         // Angstroms
+        12 => 1.0e-6,         // Nanometers
+        13 => 0.001,          // Microns
+        14 => 100.0,          // Decimeters
+        15 => 10_000.0,       // Decameters
+        16 => 100_000.0,      // Hectometers
+        17 => 1.0e12,         // Gigameters
+        18 => 1.496e14,       // Astronomical Units
+        19 => 9.461e18,       // Light Years
+        20 => 3.086e19,       // Parsecs
+        21 => 304.800_609_6,  // US Survey Feet
+        _ => 1.0,
     }
 }

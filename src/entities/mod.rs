@@ -1,7 +1,7 @@
 pub mod arc;
 pub mod attribute;
 pub mod circle;
-mod common;
+pub mod common;
 pub mod dimension;
 pub mod ellipse;
 pub mod hatch;
