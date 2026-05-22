@@ -9,13 +9,17 @@
 
 use crate::io::pdf_export;
 use crate::io::plot_style::PlotStyleTable;
+use crate::scene::hatch_model::HatchModel;
 use crate::scene::WireModel;
 
-/// Render `wires` to a temp PDF and dispatch it to the default system printer.
+/// Render `wires` (plus hatch / wipeout fills) to a temp PDF and dispatch it
+/// to the default system printer.
 ///
 /// Returns `Ok(printer_name)` on success or `Err(message)` on failure.
 pub async fn print_wires(
     wires: Vec<WireModel>,
+    hatches: Vec<HatchModel>,
+    wipeouts: Vec<HatchModel>,
     paper_w: f64,
     paper_h: f64,
     offset_x: f32,
@@ -27,6 +31,8 @@ pub async fn print_wires(
     let tmp_path = std::env::temp_dir().join("h7cad_print.pdf");
     pdf_export::export_pdf(
         &wires,
+        &hatches,
+        &wipeouts,
         paper_w,
         paper_h,
         offset_x,

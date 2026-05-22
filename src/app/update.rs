@@ -3898,6 +3898,8 @@ impl H7CAD {
                 let scene = &self.tabs[i].scene;
                 let layout_name = scene.current_layout.clone();
                 let wires = scene.entity_wires();
+                let hatches = scene.paper_canvas_hatches();
+                let wipeouts = scene.paper_canvas_wipeouts();
 
                 // Read PlotSettings for current layout (if available).
                 use acadrust::objects::{ObjectType, PlotType};
@@ -3993,6 +3995,8 @@ impl H7CAD {
 
                 match crate::io::pdf_export::export_pdf(
                     &wires,
+                    hatches.as_slice(),
+                    wipeouts.as_slice(),
                     eff_w,
                     eff_h,
                     draw_ox as f32,
@@ -4016,6 +4020,8 @@ impl H7CAD {
                 let scene = &self.tabs[i].scene;
                 let layout_name = scene.current_layout.clone();
                 let wires = scene.entity_wires();
+                let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
+                let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
                 use acadrust::objects::{ObjectType, PlotType};
                 let ps_snap = scene.document.objects.values().find_map(|obj| {
                     if let ObjectType::PlotSettings(ps) = obj {
@@ -4071,6 +4077,8 @@ impl H7CAD {
                     async move {
                         crate::io::print_to_printer::print_wires(
                             wires,
+                            hatches,
+                            wipeouts,
                             eff_w,
                             eff_h,
                             draw_ox as f32,

@@ -9,10 +9,11 @@
 // drawing origin at the paper origin.
 
 use crate::io::plot_style::PlotStyleTable;
+use crate::scene::hatch_model::{HatchModel, HatchPattern};
 use crate::scene::WireModel;
 use printpdf::{
-    Color, Line, LineCapStyle, LineJoinStyle, LinePoint, Mm, Op, PdfDocument, PdfPage,
-    PdfSaveOptions, Point, Pt, Rgb,
+    Color, Line, LineCapStyle, LineJoinStyle, LinePoint, Mm, Op, PaintMode, PdfDocument, PdfPage,
+    PdfSaveOptions, Point, Polygon, PolygonRing, Pt, Rgb, WindingOrder,
 };
 use std::io::Write;
 use std::path::Path;
@@ -27,6 +28,8 @@ use std::path::Path;
 /// - `rotation_deg`: 0 | 90 | 180 | 270 — rotates the entire drawing on the page.
 pub fn export_pdf(
     wires: &[WireModel],
+    hatches: &[HatchModel],
+    wipeouts: &[HatchModel],
     paper_w: f64,
     paper_h: f64,
     offset_x: f32,
@@ -37,6 +40,8 @@ pub fn export_pdf(
 ) -> Result<(), String> {
     let bytes = build_pdf(
         wires,
+        hatches,
+        wipeouts,
         paper_w as f32,
         paper_h as f32,
         offset_x,
@@ -64,6 +69,8 @@ pub async fn pick_pdf_path_owned(stem: String) -> Option<std::path::PathBuf> {
 
 fn build_pdf(
     wires: &[WireModel],
+    hatches: &[HatchModel],
+    wipeouts: &[HatchModel],
     paper_w: f32,
     paper_h: f32,
     ox: f32,
@@ -123,12 +130,20 @@ fn build_pdf(
         });
     }
 
-    let mut last_color: Option<[f32; 3]> = None;
-    let mut last_lw: Option<f32> = None;
     // mm to PDF points (1 mm = 2.834645 pt).
     const MM_TO_PT: f32 = 2.834645;
     // Screen px to PDF points (approximate at 96 dpi).
     const PX_TO_PT: f32 = 0.35278;
+
+    // ── Hatch / wipeout fills (rendered before wires so wires draw on top,
+    //    matching paper_canvas ordering). Each `emit_hatch` sets its own
+    //    fill / stroke colour, so the wire pass below starts fresh.
+    for hatch in wipeouts.iter().chain(hatches.iter()) {
+        emit_hatch(&mut ops, hatch, ox, oy);
+    }
+
+    let mut last_color: Option<[f32; 3]> = None;
+    let mut last_lw: Option<f32> = None;
 
     for wire in wires {
         let [mut r, mut g, mut b, a] = wire.color;
@@ -228,6 +243,97 @@ fn flush_line(ops: &mut Vec<Op>, pts: &[LinePoint]) {
         line: Line {
             points: pts.to_vec(),
             is_closed: false,
+        },
+    });
+}
+
+/// Emit a single hatch / wipeout as a filled (or stroked, for pattern fills)
+/// polygon. NaN sentinels in `hatch.boundary` split the path into multiple
+/// rings so islands and holes render correctly under the even-odd rule.
+/// Mirrors `scene::paper_canvas::draw_hatch`: solid → fill, pattern → outline,
+/// gradient → solid fill of the averaged colour.
+fn emit_hatch(ops: &mut Vec<Op>, hatch: &HatchModel, ox: f32, oy: f32) {
+    if hatch.boundary.is_empty() {
+        return;
+    }
+    let [r, g, b, a] = hatch.color;
+    if a < 0.01 {
+        return;
+    }
+    let world_ox = hatch.world_origin[0] as f32;
+    let world_oy = hatch.world_origin[1] as f32;
+
+    // Split the boundary into rings on every NaN-NaN separator.
+    let mut rings: Vec<PolygonRing> = Vec::new();
+    let mut current: Vec<LinePoint> = Vec::new();
+    for &[bx, by] in hatch.boundary.iter() {
+        if bx.is_nan() || by.is_nan() {
+            if current.len() >= 3 {
+                rings.push(PolygonRing { points: std::mem::take(&mut current) });
+            } else {
+                current.clear();
+            }
+            continue;
+        }
+        current.push(LinePoint {
+            p: Point::new(Mm(bx + world_ox + ox), Mm(by + world_oy + oy)),
+            bezier: false,
+        });
+    }
+    if current.len() >= 3 {
+        rings.push(PolygonRing { points: current });
+    }
+    if rings.is_empty() {
+        return;
+    }
+
+    let (paint_mode, fill_color) = match &hatch.pattern {
+        HatchPattern::Solid => (PaintMode::Fill, [r, g, b]),
+        HatchPattern::Pattern(_) => {
+            // Stroke the outline only — pattern lines themselves are
+            // procedural and not synthesised on the CPU.
+            (PaintMode::Stroke, [r, g, b])
+        }
+        HatchPattern::Gradient { color2, .. } => {
+            // PDF gradients are stored in resource dictionaries; for the
+            // fast path we average the two colours, matching paper_canvas.
+            let avg = [
+                (r + color2[0]) * 0.5,
+                (g + color2[1]) * 0.5,
+                (b + color2[2]) * 0.5,
+            ];
+            (PaintMode::Fill, avg)
+        }
+    };
+
+    match paint_mode {
+        PaintMode::Fill | PaintMode::FillStroke => {
+            ops.push(Op::SetFillColor {
+                col: Color::Rgb(Rgb {
+                    r: fill_color[0],
+                    g: fill_color[1],
+                    b: fill_color[2],
+                    icc_profile: None,
+                }),
+            });
+        }
+        _ => {}
+    }
+    if matches!(paint_mode, PaintMode::Stroke | PaintMode::FillStroke) {
+        ops.push(Op::SetOutlineColor {
+            col: Color::Rgb(Rgb {
+                r: fill_color[0],
+                g: fill_color[1],
+                b: fill_color[2],
+                icc_profile: None,
+            }),
+        });
+    }
+    ops.push(Op::DrawPolygon {
+        polygon: Polygon {
+            rings,
+            mode: paint_mode,
+            winding_order: WindingOrder::EvenOdd,
         },
     });
 }
