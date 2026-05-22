@@ -1596,7 +1596,6 @@ fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
 
 const BRAND: Color = Color { r: 0.690, g: 0.188, b: 0.125, a: 1.0 }; // #B03020
 const BRAND_DARK: Color = Color { r: 0.45, g: 0.12, b: 0.08, a: 1.0 };
-const BRAND_TINT_BG: Color = Color { r: 0.14, g: 0.085, b: 0.085, a: 1.0 }; // dark, faint red wash
 
 pub(super) fn start_page_view<'a>() -> Element<'a, Message> {
     const TEXT: Color = Color { r: 0.94, g: 0.93, b: 0.92, a: 1.0 };
