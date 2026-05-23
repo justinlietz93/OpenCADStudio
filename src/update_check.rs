@@ -29,15 +29,18 @@ pub async fn check_for_update() -> Option<UpdateInfo> {
 }
 
 fn fetch_latest_if_outdated() -> Option<UpdateInfo> {
-    let body = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(5))
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .timeout_global(Some(std::time::Duration::from_secs(5)))
         .build()
+        .into();
+    let body = agent
         .get(RELEASES_API)
-        .set("User-Agent", concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")))
-        .set("Accept", "application/vnd.github+json")
+        .header("User-Agent", concat!("OpenCADStudio/", env!("CARGO_PKG_VERSION")))
+        .header("Accept", "application/vnd.github+json")
         .call()
         .ok()?
-        .into_string()
+        .body_mut()
+        .read_to_string()
         .ok()?;
     let latest = extract_string_field(&body, "tag_name")?
         .trim_start_matches('v')

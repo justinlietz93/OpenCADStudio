@@ -6,22 +6,22 @@ build = "build.rs"
 
 [dependencies]
 iced = { version = "0.14", features = ["debug", "image", "svg", "advanced", "canvas"] }
-bytemuck = { version = "1.14", features = ["derive"] }
-glam = { version = "0.27", features = ["bytemuck"] }
+bytemuck = { version = "1.25", features = ["derive"] }
+glam = { version = "0.33", features = ["bytemuck"] }
 truck-modeling = "0.6"
 truck-meshalgo = { version = "0.4", default-features = false, features = ["tessellation"] }
 truck-polymesh = "0.6"
-rfd = "0.15"
+rfd = "0.17"
 acadrust = "0.3.4"
 open = "5"
 printpdf = "0.9.1"
 flate2 = "1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "tiff"] }
 rayon = "1"
-ureq = { version = "2", default-features = false, features = ["tls"] }
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 
 [patch.crates-io]
 # Tracks HakanSeven12/acadrust main, which carries the hatch
