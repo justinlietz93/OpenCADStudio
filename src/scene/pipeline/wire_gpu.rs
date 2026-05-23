@@ -25,7 +25,34 @@
 
 use crate::scene::wire_model::WireModel;
 use iced::wgpu;
-use iced::wgpu::util::DeviceExt;
+
+/// Allocate a VERTEX buffer with `mapped_at_creation` and write `data` directly
+/// into the mapped slice. Skips the intermediate staging copy that
+/// `create_buffer_init` performs and avoids holding a second `Vec` worth of
+/// memory during upload — meaningful on cold open where wire buffers can run
+/// into the hundreds of MB.
+fn vertex_buffer_mapped(
+    device: &wgpu::Device,
+    label: &str,
+    data: &[WireVertex],
+) -> wgpu::Buffer {
+    let bytes: &[u8] = bytemuck::cast_slice(data);
+    // wgpu rejects size-0 buffers; the renderer already guards `vertex_count`
+    // before issuing a draw, so a placeholder allocation is fine here.
+    let size = bytes.len().max(std::mem::size_of::<WireVertex>()) as u64;
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some(label),
+        size,
+        usage: wgpu::BufferUsages::VERTEX,
+        mapped_at_creation: true,
+    });
+    {
+        let mut view = buf.slice(..).get_mapped_range_mut();
+        view[..bytes.len()].copy_from_slice(bytes);
+    }
+    buf.unmap();
+    buf
+}
 
 // ── Vertex layout ─────────────────────────────────────────────────────────
 
@@ -222,11 +249,8 @@ impl WireGpu {
             .chunks(MAX_VERTS)
             .enumerate()
             .map(|(i, chunk)| {
-                let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some(&format!("wire.batch.vbuf.{i}")),
-                    contents: bytemuck::cast_slice(chunk),
-                    usage: wgpu::BufferUsages::VERTEX,
-                });
+                let label = format!("wire.batch.vbuf.{i}");
+                let vertex_buffer = vertex_buffer_mapped(device, &label, chunk);
                 Self {
                     vertex_buffer,
                     vertex_count: chunk.len() as u32,
@@ -323,11 +347,8 @@ impl WireGpu {
             vertices.push(make(0.0, 1.0));
         }
 
-        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some(&format!("wire.vbuf.{}", wire.name)),
-            contents: bytemuck::cast_slice(&vertices),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
+        let label = format!("wire.vbuf.{}", wire.name);
+        let vertex_buffer = vertex_buffer_mapped(device, &label, &vertices);
 
         Self {
             vertex_buffer,
