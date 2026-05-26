@@ -661,8 +661,19 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
+        // While the command-line overlay is still displaying any
+        // recently-pushed history entry, re-render every frame so the
+        // entry disappears at the moment its visible window expires.
+        // The subscription auto-stops once no entry is fresh enough
+        // (typically within a few seconds of the last command).
+        let history_tick = if self.command_line.has_visible_history() {
+            window::frames().map(Message::Tick)
+        } else {
+            Subscription::none()
+        };
         iced::Subscription::batch([
             frames,
+            history_tick,
             event::listen_with(|ev, status, win_id| {
                 use iced::event::Status;
                 match ev {

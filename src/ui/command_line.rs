@@ -1,10 +1,16 @@
 //! OpenCADStudio-style command line — bottom panel with input and history
 
+use std::time::Instant;
+
 use crate::app::Message;
 use iced::widget::{column, container, row, text, text_input};
 use iced::{Background, Border, Color, Element, Length, Theme};
 
 pub const CMD_INPUT_ID: &str = "cmd_input";
+
+/// How long a history entry stays visible on the overlay before fading
+/// out. Picking the full archive happens through the dropdown button.
+const HISTORY_VISIBLE_SECS: f32 = 3.0;
 
 fn cmd_input_id() -> iced::widget::Id {
     iced::widget::Id::new(CMD_INPUT_ID)
@@ -28,6 +34,10 @@ pub struct CommandLine {
 pub struct HistoryEntry {
     pub kind: EntryKind,
     pub text: String,
+    /// When this entry was pushed. Used by the overlay to fade entries
+    /// out after `HISTORY_VISIBLE_SECS`. The dropdown popup ignores it
+    /// and always shows the whole list.
+    pub created_at: Instant,
 }
 
 #[derive(Clone, Debug)]
@@ -112,28 +122,47 @@ impl CommandLine {
         self.push(EntryKind::Info, msg.to_string());
     }
     fn push(&mut self, kind: EntryKind, text: String) {
-        self.history.push(HistoryEntry { kind, text });
+        self.history.push(HistoryEntry {
+            kind,
+            text,
+            created_at: Instant::now(),
+        });
         if self.history.len() > MAX_HISTORY {
             self.history.remove(0);
         }
     }
 
+    /// `true` while at least one history entry is still within the
+    /// visible window — the host app uses this to drive a low-frequency
+    /// tick subscription so the overlay re-renders and fades the entry
+    /// once it expires.
+    pub fn has_visible_history(&self) -> bool {
+        self.history
+            .iter()
+            .any(|e| e.created_at.elapsed().as_secs_f32() < HISTORY_VISIBLE_SECS)
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
-        let history_rows =
-            self.history
-                .iter()
-                .rev()
-                .take(4)
-                .rev()
-                .fold(column![].spacing(0), |col, entry| {
-                    let color = match entry.kind {
-                        EntryKind::Command => CMD_COLOR,
-                        EntryKind::Output => OUT_COLOR,
-                        EntryKind::Error => ERR_COLOR,
-                        EntryKind::Info => INFO_COLOR,
-                    };
-                    col.push(container(text(&entry.text).size(11).color(color)).padding([1, 8]))
-                });
+        // Only the most recent entries pushed within the last few
+        // seconds show on the overlay. The dropdown button keeps the
+        // full backlog reachable when the user actually wants it.
+        let visible: Vec<&HistoryEntry> = self
+            .history
+            .iter()
+            .filter(|e| e.created_at.elapsed().as_secs_f32() < HISTORY_VISIBLE_SECS)
+            .collect();
+        let start = visible.len().saturating_sub(4);
+        let history_rows = visible[start..]
+            .iter()
+            .fold(column![].spacing(0), |col, entry| {
+                let color = match entry.kind {
+                    EntryKind::Command => CMD_COLOR,
+                    EntryKind::Output => OUT_COLOR,
+                    EntryKind::Error => ERR_COLOR,
+                    EntryKind::Info => INFO_COLOR,
+                };
+                col.push(container(text(&entry.text).size(11).color(color)).padding([1, 8]))
+            });
         let prompt = container(text("Command:").size(11).color(PROMPT_COLOR)).padding([5, 8]);
         let input = text_input("", &self.input)
             .id(cmd_input_id())
