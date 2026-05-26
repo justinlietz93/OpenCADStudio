@@ -1723,7 +1723,7 @@ impl OpenCADStudio {
                 } else {
                     for (handle, _) in &selected {
                         if let Some(entity) = self.tabs[i].scene.document.get_entity(*handle) {
-                            let type_name = entity_type_name(entity);
+                            let type_name = crate::entities::names::dxf_name(entity);
                             let common = entity.common();
                             let color_str = common
                                 .color
@@ -2106,7 +2106,7 @@ impl OpenCADStudio {
                             if let Some(props) = entity.mass_props() {
                                 self.command_line.push_output(&format!(
                                     "{}  Area={:.4}  Perimeter={:.4}  Centroid=({:.4},{:.4})",
-                                    entity_type_name(entity),
+                                    crate::entities::names::dxf_name(entity),
                                     props.area,
                                     props.perimeter,
                                     props.cx,
@@ -2170,7 +2170,7 @@ impl OpenCADStudio {
                     .filter(|e| {
                         let c = e.common();
                         match prop.as_str() {
-                            "TYPE" => entity_type_name(e).to_uppercase() == val,
+                            "TYPE" => crate::entities::names::dxf_name(e).to_uppercase() == val,
                             "LAYER" => c.layer.to_uppercase() == val,
                             "COLOR" => c
                                 .color
@@ -2207,7 +2207,7 @@ impl OpenCADStudio {
                 let mut counts: std::collections::BTreeMap<String, usize> = Default::default();
                 for e in self.tabs[i].scene.document.entities() {
                     let layer = &e.common().layer;
-                    let type_name = entity_type_name(e);
+                    let type_name = crate::entities::names::dxf_name(e);
                     let key = match &filter {
                         Some(f) if f == "LAYER" => layer.clone(),
                         Some(f) if f == "TYPE" => type_name.to_string(),
@@ -5344,40 +5344,6 @@ fn find_last_linear_dim(
     result
 }
 
-fn entity_type_name(entity: &acadrust::EntityType) -> &'static str {
-    match entity {
-        acadrust::EntityType::Line(_) => "LINE",
-        acadrust::EntityType::Circle(_) => "CIRCLE",
-        acadrust::EntityType::Arc(_) => "ARC",
-        acadrust::EntityType::LwPolyline(_) => "LWPOLYLINE",
-        acadrust::EntityType::Polyline(_) => "POLYLINE",
-        acadrust::EntityType::Polyline2D(_) => "POLYLINE2D",
-        acadrust::EntityType::Polyline3D(_) => "POLYLINE3D",
-        acadrust::EntityType::Text(_) => "TEXT",
-        acadrust::EntityType::MText(_) => "MTEXT",
-        acadrust::EntityType::Insert(_) => "INSERT",
-        acadrust::EntityType::Hatch(_) => "HATCH",
-        acadrust::EntityType::Dimension(_) => "DIMENSION",
-        acadrust::EntityType::Viewport(_) => "VIEWPORT",
-        acadrust::EntityType::Spline(_) => "SPLINE",
-        acadrust::EntityType::Ellipse(_) => "ELLIPSE",
-        acadrust::EntityType::Point(_) => "POINT",
-        acadrust::EntityType::Ray(_) => "RAY",
-        acadrust::EntityType::XLine(_) => "XLINE",
-        acadrust::EntityType::Face3D(_) => "3DFACE",
-        acadrust::EntityType::Table(_) => "TABLE",
-        acadrust::EntityType::MLine(_) => "MLINE",
-        acadrust::EntityType::RasterImage(_) => "RASTERIMAGE",
-        acadrust::EntityType::Wipeout(_) => "WIPEOUT",
-        acadrust::EntityType::Underlay(_) => "UNDERLAY",
-        acadrust::EntityType::AttributeDefinition(_) => "ATTDEF",
-        acadrust::EntityType::AttributeEntity(_) => "ATTRIB",
-        acadrust::EntityType::Leader(_) => "LEADER",
-        acadrust::EntityType::Tolerance(_) => "TOLERANCE",
-        acadrust::EntityType::Shape(_) => "SHAPE",
-        _ => "ENTITY",
-    }
-}
 
 
 
@@ -5399,7 +5365,7 @@ fn build_data_extraction_csv(doc: &acadrust::CadDocument) -> String {
         if !ms_handle.is_null() && e.common().owner_handle != ms_handle {
             continue;
         }
-        let type_name = entity_type_name(e);
+        let type_name = crate::entities::names::dxf_name(e);
         let handle = format!("{:X}", e.common().handle.value());
         let layer = csv_escape(&e.common().layer);
         let color = format!("{}", e.common().color);
