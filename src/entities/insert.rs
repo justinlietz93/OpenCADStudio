@@ -5,7 +5,7 @@ use glam::Vec3;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
-use crate::entities::traits::{Grippable, PropertyEditable, Transformable};
+
 use crate::scene::object::{GripApply, GripDef, PropSection};
 use crate::scene::{block_cache, render, tessellate};
 use crate::scene::wire_model::WireModel;
@@ -96,31 +96,7 @@ fn apply_transform(ins: &mut Insert, t: &EntityTransform) {
     });
 }
 
-impl Grippable for Insert {
-    fn grips(&self) -> Vec<GripDef> {
-        grips(self)
-    }
-
-    fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
-        apply_grip(self, grip_id, apply);
-    }
-}
-
-impl PropertyEditable for Insert {
-    fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
-        properties(self)
-    }
-
-    fn apply_geom_prop(&mut self, field: &str, value: &str) {
-        apply_geom_prop(self, field, value);
-    }
-}
-
-impl Transformable for Insert {
-    fn apply_transform(&mut self, t: &EntityTransform) {
-        apply_transform(self, t);
-    }
-}
+crate::impl_entity_basics!(Insert);
 
 impl crate::entities::traits::FallbackTess for Insert {
     fn fallback_geometry(&self, world_offset: [f64; 3]) -> crate::scene::tess_util::FallbackGeometry {

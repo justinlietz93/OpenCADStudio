@@ -6,7 +6,7 @@ use crate::command::EntityTransform;
 use crate::entities::common::{
     diamond_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
 };
-use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
+use crate::entities::traits::TruckConvertible;
 use crate::scene::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::object::{GripApply, GripDef, PropSection};
 use crate::scene::wire_model::{SnapHint, TangentGeom};
@@ -202,31 +202,7 @@ impl TruckConvertible for Circle {
     }
 }
 
-impl Grippable for Circle {
-    fn grips(&self) -> Vec<GripDef> {
-        grips(self)
-    }
-
-    fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
-        apply_grip(self, grip_id, apply);
-    }
-}
-
-impl PropertyEditable for Circle {
-    fn geometry_properties(&self, _text_style_names: &[String]) -> PropSection {
-        properties(self)
-    }
-
-    fn apply_geom_prop(&mut self, field: &str, value: &str) {
-        apply_geom_prop(self, field, value);
-    }
-}
-
-impl Transformable for Circle {
-    fn apply_transform(&mut self, t: &EntityTransform) {
-        apply_transform(self, t);
-    }
-}
+crate::impl_entity_basics!(Circle);
 
 impl crate::entities::traits::MassPropsCalc for Circle {
     fn mass_props(&self) -> crate::entities::traits::MassProps {

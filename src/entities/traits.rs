@@ -81,6 +81,83 @@ macro_rules! dispatch {
     };
 }
 
+/// Generates `Grippable`, `PropertyEditable`, `Transformable` trait impls
+/// that delegate to identically-named free functions in the entity's own
+/// module (`grips`, `apply_grip`, `properties`, `apply_geom_prop`,
+/// `apply_transform`). `properties()` is called with `self` only — for
+/// text-like entities that need the document's text-style list use
+/// [`impl_entity_basics_with_text_styles!`] instead.
+#[macro_export]
+macro_rules! impl_entity_basics {
+    ($T:ty) => {
+        impl $crate::entities::traits::Grippable for $T {
+            fn grips(&self) -> Vec<$crate::scene::object::GripDef> {
+                grips(self)
+            }
+            fn apply_grip(
+                &mut self,
+                grip_id: usize,
+                apply: $crate::scene::object::GripApply,
+            ) {
+                apply_grip(self, grip_id, apply);
+            }
+        }
+        impl $crate::entities::traits::PropertyEditable for $T {
+            fn geometry_properties(
+                &self,
+                _text_style_names: &[String],
+            ) -> $crate::scene::object::PropSection {
+                properties(self)
+            }
+            fn apply_geom_prop(&mut self, field: &str, value: &str) {
+                apply_geom_prop(self, field, value);
+            }
+        }
+        impl $crate::entities::traits::Transformable for $T {
+            fn apply_transform(&mut self, t: &$crate::command::EntityTransform) {
+                apply_transform(self, t);
+            }
+        }
+    };
+}
+
+/// Same as [`impl_entity_basics!`] but the entity's `properties(...)` free
+/// function takes the document's text-style name list as a second
+/// argument (Text, MText, …).
+#[macro_export]
+macro_rules! impl_entity_basics_with_text_styles {
+    ($T:ty) => {
+        impl $crate::entities::traits::Grippable for $T {
+            fn grips(&self) -> Vec<$crate::scene::object::GripDef> {
+                grips(self)
+            }
+            fn apply_grip(
+                &mut self,
+                grip_id: usize,
+                apply: $crate::scene::object::GripApply,
+            ) {
+                apply_grip(self, grip_id, apply);
+            }
+        }
+        impl $crate::entities::traits::PropertyEditable for $T {
+            fn geometry_properties(
+                &self,
+                text_style_names: &[String],
+            ) -> $crate::scene::object::PropSection {
+                properties(self, text_style_names)
+            }
+            fn apply_geom_prop(&mut self, field: &str, value: &str) {
+                apply_geom_prop(self, field, value);
+            }
+        }
+        impl $crate::entities::traits::Transformable for $T {
+            fn apply_transform(&mut self, t: &$crate::command::EntityTransform) {
+                apply_transform(self, t);
+            }
+        }
+    };
+}
+
 impl EntityTypeOps for EntityType {
     fn to_truck_entity(&self, document: &CadDocument) -> Option<TruckEntity> {
         dispatch!(self,
