@@ -427,8 +427,23 @@ pub struct ViewportInstance {
     pub active: bool,
 }
 
+/// One pane of the Model-space tiled viewport layout: the normalized screen
+/// rectangle it fills and the camera it last had. The active tile uses the
+/// live `Scene::camera` (so orbit/pan/zoom drive it); inactive tiles keep a
+/// snapshot here, swapped in when they become active.
+#[derive(Clone)]
+pub(crate) struct ModelTile {
+    pub(crate) rect: iced::Rectangle,
+    pub(crate) camera: Camera,
+}
+
 pub struct Scene {
     pub camera: Rc<RefCell<Camera>>,
+    /// Model-space tiled viewport layout. One full-window tile by default;
+    /// the split buttons / VPORTS subdivide the active tile.
+    pub(crate) model_tiles: RefCell<Vec<ModelTile>>,
+    /// Index of the active model tile (camera input + overlays target it).
+    pub(crate) active_model_tile: std::cell::Cell<usize>,
     pub selection: Rc<RefCell<SelectionState>>,
     /// The CAD document — single source of truth for all entities.
     pub document: CadDocument,
@@ -539,6 +554,16 @@ impl Scene {
     pub fn new() -> Self {
         Self {
             camera: Rc::new(RefCell::new(Camera::default())),
+            model_tiles: RefCell::new(vec![ModelTile {
+                rect: iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 1.0,
+                    height: 1.0,
+                },
+                camera: Camera::default(),
+            }]),
+            active_model_tile: std::cell::Cell::new(0),
             selection: Rc::new(RefCell::new(SelectionState::default())),
             document: CadDocument::new(),
             selected: HashSet::new(),
@@ -4256,6 +4281,102 @@ impl Scene {
 
     // ── Paper-space coordinate helpers ───────────────────────────────────
 
+    /// Split the active Model tile in two. `horizontal` → a horizontal
+    /// divider (top / bottom halves); otherwise a vertical divider (left /
+    /// right). Both halves inherit the active tile's current camera; the
+    /// active tile stays the first half. No-op outside the Model layout.
+    pub fn split_active_model_tile(&self, horizontal: bool) {
+        if self.current_layout != "Model" {
+            return;
+        }
+        let cam_now = self.camera.borrow().clone();
+        let mut tiles = self.model_tiles.borrow_mut();
+        let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+        let r = tiles[active].rect;
+        let (a, b) = if horizontal {
+            (
+                iced::Rectangle { height: r.height / 2.0, ..r },
+                iced::Rectangle {
+                    y: r.y + r.height / 2.0,
+                    height: r.height / 2.0,
+                    ..r
+                },
+            )
+        } else {
+            (
+                iced::Rectangle { width: r.width / 2.0, ..r },
+                iced::Rectangle {
+                    x: r.x + r.width / 2.0,
+                    width: r.width / 2.0,
+                    ..r
+                },
+            )
+        };
+        tiles[active] = ModelTile {
+            rect: a,
+            camera: cam_now.clone(),
+        };
+        tiles.insert(
+            active + 1,
+            ModelTile {
+                rect: b,
+                camera: cam_now,
+            },
+        );
+    }
+
+    /// Make the Model tile containing normalized point `(nx, ny)` active,
+    /// swapping cameras so the live `Scene::camera` follows the new tile.
+    /// Returns `true` when the active tile changed. No-op outside Model.
+    pub fn set_active_model_tile_at(&self, nx: f32, ny: f32) -> bool {
+        if self.current_layout != "Model" {
+            return false;
+        }
+        let new = {
+            let tiles = self.model_tiles.borrow();
+            tiles.iter().position(|t| {
+                nx >= t.rect.x
+                    && nx < t.rect.x + t.rect.width
+                    && ny >= t.rect.y
+                    && ny < t.rect.y + t.rect.height
+            })
+        };
+        let Some(new) = new else { return false };
+        let old = self.active_model_tile.get();
+        if new == old {
+            return false;
+        }
+        // Stash the live camera into the outgoing tile, load the incoming.
+        let incoming = {
+            let mut tiles = self.model_tiles.borrow_mut();
+            if let Some(t) = tiles.get_mut(old) {
+                t.camera = self.camera.borrow().clone();
+            }
+            tiles.get(new).map(|t| t.camera.clone())
+        };
+        if let Some(cam) = incoming {
+            *self.camera.borrow_mut() = cam;
+        }
+        self.active_model_tile.set(new);
+        // Caller bumps camera_generation (it needs &mut Scene).
+        true
+    }
+
+    /// Reset the Model layout to a single full-window tile.
+    pub fn reset_model_tiles(&self) {
+        let cam_now = self.camera.borrow().clone();
+        *self.model_tiles.borrow_mut() = vec![ModelTile {
+            rect: iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
+            camera: cam_now,
+        }];
+        self.active_model_tile.set(0);
+    }
+
     /// The viewports to render this frame, one entry per scissor pass.
     ///
     /// - **Model layout**: a single full-canvas instance driven by the
@@ -4271,18 +4392,33 @@ impl Scene {
         model_mode: acadrust::entities::ViewportRenderMode,
     ) -> Vec<ViewportInstance> {
         if self.current_layout == "Model" {
-            return vec![ViewportInstance {
-                handle: Handle::NULL,
-                screen_rect: iced::Rectangle {
-                    x: 0.0,
-                    y: 0.0,
-                    width: canvas_w,
-                    height: canvas_h,
-                },
-                camera: self.camera.borrow().clone(),
-                render_mode: model_mode,
-                active: true,
-            }];
+            let tiles = self.model_tiles.borrow();
+            let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+            return tiles
+                .iter()
+                .enumerate()
+                .map(|(i, tile)| {
+                    // The active tile renders the live camera (orbit/pan act
+                    // on it); inactive tiles use their stored snapshot.
+                    let camera = if i == active {
+                        self.camera.borrow().clone()
+                    } else {
+                        tile.camera.clone()
+                    };
+                    ViewportInstance {
+                        handle: Handle::NULL,
+                        screen_rect: iced::Rectangle {
+                            x: tile.rect.x * canvas_w,
+                            y: tile.rect.y * canvas_h,
+                            width: tile.rect.width * canvas_w,
+                            height: tile.rect.height * canvas_h,
+                        },
+                        camera,
+                        render_mode: model_mode,
+                        active: i == active,
+                    }
+                })
+                .collect();
         }
         let layout_block = self.current_layout_block_handle();
         let mut out: Vec<ViewportInstance> = Vec::new();

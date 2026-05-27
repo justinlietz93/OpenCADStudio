@@ -916,6 +916,13 @@ impl OpenCADStudio {
                 self.focus_cmd_input()
             }
 
+            Message::SplitModelViewport(horizontal) => {
+                let i = self.active_tab;
+                self.tabs[i].scene.split_active_model_tile(horizontal);
+                self.tabs[i].scene.camera_generation += 1;
+                Task::none()
+            }
+
             Message::CommandHistoryPrev => {
                 // While autocomplete is showing suggestions, ↑ walks up
                 // that list. Otherwise it falls back to recall history.

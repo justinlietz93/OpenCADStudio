@@ -483,8 +483,54 @@ impl OpenCADStudio {
         // viewport drawing / selection is unaffected. In a paper layout
         // the active viewport gets its own picker (below) instead.
         if !is_paper && !tab.is_start {
+            // Render-mode picker + viewport-split buttons (horizontal /
+            // vertical divider of the active Model tile).
+            let split_btn = |glyph: &'static str, horizontal: bool| {
+                button(text(glyph).size(13).color(Color {
+                    r: 0.85,
+                    g: 0.85,
+                    b: 0.85,
+                    a: 1.0,
+                }))
+                .on_press(Message::SplitModelViewport(horizontal))
+                .padding([4, 8])
+                .style(|_: &Theme, status| iced::widget::button::Style {
+                    background: Some(Background::Color(match status {
+                        iced::widget::button::Status::Hovered => Color {
+                            r: 0.20,
+                            g: 0.20,
+                            b: 0.20,
+                            a: 0.85,
+                        },
+                        _ => Color {
+                            r: 0.10,
+                            g: 0.10,
+                            b: 0.10,
+                            a: 0.75,
+                        },
+                    })),
+                    border: Border {
+                        color: Color {
+                            r: 0.35,
+                            g: 0.35,
+                            b: 0.35,
+                            a: 1.0,
+                        },
+                        width: 1.0,
+                        radius: 4.0.into(),
+                    },
+                    text_color: Color {
+                        r: 0.85,
+                        g: 0.85,
+                        b: 0.85,
+                        a: 1.0,
+                    },
+                    ..Default::default()
+                })
+            };
+            let bar = row![info, split_btn("▤", true), split_btn("▥", false)].spacing(4);
             viewport_stack = viewport_stack.push(
-                container(iced::widget::opaque(info))
+                container(iced::widget::opaque(bar))
                     .width(Fill)
                     .height(Fill)
                     .align_x(iced::alignment::Horizontal::Left)

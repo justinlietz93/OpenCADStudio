@@ -355,6 +355,9 @@ pub enum Message {
     CommandBackspace,
     /// TAB pressed: move focus to the next dynamic-input field (wraps).
     DynTabNext,
+    /// Split the active Model viewport in two. `true` → horizontal divider
+    /// (top / bottom); `false` → vertical divider (left / right).
+    SplitModelViewport(bool),
     /// Recall previous command in history (↑ arrow key).
     CommandHistoryPrev,
     /// Recall next command in history (↓ arrow key).
