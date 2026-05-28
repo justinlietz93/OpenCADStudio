@@ -772,12 +772,17 @@ impl Pipeline {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    // Alpha-blend the resolve texture onto the surface so a
-                    // transparent shader clear (alpha=0 outside any drawn
-                    // geometry) leaves whatever the underlying widget
-                    // painted — model container bg in a model layout,
-                    // PaperCanvas sheet in a paper layout — visible.
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Premultiplied-alpha blend: the geometry passes already
+                    // wrote into a transparent MSAA target with standard
+                    // `SrcAlpha / 1-SrcAlpha` blending, so AA-edge fragments
+                    // sit as `(rgb * a, a)` in the resolve texture. Treating
+                    // that as straight alpha during the surface blit would
+                    // multiply by alpha a second time and darken thin lines
+                    // / curves. `PREMULTIPLIED_ALPHA_BLENDING` uses `One` as
+                    // the source colour factor and leaves the dst weighted
+                    // by `1-SrcAlpha`, which is the correct compositing
+                    // operator for already-premultiplied content.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
