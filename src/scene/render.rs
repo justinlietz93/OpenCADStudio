@@ -558,8 +558,12 @@ impl Scene {
         &self,
         bounds: Rectangle,
         model_render_mode: acadrust::entities::ViewportRenderMode,
-        hover_region: Option<usize>,
+        _hover_region: Option<usize>,
     ) -> Primitive {
+        // Hover comes from the scene cell driven by the app-level
+        // `CursorMoved` handler — the cube overlay sits above the shader
+        // and would otherwise mask the move event from `Program::update`.
+        let hover_region = self.viewcube_hover.get();
         self.selection.borrow_mut().vp_size = (bounds.width, bounds.height);
         if bounds.height > 0.0 {
             self.set_render_aspect(bounds.width / bounds.height);
@@ -682,10 +686,13 @@ impl Scene {
     pub(super) fn build_viewport_primitive(
         &self,
         vp_handle: Handle,
-        hover_region: Option<usize>,
+        _hover_region: Option<usize>,
         bounds: Rectangle,
         show_viewcube: bool,
     ) -> Primitive {
+        // See `build_viewports` — the cube hit-area overlay shadows the
+        // shader, so hover is sourced from the scene cell.
+        let hover_region = self.viewcube_hover.get();
         let render_mode = match self.document.get_entity(vp_handle) {
             Some(EntityType::Viewport(vp)) => vp.render_mode,
             _ => acadrust::entities::ViewportRenderMode::Wireframe2D,
@@ -755,6 +762,10 @@ impl Scene {
     }
 
     /// Update viewcube hover state from cursor position within `bounds`.
+    ///
+    /// The cube draws in the top-right of the *active model tile* (which fills
+    /// the canvas when there is a single tile), so the hover hit-test maps the
+    /// cursor into that tile's local space and uses the tile's dimensions.
     pub(super) fn update_viewcube_state(
         &self,
         state: &mut CameraState,
@@ -764,11 +775,12 @@ impl Scene {
         let pos = cursor.position_in(bounds);
         let cam_rotation = self.camera.borrow().view_rotation_mat();
         if let Some(p) = pos {
+            let tile = self.active_model_tile_bounds(bounds.width, bounds.height);
             state.hover_region = hover_id(
-                p.x,
-                p.y,
-                bounds.width,
-                bounds.height,
+                p.x - tile.x,
+                p.y - tile.y,
+                tile.width,
+                tile.height,
                 cam_rotation,
                 VIEWCUBE_PX,
             );

@@ -42,8 +42,8 @@ pub fn grips_to_screen(
         .map(|g| {
             let ndc = view_proj.project_point3(g.world);
             let screen = Point::new(
-                (ndc.x + 1.0) * 0.5 * bounds.width,
-                (1.0 - ndc.y) * 0.5 * bounds.height,
+                bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
+                bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
             );
             (g.id, screen, g.is_midpoint, g.shape)
         })

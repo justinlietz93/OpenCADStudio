@@ -6,7 +6,7 @@ use super::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
 use crate::scene::grip::{find_hit_grip, find_hit_grip_paper, GripEdit};
 use crate::scene::object::GripApply;
-use crate::scene::{self, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX};
+use crate::scene::{self, hover_id, Scene, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX};
 use crate::ui::PropertiesPanel;
 use acadrust::types::Color as AcadColor;
 use acadrust::{EntityType as AcadEntityType, Handle};
@@ -1592,25 +1592,84 @@ impl OpenCADStudio {
                 // the full canvas in model space, or of the active
                 // viewport's screen rectangle in a paper layout.
                 let i = self.active_tab;
-                let (vw, _vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
                 let (ox, oy) = match self
                     .tabs[i]
                     .scene
                     .active_viewport
-                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (vw, _vh)))
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (vw, vh)))
                 {
                     Some(rect) => (
                         rect.x + rect.width - VIEWCUBE_PAD - VIEWCUBE_HIT_SIZE,
                         rect.y + VIEWCUBE_PAD,
                     ),
-                    None => (vw - VIEWCUBE_PAD - VIEWCUBE_HIT_SIZE, VIEWCUBE_PAD),
+                    None => {
+                        // Model layout: the cube sits in the active tile's
+                        // top-right corner.
+                        let tb = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                        (
+                            tb.x + tb.width - VIEWCUBE_PAD - VIEWCUBE_HIT_SIZE,
+                            tb.y + VIEWCUBE_PAD,
+                        )
+                    }
                 };
                 self.cursor_pos = iced::Point::new(ox + p.x, oy + p.y);
+
+                // Drive the ViewCube hover highlight directly from this
+                // message — it fires whenever the cube's hit-area overlay
+                // sees motion, so we don't depend on the shader widget's
+                // `Program::update` receiving the same event (overlays sit
+                // above the shader and can mask it). Map the cursor into
+                // the active viewport's local box and use that box's size,
+                // since that's where the cube is actually drawn.
+                let tile = match self
+                    .tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (vw, vh)))
+                {
+                    Some(rect) => rect,
+                    None => self.tabs[i].scene.active_model_tile_bounds(vw, vh),
+                };
+                let cam_rot = self.tabs[i].scene.camera.borrow().view_rotation_mat();
+                let hover = hover_id(
+                    self.cursor_pos.x - tile.x,
+                    self.cursor_pos.y - tile.y,
+                    tile.width,
+                    tile.height,
+                    cam_rot,
+                    VIEWCUBE_PX,
+                );
+                self.tabs[i].scene.viewcube_hover.set(hover);
                 Task::none()
             }
 
             Message::ViewportMove(p) => {
                 let i = self.active_tab;
+                // Keep the ViewCube hover in sync as the cursor leaves the
+                // hit-area overlay and moves over the rest of the viewport.
+                // `hover_id` returns None outside the cube box, which clears
+                // any stale highlight from the previous `CursorMoved`.
+                let (svw, svh) = self.tabs[i].scene.selection.borrow().vp_size;
+                let cube_tile = match self
+                    .tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (svw, svh)))
+                {
+                    Some(rect) => rect,
+                    None => self.tabs[i].scene.active_model_tile_bounds(svw, svh),
+                };
+                let cam_rot = self.tabs[i].scene.camera.borrow().view_rotation_mat();
+                self.tabs[i].scene.viewcube_hover.set(hover_id(
+                    p.x - cube_tile.x,
+                    p.y - cube_tile.y,
+                    cube_tile.width,
+                    cube_tile.height,
+                    cam_rot,
+                    VIEWCUBE_PX,
+                ));
+
                 let mut sel = self.tabs[i].scene.selection.borrow_mut();
                 sel.last_move_pos = Some(p);
 
@@ -1682,18 +1741,25 @@ impl OpenCADStudio {
                 if mid_down {
                     if let Some(last) = mid_last {
                         let (dx, dy) = (p.x - last.x, p.y - last.y);
-                        let bounds = iced::Rectangle {
-                            x: 0.0,
-                            y: 0.0,
-                            width: vp_size.0,
-                            height: vp_size.1,
-                        };
+                        // Pan scale uses the active tile's size (ortho size
+                        // is relative to viewport height), so a tiled pane
+                        // pans at the correct rate.
+                        let bounds = self
+                            .tabs[i]
+                            .scene
+                            .active_model_tile_bounds(vp_size.0, vp_size.1);
                         // Drop `sel` before calling mutable scene methods.
                         drop(sel);
                         if self.tabs[i].scene.active_viewport.is_some() {
                             self.tabs[i].scene.pan_active_viewport(dx, dy, bounds);
                         } else {
-                            self.tabs[i].scene.camera.borrow_mut().pan(dx, dy);
+                            // `bounds` is the active tile; pan by its height so
+                            // the point under the cursor tracks correctly.
+                            self.tabs[i]
+                                .scene
+                                .camera
+                                .borrow_mut()
+                                .pan_screen(dx, dy, bounds.height);
                             self.tabs[i].scene.camera_generation += 1;
                         }
                         self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
@@ -1702,8 +1768,39 @@ impl OpenCADStudio {
                     sel.middle_last_pos = Some(p);
                 }
 
+                let dragging = sel.left_down || sel.right_down || sel.middle_down;
                 let vp_size = sel.vp_size;
                 drop(sel);
+
+                // Hover (no button held): the tile under the cursor becomes
+                // active, so the camera + tile bounds used for picking below
+                // follow the pane the cursor is in. During a drag the active
+                // tile stays put so the operation finishes in its own pane.
+                if !dragging && vp_size.0 > 1.0 && vp_size.1 > 1.0 {
+                    if self
+                        .tabs[i]
+                        .scene
+                        .set_active_model_tile_at(p.x / vp_size.0, p.y / vp_size.1)
+                    {
+                        self.tabs[i].scene.camera_generation += 1;
+                    }
+                }
+
+                // Tile-relative picking: shadow `p` with the cursor mapped
+                // into the active Model tile and `vp_size` with the tile's
+                // size, so every pick / snap / view_proj below operates in
+                // the active pane. `p_full` keeps the canvas-space cursor
+                // for screen overlays (cursor marker, snap glyph).
+                let p_full = p;
+                let tile_b = self
+                    .tabs[i]
+                    .scene
+                    .active_model_tile_bounds(vp_size.0, vp_size.1);
+                let p = iced::Point {
+                    x: p_full.x - tile_b.x,
+                    y: p_full.y - tile_b.y,
+                };
+                let vp_size = (tile_b.width, tile_b.height);
 
                 // ── Grip drag ─────────────────────────────────────────────
                 if let Some(grip) = self.tabs[i].active_grip.clone() {
@@ -1730,6 +1827,10 @@ impl OpenCADStudio {
                     let snap_hit = self.snapper.snap(raw, p, &snap_wires, vp_mat, bounds);
                     let mut snapped = snap_hit.map(|s| s.world).unwrap_or(raw);
                     self.tabs[i].snap_result = snap_hit;
+                    if let Some(s) = self.tabs[i].snap_result.as_mut() {
+                        s.screen.x += tile_b.x;
+                        s.screen.y += tile_b.y;
+                    }
 
                     if snap_hit.is_none() {
                         let base = grip.origin_world;
@@ -1870,7 +1971,13 @@ impl OpenCADStudio {
                         pt
                     };
                     self.tabs[i].last_cursor_world = effective;
-                    self.tabs[i].last_cursor_screen = p;
+                    self.tabs[i].last_cursor_screen = p_full;
+                    // Snap glyph is positioned in canvas space; shift the
+                    // tile-local snap screen point back to the full canvas.
+                    if let Some(s) = self.tabs[i].snap_result.as_mut() {
+                        s.screen.x += tile_b.x;
+                        s.screen.y += tile_b.y;
+                    }
 
                     let mut previews = if needs_entity {
                         let hover_handle =
@@ -1967,12 +2074,6 @@ impl OpenCADStudio {
                     (p, sel.vp_size)
                 };
                 let (vw, vh) = vp_size;
-                let bounds = iced::Rectangle {
-                    x: 0.0,
-                    y: 0.0,
-                    width: vw,
-                    height: vh,
-                };
 
                 if vw > 1.0 && vh > 1.0 {
                     let cam = self.tabs[i].scene.camera.borrow();
@@ -1995,6 +2096,23 @@ impl OpenCADStudio {
                         return Task::none();
                     }
                 }
+
+                // From here the click targets the active tile: map the
+                // cursor into it and use the tile's size for picking, so
+                // grip / selection hit-tests land in the right pane.
+                let p_full = p;
+                let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                let p = iced::Point {
+                    x: p_full.x - tile_b.x,
+                    y: p_full.y - tile_b.y,
+                };
+                let (vw, vh) = (tile_b.width, tile_b.height);
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
 
                 if self.tabs[i].active_cmd.is_none() && !self.tabs[i].selected_grips.is_empty() {
                     if let Some(handle) = self.tabs[i].selected_handle {
@@ -2036,7 +2154,10 @@ impl OpenCADStudio {
                 let mut sel = self.tabs[i].scene.selection.borrow_mut();
                 sel.context_menu = None;
                 sel.left_down = true;
-                sel.left_press_pos = Some(p);
+                // Stored in full-canvas space (like ViewportMove's cursor and
+                // the overlay box / lasso drawing); release maps it into the
+                // active tile. Tile-local here would double-offset the anchor.
+                sel.left_press_pos = Some(p_full);
                 sel.left_press_time = Some(Instant::now());
                 sel.left_dragging = false;
                 Task::none()
@@ -2059,6 +2180,21 @@ impl OpenCADStudio {
                     return Task::none();
                 }
 
+                // Map the release point into the active Model tile so the
+                // click's pick / on_point / selection use the active pane's
+                // camera + bounds. `p_full` keeps the canvas point for the
+                // box/poly selection rectangle (drawn in canvas space).
+                let p_full = p;
+                let (tile_vw, tile_vh, tile_off) = {
+                    let (svw, svh) = self.tabs[i].scene.selection.borrow().vp_size;
+                    let tb = self.tabs[i].scene.active_model_tile_bounds(svw, svh);
+                    (tb.width, tb.height, iced::Point::new(tb.x, tb.y))
+                };
+                let p = iced::Point {
+                    x: p_full.x - tile_off.x,
+                    y: p_full.y - tile_off.y,
+                };
+
                 let is_gathering = self.tabs[i]
                     .active_cmd
                     .as_ref()
@@ -2066,7 +2202,7 @@ impl OpenCADStudio {
                     .unwrap_or(false);
 
                 if is_down && is_click && self.tabs[i].active_cmd.is_some() && !is_gathering {
-                    let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                    let (vw, vh) = (tile_vw, tile_vh);
                     let bounds = iced::Rectangle {
                         x: 0.0,
                         y: 0.0,
@@ -2252,7 +2388,7 @@ impl OpenCADStudio {
                     return Task::none();
                 }
 
-                let (is_down2, is_dragging, box_anchor, box_crossing, vp_size, elapsed_ms) = {
+                let (is_down2, is_dragging, box_anchor, box_crossing, _vp_size, elapsed_ms) = {
                     let sel = self.tabs[i].scene.selection.borrow();
                     let elapsed = sel
                         .left_press_time
@@ -2269,6 +2405,15 @@ impl OpenCADStudio {
                 };
 
                 let mut selection_just_completed = false;
+
+                // Active-tile-local selection: tile-sized bounds and the box
+                // anchor mapped into the tile, so box / crossing selection
+                // matches the active pane (p is already tile-local).
+                let vp_size = (tile_vw, tile_vh);
+                let box_anchor = box_anchor.map(|a| iced::Point {
+                    x: a.x - tile_off.x,
+                    y: a.y - tile_off.y,
+                });
 
                 if is_down2 {
                     let bounds = iced::Rectangle {
@@ -2314,7 +2459,16 @@ impl OpenCADStudio {
                         } else {
                             let (poly_pts, crossing) = {
                                 let sel = self.tabs[i].scene.selection.borrow();
-                                (sel.poly_points.clone(), sel.poly_crossing)
+                                // Map lasso points into the active tile.
+                                let pts: Vec<iced::Point> = sel
+                                    .poly_points
+                                    .iter()
+                                    .map(|pp| iced::Point {
+                                        x: pp.x - tile_off.x,
+                                        y: pp.y - tile_off.y,
+                                    })
+                                    .collect();
+                                (pts, sel.poly_crossing)
                             };
                             self.tabs[i].scene.selection.borrow_mut().poly_last_crossing = crossing;
                             let all_wires = self.tabs[i].scene.hit_test_wires();
@@ -2383,8 +2537,11 @@ impl OpenCADStudio {
                                 self.tabs[i].scene.deselect_all();
                                 self.refresh_properties();
                                 let mut sel = self.tabs[i].scene.selection.borrow_mut();
-                                sel.box_anchor = Some(p);
-                                sel.box_current = Some(p);
+                                // Full-canvas space: ViewportMove updates
+                                // box_current in canvas coords and the overlay
+                                // draws there; release maps back into the tile.
+                                sel.box_anchor = Some(p_full);
+                                sel.box_current = Some(p_full);
                                 sel.box_crossing = false;
                             }
                         } else {
@@ -2665,9 +2822,22 @@ impl OpenCADStudio {
                     });
                     self.tabs[i].scene.zoom_active_viewport(s, cursor_paper);
                 } else {
+                    // Model space: zoom about the cursor within the active
+                    // tile so the point under it stays put in that pane.
+                    let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
                     let mut cam = self.tabs[i].scene.camera.borrow_mut();
                     if let Some(cursor) = cursor {
-                        cam.zoom_about_point(cursor, bounds, s);
+                        let local = iced::Point {
+                            x: cursor.x - tile_b.x,
+                            y: cursor.y - tile_b.y,
+                        };
+                        let tb = iced::Rectangle {
+                            x: 0.0,
+                            y: 0.0,
+                            width: tile_b.width,
+                            height: tile_b.height,
+                        };
+                        cam.zoom_about_point(local, tb, s);
                     } else {
                         cam.zoom(s);
                     }
@@ -2698,7 +2868,16 @@ impl OpenCADStudio {
                         rect.width,
                         rect.height,
                     ),
-                    None => (self.cursor_pos.x, self.cursor_pos.y, vw, vh),
+                    None => {
+                        // Model layout: hit-test within the active tile.
+                        let tb = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                        (
+                            self.cursor_pos.x - tb.x,
+                            self.cursor_pos.y - tb.y,
+                            tb.width,
+                            tb.height,
+                        )
+                    }
                 };
                 if let Some(region) = scene::hit_test(cx, cy, w, h, rot, VIEWCUBE_PX) {
                     return Task::done(Message::ViewCubeSnap(region));

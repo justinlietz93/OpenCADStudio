@@ -234,12 +234,20 @@ impl Camera {
         self.target += before - after;
     }
 
-    pub fn pan(&mut self, delta_x: f32, delta_y: f32) {
-        let speed = self.distance * 0.001;
+    /// Pan so the world point under the cursor tracks it: screen pixels are
+    /// converted to world units via the ortho world-per-pixel scale of a
+    /// viewport `viewport_height` pixels tall. Used by tiled panes where the
+    /// pane height differs from the full canvas.
+    pub fn pan_screen(&mut self, delta_x: f32, delta_y: f32, viewport_height: f32) {
+        let wpp = if viewport_height > 0.0 {
+            (2.0 * self.ortho_size()) / viewport_height
+        } else {
+            0.0
+        };
         let cam_right = self.rotation * Vec3::X;
         let cam_up = self.rotation * Vec3::Y;
-        self.target -= cam_right * delta_x * speed;
-        self.target += cam_up * delta_y * speed;
+        self.target -= cam_right * delta_x * wpp;
+        self.target += cam_up * delta_y * wpp;
     }
 
     pub fn fit_to_bounds(&mut self, min: Vec3, max: Vec3) {

@@ -177,7 +177,12 @@ impl canvas::Program<Message> for SelectionCanvas {
 
         // ── Grid display ──────────────────────────────────────────────────
         if let Some(ref g) = self.grid {
-            draw_grid(&mut frame, g.view_proj, g.plane, g.bounds);
+            // Clip to the active tile's rectangle so grid lines don't spill
+            // into neighbouring panes in a tiled layout.
+            let plane = g.plane;
+            let view_proj = g.view_proj;
+            let gb = g.bounds;
+            frame.with_clip(gb, |f| draw_grid(f, view_proj, plane, gb));
         }
 
         if let (Some(a), Some(b)) = (self.selection.box_anchor, self.selection.box_current) {
@@ -551,11 +556,14 @@ impl canvas::Program<Message> for SelectionCanvas {
 const MIN_GRID_PX: f32 = 20.0;
 
 fn draw_grid(frame: &mut canvas::Frame, vp: Mat4, plane: GridPlane, bounds: iced::Rectangle) {
+    // World → canvas screen: include bounds origin so the grid lands in the
+    // active tile's rectangle (the screen → world unproject below stays
+    // tile-local, which is what feeds the visible-extent computation).
     let w2s = |world: Vec3| -> Point {
         let ndc = vp.project_point3(world);
         Point::new(
-            (ndc.x + 1.0) * 0.5 * bounds.width,
-            (1.0 - ndc.y) * 0.5 * bounds.height,
+            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
+            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
         )
     };
 
@@ -668,8 +676,8 @@ fn draw_axes(frame: &mut canvas::Frame, vp: Mat4, bounds: iced::Rectangle, exten
     let w2s = |world: Vec3| -> Point {
         let ndc = vp.project_point3(world);
         Point::new(
-            (ndc.x + 1.0) * 0.5 * bounds.width,
-            (1.0 - ndc.y) * 0.5 * bounds.height,
+            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
+            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
         )
     };
     let e = extent;
@@ -731,8 +739,8 @@ fn draw_ucs_icon(frame: &mut canvas::Frame, vp: Mat4, bounds: iced::Rectangle) {
     };
     let ndc2s = |ndc: Vec3| -> Point {
         Point::new(
-            (ndc.x + 1.0) * 0.5 * bounds.width,
-            (1.0 - ndc.y) * 0.5 * bounds.height,
+            bounds.x + (ndc.x + 1.0) * 0.5 * bounds.width,
+            bounds.y + (1.0 - ndc.y) * 0.5 * bounds.height,
         )
     };
 
@@ -743,8 +751,8 @@ fn draw_ucs_icon(frame: &mut canvas::Frame, vp: Mat4, bounds: iced::Rectangle) {
 
     let org_s = ndc2s(org);
     let icon_origin = Point::new(
-        UCS_ICON_MARGIN,
-        (bounds.height - UCS_ICON_MARGIN).max(UCS_ICON_MARGIN),
+        bounds.x + UCS_ICON_MARGIN,
+        bounds.y + (bounds.height - UCS_ICON_MARGIN).max(UCS_ICON_MARGIN),
     );
 
     // Raw screen-space displacement for each axis tip.

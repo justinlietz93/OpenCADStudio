@@ -40,7 +40,9 @@ pub use image_model::ImageModel;
 pub use mesh_model::MeshLodSet;
 pub use object::{GripApply, GripDef};
 pub use pipeline::uniforms::Uniforms;
-pub use pipeline::viewcube::{hit_test, CubeRegion, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX};
+pub use pipeline::viewcube::{
+    hit_test, hover_id, CubeRegion, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
+};
 pub use selection::SelectionState;
 pub use wire_model::WireModel;
 
@@ -548,6 +550,12 @@ pub struct Scene {
     /// in expand_insert / tessellate_entity. 0 means "not yet set" — culling
     /// falls back to None.
     last_world_per_pixel: std::cell::Cell<f32>,
+    /// ViewCube hover region (0..25, face/edge/corner index), driven by the
+    /// `CursorMoved` message that the cube hit-area overlay publishes. Lives
+    /// here so the unified render path can read it for the active viewport
+    /// without depending on the shader widget's internal `Program::State`
+    /// (which can miss events under overlapping overlays).
+    pub viewcube_hover: std::cell::Cell<Option<usize>>,
 }
 
 impl Scene {
@@ -597,6 +605,7 @@ impl Scene {
             entity_index_cache: RefCell::new(None),
             last_render_aspect: std::cell::Cell::new(16.0 / 9.0),
             last_world_per_pixel: std::cell::Cell::new(0.0),
+            viewcube_hover: std::cell::Cell::new(None),
         }
     }
 
@@ -4388,6 +4397,27 @@ impl Scene {
             tiles
         };
         self.active_model_tile.set(0);
+    }
+
+    /// Screen-pixel rectangle of the active Model tile within a canvas of
+    /// `(vw, vh)`. Full canvas outside the Model layout or for a single
+    /// tile. Used to map cursor coordinates into the active tile so pick /
+    /// pan / ViewCube work per-pane in a tiled layout.
+    pub fn active_model_tile_bounds(&self, vw: f32, vh: f32) -> iced::Rectangle {
+        if self.current_layout != "Model" {
+            return iced::Rectangle { x: 0.0, y: 0.0, width: vw, height: vh };
+        }
+        let tiles = self.model_tiles.borrow();
+        let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+        match tiles.get(active) {
+            Some(t) => iced::Rectangle {
+                x: t.rect.x * vw,
+                y: t.rect.y * vh,
+                width: (t.rect.width * vw).max(1.0),
+                height: (t.rect.height * vh).max(1.0),
+            },
+            None => iced::Rectangle { x: 0.0, y: 0.0, width: vw, height: vh },
+        }
     }
 
     /// The viewports to render this frame, one entry per scissor pass.

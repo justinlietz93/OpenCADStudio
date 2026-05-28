@@ -275,12 +275,11 @@ impl OpenCADStudio {
             let grips: Vec<overlay::GripMarker> =
                 if tab.active_cmd.is_none() && !tab.selected_grips.is_empty() {
                     let (vw, vh) = tab.scene.selection.borrow().vp_size;
-                    let bounds = iced::Rectangle {
-                        x: 0.0,
-                        y: 0.0,
-                        width: vw,
-                        height: vh,
-                    };
+                    // Overlays project through the active tile's camera, so
+                    // they must use the active tile's screen rectangle (with
+                    // its canvas offset) — not the whole canvas — or they
+                    // land in the wrong place in a tiled layout.
+                    let bounds = tab.scene.active_model_tile_bounds(vw, vh);
                     let sel_h = tab.selected_handle;
                     let screen_grips = if is_paper {
                         let cam = tab.scene.camera.borrow();
@@ -322,12 +321,10 @@ impl OpenCADStudio {
                 };
 
             let (vw, vh) = tab.scene.selection.borrow().vp_size;
-            let vp_bounds = iced::Rectangle {
-                x: 0.0,
-                y: 0.0,
-                width: vw,
-                height: vh,
-            };
+            // Active tile rectangle (canvas-offset included) so grid / UCS
+            // icon / crosshair project through the active pane's camera at
+            // the correct place and scale.
+            let vp_bounds = tab.scene.active_model_tile_bounds(vw, vh);
 
             let grid = if self.show_grid {
                 let cam = tab.scene.camera.borrow();
@@ -529,13 +526,21 @@ impl OpenCADStudio {
                 })
             };
             let bar = row![info, split_btn("▤", true), split_btn("▥", false)].spacing(4);
-            viewport_stack = viewport_stack.push(
-                container(iced::widget::opaque(bar))
-                    .width(Fill)
-                    .height(Fill)
-                    .align_x(iced::alignment::Horizontal::Left)
-                    .align_y(iced::alignment::Vertical::Top),
-            );
+            // Position the bar at the active model tile's top-left corner so
+            // it follows the active panel in a tiled layout (full canvas when
+            // a single tile fills the window). Leading Spaces offset it.
+            let (vw, vh) = tab.scene.selection.borrow().vp_size;
+            let rect = tab.scene.active_model_tile_bounds(vw, vh);
+            let bar_layer = column![
+                Space::new().height(iced::Length::Fixed(rect.y.max(0.0))),
+                row![
+                    Space::new().width(iced::Length::Fixed(rect.x.max(0.0))),
+                    iced::widget::opaque(bar),
+                ],
+            ]
+            .width(Fill)
+            .height(Fill);
+            viewport_stack = viewport_stack.push(bar_layer);
         }
 
         // Active paper-space viewport overlays: a render-mode picker in
@@ -592,26 +597,28 @@ impl OpenCADStudio {
         }
 
         if self.show_viewcube && !is_paper && !tab.is_start {
-            let cube_click: Element<'_, Message> = container(
-                mouse_area(container(
-                    iced::widget::Space::new()
-                        .width(iced::Length::Fixed(VIEWCUBE_HIT_SIZE))
-                        .height(iced::Length::Fixed(VIEWCUBE_HIT_SIZE)),
-                ))
-                .on_move(Message::CursorMoved)
-                .on_press(Message::ViewportClick),
-            )
-            .align_right(Fill)
-            .align_top(Fill)
-            .padding(iced::Padding {
-                top: VIEWCUBE_PAD,
-                right: VIEWCUBE_PAD,
-                bottom: 0.0,
-                left: 0.0,
-            })
+            // Place the ViewCube hit area in the active model tile's top-right
+            // corner so it tracks the active panel in a tiled layout. The hit
+            // test in update.rs already maps clicks through the active tile.
+            let (vw, vh) = tab.scene.selection.borrow().vp_size;
+            let rect = tab.scene.active_model_tile_bounds(vw, vh);
+            let cube_x = (rect.x + rect.width - VIEWCUBE_HIT_SIZE - VIEWCUBE_PAD).max(0.0);
+            let cube_y = (rect.y + VIEWCUBE_PAD).max(0.0);
+            let cube_click = column![
+                Space::new().height(iced::Length::Fixed(cube_y)),
+                row![
+                    Space::new().width(iced::Length::Fixed(cube_x)),
+                    mouse_area(
+                        iced::widget::Space::new()
+                            .width(iced::Length::Fixed(VIEWCUBE_HIT_SIZE))
+                            .height(iced::Length::Fixed(VIEWCUBE_HIT_SIZE)),
+                    )
+                    .on_move(Message::CursorMoved)
+                    .on_press(Message::ViewportClick),
+                ],
+            ]
             .width(Fill)
-            .height(Fill)
-            .into();
+            .height(Fill);
             viewport_stack = viewport_stack.push(cube_click);
         }
 
