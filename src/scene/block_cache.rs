@@ -356,9 +356,12 @@ fn build_nested_ref(
     doc: &CadDocument,
     bg_color: [f32; 4],
 ) -> NestedRef {
-    let (mut ins_color, ins_pat_len, ins_pat, ins_lw_px, _) =
+    // Store the RAW colour — `adapt_to_bg` runs at emit time
+    // (`Batches::finalize`) so the same cached defn can serve renders
+    // against different backgrounds without rebuilding.
+    let (ins_color, ins_pat_len, ins_pat, ins_lw_px, _) =
         crate::scene::render::render_style_for(doc, &EntityType::Insert(nested_ins.clone()));
-    ins_color = crate::scene::render::adapt_to_bg(ins_color, bg_color);
+    let _ = bg_color;
 
     NestedRef {
         block_name: nested_ins.block_name.clone(),
@@ -391,8 +394,12 @@ fn tessellate_sub_local(
         return None;
     }
 
+    // Store the RAW colour. `Batches::finalize` applies `adapt_to_bg`
+    // with the per-render bg, so the cache no longer has to rebuild on
+    // BACKGROUND / layout-switch — the dynamic adaptation tracks the
+    // live bg at render time.
     let (sub_color, pat_len, pat, lw_px, aci) = crate::scene::render::render_style_for(doc, sub);
-    let sub_color = crate::scene::render::adapt_to_bg(sub_color, bg_color);
+    let _ = bg_color;
 
     let color_is_byblock = sub.common().color == AcadColor::ByBlock;
     let lt_is_byblock = sub.common().linetype.eq_ignore_ascii_case("byblock");
@@ -655,7 +662,7 @@ pub fn expand_insert(
         };
         expand_defn(defn, &base_xform, &ctx, &mut batches, &mut visited, 0);
     }
-    Some(batches.finalize(&name, selected))
+    Some(batches.finalize(&name, selected, bg_color))
 }
 
 /// Emit a greeked filled rect (2 triangles) for a text LocalWire. Stays in
@@ -1033,7 +1040,7 @@ impl BatchEntry {
 }
 
 impl Batches {
-    fn finalize(self, name: &str, selected: bool) -> Vec<WireModel> {
+    fn finalize(self, name: &str, selected: bool, bg_color: [f32; 4]) -> Vec<WireModel> {
         self.closed
             .into_iter()
             .chain(self.by_style.into_values())
@@ -1043,10 +1050,16 @@ impl Batches {
                 } else {
                     [b.min_x, b.min_y, b.max_x, b.max_y]
                 };
+                // RAW colour came from `tessellate_sub_local` (and from
+                // `expand_defn`'s ByBlock fallbacks); apply `adapt_to_bg`
+                // now so each render against a different bg gets the
+                // right pure-black ↔ pure-white flip without rebuilding
+                // the cached defn.
+                let color = crate::scene::render::adapt_to_bg(b.color, bg_color);
                 WireModel {
                     name: name.to_string(),
                     points: b.points,
-                    color: b.color,
+                    color,
                     selected,
                     pattern_length: b.pattern_length,
                     pattern: b.pattern,
