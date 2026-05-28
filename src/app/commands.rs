@@ -32,6 +32,15 @@ impl OpenCADStudio {
             "CLEAR" | "CLR" => return Task::done(Message::ClearScene),
             "WIREFRAME" | "VW" => return Task::done(Message::SetWireframe(true)),
             "SOLID" | "VS" => return Task::done(Message::SetWireframe(false)),
+            "EXIT" | "QUIT" => {
+                // Funnel through the OS close path so the unsaved-changes
+                // dialog runs before `iced::exit()`. Falls back to a hard
+                // exit if there's no main window registered yet.
+                if let Some(id) = self.main_window {
+                    return Task::done(Message::WindowCloseRequested(id));
+                }
+                return iced::exit();
+            }
 
             // ── Background color ───────────────────────────────────────────
             // Usage:  BACKGROUND <r> <g> <b>   (0–255 each)
