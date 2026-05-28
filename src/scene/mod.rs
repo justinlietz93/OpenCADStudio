@@ -3933,18 +3933,26 @@ impl Scene {
             Some(v) => v.clone(),
             None => return false,
         };
-
-        if vp.view_height.abs() < 1e-9 {
+        let Some(new_cam) = self.camera_from_vport(&vp) else {
             return false;
-        }
+        };
+        *self.camera.borrow_mut() = new_cam;
+        self.camera_generation += 1;
+        true
+    }
 
+    /// Decode a VPort table entry into a `Camera`. Returns `None` if the
+    /// entry has a zero view_height (i.e. is uninitialised).
+    fn camera_from_vport(&self, vp: &acadrust::tables::VPort) -> Option<Camera> {
+        if vp.view_height.abs() < 1e-9 {
+            return None;
+        }
         let vd = glam::Vec3::new(
             vp.view_direction.x as f32,
             vp.view_direction.y as f32,
             vp.view_direction.z as f32,
         )
         .normalize_or(glam::Vec3::Z);
-
         let pitch = vd.z.clamp(-1.0, 1.0).asin();
         // view_dir = (sin(yaw)*cos(pitch), -cos(yaw)*cos(pitch), sin(pitch))
         // → yaw = atan2(x, -y), but when looking straight up/down cos(pitch)≈0
@@ -3957,7 +3965,6 @@ impl Scene {
         let rotation = camera::yaw_pitch_to_quat(yaw, pitch, 0.0);
         let view_right = rotation * glam::Vec3::X;
         let view_up = rotation * glam::Vec3::Y;
-
         // view_target is WCS; wire-space subtracts world_offset.
         let base = glam::Vec3::new(
             (vp.view_target.x - self.world_offset[0]) as f32,
@@ -3966,22 +3973,170 @@ impl Scene {
         );
         let target =
             base + view_right * vp.view_center.x as f32 + view_up * vp.view_center.y as f32;
-
         let fov_y = 45.0_f32.to_radians();
         let distance = ((vp.view_height as f32 / 2.0) / (fov_y * 0.5).tan()).max(0.001);
+        Some(Camera {
+            target,
+            rotation,
+            distance,
+            fov_y,
+            projection: camera::Projection::Orthographic,
+            yaw,
+            pitch,
+        })
+    }
 
-        let mut cam = self.camera.borrow_mut();
-        cam.target = target;
-        cam.rotation = rotation;
-        cam.distance = distance;
-        cam.yaw = yaw;
-        cam.pitch = pitch;
-        cam.fov_y = fov_y;
-        cam.projection = camera::Projection::Orthographic;
-        drop(cam);
+    /// Reverse of `camera_from_vport`: write `cam`'s view target / direction
+    /// / height onto a fresh VPort entry with the given `name` and screen
+    /// rectangle (0..1 normalized, DXF bottom-left origin convention).
+    fn vport_from_camera(
+        &self,
+        name: &str,
+        cam: &Camera,
+        lower_left: acadrust::types::Vector2,
+        upper_right: acadrust::types::Vector2,
+    ) -> acadrust::tables::VPort {
+        let view_dir = cam.rotation * glam::Vec3::Z;
+        let view_height = cam.ortho_size() * 2.0;
+        let target_wcs = acadrust::types::Vector3 {
+            x: (cam.target.x as f64) + self.world_offset[0],
+            y: (cam.target.y as f64) + self.world_offset[1],
+            z: (cam.target.z as f64) + self.world_offset[2],
+        };
+        let mut entry = acadrust::tables::VPort::new(name);
+        entry.lower_left = lower_left;
+        entry.upper_right = upper_right;
+        entry.view_target = target_wcs;
+        entry.view_direction = acadrust::types::Vector3 {
+            x: view_dir.x as f64,
+            y: view_dir.y as f64,
+            z: view_dir.z as f64,
+        };
+        entry.view_height = view_height as f64;
+        entry.view_center = acadrust::types::Vector2::ZERO;
+        entry
+    }
 
+    /// Convert a `ModelTile`'s normalized iced rectangle (top-left origin) to
+    /// the (lower_left, upper_right) pair the VPort table uses (bottom-left
+    /// origin).
+    fn tile_rect_to_vport(rect: iced::Rectangle) -> (acadrust::types::Vector2, acadrust::types::Vector2) {
+        let lower_left = acadrust::types::Vector2 {
+            x: rect.x as f64,
+            y: (1.0 - rect.y - rect.height) as f64,
+        };
+        let upper_right = acadrust::types::Vector2 {
+            x: (rect.x + rect.width) as f64,
+            y: (1.0 - rect.y) as f64,
+        };
+        (lower_left, upper_right)
+    }
+
+    /// Inverse of `tile_rect_to_vport`.
+    fn vport_to_tile_rect(lower_left: acadrust::types::Vector2, upper_right: acadrust::types::Vector2) -> iced::Rectangle {
+        iced::Rectangle {
+            x: lower_left.x as f32,
+            y: (1.0 - upper_right.y) as f32,
+            width: (upper_right.x - lower_left.x) as f32,
+            height: (upper_right.y - lower_left.y) as f32,
+        }
+    }
+
+    /// Restore `model_tiles` from `*OCS_Tile_*` VPort entries that a previous
+    /// save left in the document. Returns true on success — the caller skips
+    /// `apply_active_vport_camera` in that case because the active tile's
+    /// camera has already been loaded into `self.camera`.
+    fn restore_model_tiles_from_vports(&mut self) -> bool {
+        let mut indexed: Vec<(usize, acadrust::tables::VPort)> = self
+            .document
+            .vports
+            .iter()
+            .filter_map(|v| {
+                let idx: usize = v
+                    .name
+                    .strip_prefix("*OCS_Tile_")
+                    .and_then(|s| s.parse().ok())?;
+                Some((idx, v.clone()))
+            })
+            .collect();
+        if indexed.len() < 2 {
+            return false;
+        }
+        indexed.sort_by_key(|(i, _)| *i);
+        let mut tiles = Vec::with_capacity(indexed.len());
+        for (_, vp) in &indexed {
+            let Some(cam) = self.camera_from_vport(vp) else {
+                return false;
+            };
+            tiles.push(ModelTile {
+                rect: Self::vport_to_tile_rect(vp.lower_left, vp.upper_right),
+                camera: cam,
+            });
+        }
+        // Active tile = the one whose stored camera fields match `*Active`.
+        // The save path writes `*Active` to mirror the active tile's view, so
+        // this matches by view_target (the most discriminating field).
+        let active_idx = self
+            .document
+            .vports
+            .iter()
+            .find(|v| v.name == "*Active")
+            .and_then(|act| {
+                indexed.iter().position(|(_, vp)| {
+                    let dx = vp.view_target.x - act.view_target.x;
+                    let dy = vp.view_target.y - act.view_target.y;
+                    let dz = vp.view_target.z - act.view_target.z;
+                    dx * dx + dy * dy + dz * dz < 1e-12
+                })
+            })
+            .unwrap_or(0);
+        let active_cam = tiles[active_idx].camera.clone();
+        *self.model_tiles.borrow_mut() = tiles;
+        self.active_model_tile.set(active_idx);
+        *self.camera.borrow_mut() = active_cam;
         self.camera_generation += 1;
         true
+    }
+
+    /// Persist `model_tiles` to the VPort table. The active tile is also
+    /// mirrored to `*Active` (already written by `sync_camera_to_document`);
+    /// every tile (including a single full-screen one) is written as a
+    /// `*OCS_Tile_<i>` entry so the layout survives roundtrip.
+    fn save_model_tiles_to_vports(&mut self) {
+        // Stash the live camera into the active tile so the about-to-write
+        // snapshot reflects the user's most recent orbit / pan / zoom.
+        {
+            let live_cam = self.camera.borrow().clone();
+            let mut tiles = self.model_tiles.borrow_mut();
+            let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+            if let Some(t) = tiles.get_mut(active) {
+                t.camera = live_cam;
+            }
+        }
+        // Remove every previous tile entry — names are reassigned by index.
+        let to_remove: Vec<String> = self
+            .document
+            .vports
+            .iter()
+            .filter(|v| v.name.starts_with("*OCS_Tile_"))
+            .map(|v| v.name.clone())
+            .collect();
+        for name in to_remove {
+            self.document.vports.remove(&name);
+        }
+        // Skip writing tile entries for the trivial single-tile config —
+        // `*Active` alone is enough and keeps the file noise-free.
+        let tiles = self.model_tiles.borrow().clone();
+        if tiles.len() <= 1 {
+            return;
+        }
+        for (i, tile) in tiles.iter().enumerate() {
+            let (ll, ur) = Self::tile_rect_to_vport(tile.rect);
+            let name = format!("*OCS_Tile_{i}");
+            let mut entry = self.vport_from_camera(&name, &tile.camera, ll, ur);
+            entry.handle = self.document.allocate_handle();
+            self.document.vports.add_or_replace(entry);
+        }
     }
 
     /// Set the paper-space camera from the sheet viewport's stored view.
@@ -4103,6 +4258,11 @@ impl Scene {
                 vp.view_height = view_height as f64;
             }
 
+            // Persist the tiled layout (multiple `*OCS_Tile_<i>` entries) so
+            // the panel split survives save→reopen. Single-tile configs skip
+            // this — `*Active` alone is enough.
+            self.save_model_tiles_to_vports();
+
             // Also write to View table — survives DWG save without override.
             self.write_camera_view_entry("OpenCADStudio_Camera_Model", target_wcs, vd3, view_height);
             true
@@ -4176,7 +4336,9 @@ impl Scene {
     /// Falls back to fit_all() if no saved view is available.
     pub fn restore_saved_camera(&mut self) {
         let restored = if self.current_layout == "Model" {
-            self.apply_active_vport_camera()
+            // Tiled-layout restore takes precedence — it sets the camera too.
+            // Single-tile files fall through to the *Active branch.
+            self.restore_model_tiles_from_vports() || self.apply_active_vport_camera()
         } else {
             self.apply_sheet_viewport_camera()
         };
