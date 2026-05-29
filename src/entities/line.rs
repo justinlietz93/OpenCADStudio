@@ -156,7 +156,53 @@ impl TruckConvertible for Line {
     }
 }
 
-crate::impl_entity_basics!(Line);
+impl crate::entities::traits::Grippable for Line {
+    fn grips(&self) -> Vec<GripDef> {
+        grips(self)
+    }
+    fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
+        apply_grip(self, grip_id, apply);
+    }
+    fn grip_menu(
+        &self,
+        grip_id: usize,
+    ) -> Vec<crate::scene::object::GripMenuItem> {
+        use crate::scene::object::{GripMenuAction, GripMenuItem};
+        if grip_id == 2 {
+            vec![GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch }]
+        } else {
+            vec![
+                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                GripMenuItem { label: "Lengthen", action: GripMenuAction::Lengthen },
+            ]
+        }
+    }
+    fn apply_grip_menu(
+        &mut self,
+        _grip_id: usize,
+        _action: crate::scene::object::GripMenuAction,
+    ) {
+        // Lengthen requires a follow-up distance prompt — Phase 3.
+    }
+}
+
+impl crate::entities::traits::PropertyEditable for Line {
+    fn geometry_properties(
+        &self,
+        _text_style_names: &[String],
+    ) -> PropSection {
+        properties(self)
+    }
+    fn apply_geom_prop(&mut self, field: &str, value: &str) {
+        apply_geom_prop(self, field, value);
+    }
+}
+
+impl crate::entities::traits::Transformable for Line {
+    fn apply_transform(&mut self, t: &EntityTransform) {
+        apply_transform(self, t);
+    }
+}
 
 impl crate::entities::traits::MassPropsCalc for acadrust::entities::Line {
     fn mass_props(&self) -> crate::entities::traits::MassProps {

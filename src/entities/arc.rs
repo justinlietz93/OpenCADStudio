@@ -223,7 +223,58 @@ impl TruckConvertible for Arc {
     }
 }
 
-crate::impl_entity_basics!(Arc);
+impl crate::entities::traits::Grippable for Arc {
+    fn grips(&self) -> Vec<GripDef> {
+        grips(self)
+    }
+    fn apply_grip(&mut self, grip_id: usize, apply: GripApply) {
+        apply_grip(self, grip_id, apply);
+    }
+    fn grip_menu(
+        &self,
+        grip_id: usize,
+    ) -> Vec<crate::scene::object::GripMenuItem> {
+        use crate::scene::object::{GripMenuAction, GripMenuItem};
+        match grip_id {
+            0 => vec![GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch }],
+            3 => vec![
+                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                GripMenuItem { label: "Radius", action: GripMenuAction::Radius },
+                GripMenuItem { label: "Arc Length", action: GripMenuAction::ArcLength },
+            ],
+            _ => vec![
+                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                GripMenuItem { label: "Lengthen", action: GripMenuAction::Lengthen },
+            ],
+        }
+    }
+    fn apply_grip_menu(
+        &mut self,
+        _grip_id: usize,
+        _action: crate::scene::object::GripMenuAction,
+    ) {
+        // Radius / Arc Length / Lengthen all need a follow-up prompt
+        // (numeric distance / length / radius) — Phase 3.
+    }
+}
+
+impl crate::entities::traits::PropertyEditable for Arc {
+    fn geometry_properties(
+        &self,
+        _text_style_names: &[String],
+    ) -> PropSection {
+        properties(self)
+    }
+    fn apply_geom_prop(&mut self, field: &str, value: &str) {
+        apply_geom_prop(self, field, value);
+    }
+}
+
+impl crate::entities::traits::Transformable for Arc {
+    fn apply_transform(&mut self, t: &EntityTransform) {
+        apply_transform(self, t);
+    }
+}
 
 impl crate::entities::traits::MassPropsCalc for acadrust::entities::Arc {
     fn mass_props(&self) -> crate::entities::traits::MassProps {

@@ -696,6 +696,86 @@ impl Grippable for Dimension {
         }
         self.base_mut().actual_measurement = self.measurement();
     }
+
+    fn grip_menu(
+        &self,
+        grip_id: usize,
+    ) -> Vec<crate::scene::object::GripMenuItem> {
+        use crate::scene::object::{GripMenuAction, GripMenuItem};
+        let (dim_line_grip, text_grip) = match self {
+            Dimension::Linear(_) | Dimension::Aligned(_) => (2, 3),
+            Dimension::Radius(_) | Dimension::Diameter(_) => (1, 2),
+            Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => (3, 4),
+            Dimension::Ordinate(_) => (0, 3),
+        };
+        if grip_id == text_grip {
+            vec![
+                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                GripMenuItem { label: "Move with Dim Line", action: GripMenuAction::MoveWithDimLine },
+                GripMenuItem { label: "Move with Leader", action: GripMenuAction::MoveWithLeader },
+                GripMenuItem { label: "Move Independent", action: GripMenuAction::MoveIndependent },
+                GripMenuItem { label: "Reset Text", action: GripMenuAction::ResetText },
+                GripMenuItem { label: "Rotate Text", action: GripMenuAction::RotateText },
+                GripMenuItem { label: "Above Dim Line", action: GripMenuAction::AboveDimLine },
+                GripMenuItem { label: "Center", action: GripMenuAction::Center },
+            ]
+        } else if grip_id == dim_line_grip {
+            vec![
+                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                GripMenuItem { label: "Reverse Arrows", action: GripMenuAction::ReverseArrows },
+            ]
+        } else {
+            vec![GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch }]
+        }
+    }
+
+    fn apply_grip_menu(
+        &mut self,
+        grip_id: usize,
+        action: crate::scene::object::GripMenuAction,
+    ) {
+        use crate::scene::object::GripMenuAction as A;
+        let (_dim_line_grip, text_grip) = match self {
+            Dimension::Linear(_) | Dimension::Aligned(_) => (2, 3),
+            Dimension::Radius(_) | Dimension::Diameter(_) => (1, 2),
+            Dimension::Angular2Ln(_) | Dimension::Angular3Pt(_) => (3, 4),
+            Dimension::Ordinate(_) => (0, 3),
+        };
+        match action {
+            A::ResetText if grip_id == text_grip => {
+                // Drop any text-position override — leave it to the
+                // renderer to recompute from the dim style.
+                let b = self.base_mut();
+                b.text_middle_point.x = 0.0;
+                b.text_middle_point.y = 0.0;
+                b.text_middle_point.z = 0.0;
+            }
+            A::Center if grip_id == text_grip => {
+                // Snap text to the centre of the dimension line.
+                // Approximate as midpoint of first/second extension
+                // origins for Linear / Aligned dimensions.
+                match self {
+                    Dimension::Linear(d) => {
+                        let mx = (d.first_point.x + d.second_point.x) * 0.5;
+                        let my = (d.first_point.y + d.second_point.y) * 0.5;
+                        d.base.text_middle_point.x = mx;
+                        d.base.text_middle_point.y = my;
+                    }
+                    Dimension::Aligned(d) => {
+                        let mx = (d.first_point.x + d.second_point.x) * 0.5;
+                        let my = (d.first_point.y + d.second_point.y) * 0.5;
+                        d.base.text_middle_point.x = mx;
+                        d.base.text_middle_point.y = my;
+                    }
+                    _ => {}
+                }
+            }
+            // Stretch / Move-variants / Reverse Arrows / Rotate Text /
+            // Above Dim Line need either a follow-up drag or a numeric
+            // prompt — wired to default Stretch behaviour for now.
+            _ => {}
+        }
+    }
 }
 
 // ── Tessellation ─────────────────────────────────────────────────────────
