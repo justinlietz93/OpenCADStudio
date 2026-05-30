@@ -257,6 +257,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
             v_anchor,
             line_spacing_factor: ctx.line_spacing_factor as f32,
             vertical_text: false,
+            want_glyph_boxes: false,
         });
         for ts in &layout.strokes {
             let ox = ts.origin[0];
@@ -1312,6 +1313,7 @@ impl MultiLeaderTess for MultiLeader {
                 v_anchor,
                 line_spacing_factor: ctx.line_spacing_factor as f32,
                 vertical_text: false,
+                want_glyph_boxes: false,
             });
             let line_widths = &layout.line_widths;
             let max_line_w = line_widths.iter().cloned().fold(0.0_f32, f32::max);

@@ -4,7 +4,7 @@ use glam::Vec3;
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip, triangle_grip};
 use crate::entities::text_support::{
-    layout_mtext, resolve_text_style, MTextRenderOpts, MTextVAnchor,
+    layout_mtext, resolve_text_style, GlyphBox, MTextRenderOpts, MTextVAnchor,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::acad_to_truck::{TruckEntity, TruckObject};
@@ -74,6 +74,52 @@ fn drawing_dir_str(d: &DrawingDirection) -> &'static str {
     }
 }
 
+/// Per-visible-character world-space boxes for the MText editor's
+/// click-to-select preview. Uses the exact same layout opts as `to_truck`
+/// so the boxes line up with the rendered glyphs.
+pub fn glyph_boxes(t: &MText, document: &acadrust::CadDocument) -> Vec<GlyphBox> {
+    let resolved_style = resolve_text_style(&t.style, document);
+    let attach_h_anchor: f32 = match t.attachment_point {
+        AttachmentPoint::TopCenter
+        | AttachmentPoint::MiddleCenter
+        | AttachmentPoint::BottomCenter => 0.5,
+        AttachmentPoint::TopRight | AttachmentPoint::MiddleRight | AttachmentPoint::BottomRight => {
+            1.0
+        }
+        _ => 0.0,
+    };
+    let v_anchor = match t.attachment_point {
+        AttachmentPoint::TopLeft | AttachmentPoint::TopCenter | AttachmentPoint::TopRight => {
+            MTextVAnchor::Top
+        }
+        AttachmentPoint::MiddleLeft
+        | AttachmentPoint::MiddleCenter
+        | AttachmentPoint::MiddleRight => MTextVAnchor::Middle,
+        AttachmentPoint::BottomLeft
+        | AttachmentPoint::BottomCenter
+        | AttachmentPoint::BottomRight => MTextVAnchor::Bottom,
+    };
+    let rotation = if resolved_style.is_upside_down {
+        t.rotation as f32 + std::f32::consts::PI
+    } else {
+        t.rotation as f32
+    };
+    let layout = layout_mtext(&MTextRenderOpts {
+        value: &t.value,
+        insertion: [t.insertion_point.x, t.insertion_point.y, t.insertion_point.z],
+        height: t.height as f32,
+        rect_w: t.rectangle_width as f32,
+        rotation,
+        style: &resolved_style,
+        attach_h_anchor,
+        v_anchor,
+        line_spacing_factor: t.line_spacing_factor as f32,
+        vertical_text: matches!(t.drawing_direction, DrawingDirection::TopToBottom),
+        want_glyph_boxes: true,
+    });
+    layout.glyph_boxes
+}
+
 fn to_truck(t: &MText, document: &acadrust::CadDocument) -> TruckEntity {
     let resolved_style = resolve_text_style(&t.style, document);
     let attach_h_anchor: f32 = match t.attachment_point {
@@ -112,6 +158,7 @@ fn to_truck(t: &MText, document: &acadrust::CadDocument) -> TruckEntity {
         v_anchor,
         line_spacing_factor: t.line_spacing_factor as f32,
         vertical_text: matches!(t.drawing_direction, DrawingDirection::TopToBottom),
+        want_glyph_boxes: false,
     });
     let insertion = Vec3::new(
         t.insertion_point.x as f32,

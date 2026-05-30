@@ -1346,13 +1346,14 @@ const MTEXT_COLORS: [(&str, u16); 8] = [
 /// editor's own preview area (never on the drawing). Strokes lie in the
 /// world XY plane; the program fits + vertically flips them into the box.
 const MTEXT_PREVIEW_PAD: f32 = 12.0;
-/// Screen pixels per world unit of text height — fixes the preview to the
-/// real text size (so it scrolls rather than shrinking to fit).
-const MTEXT_PREVIEW_PX_PER_UNIT: f32 = 10.0;
 
 struct MTextPreview {
     /// Disconnected polylines as (x, y) world points (NaN-split already done).
     segments: Vec<Vec<(f32, f32)>>,
+    /// Per-visible-character boxes (world frame) for click-to-select.
+    boxes: Vec<crate::entities::text_support::GlyphBox>,
+    /// Current selection as a visible-char range.
+    sel: Option<(usize, usize)>,
     /// World-space min corner (bbox) and pixels-per-world-unit scale.
     minx: f32,
     miny: f32,
@@ -1360,11 +1361,93 @@ struct MTextPreview {
     content_h: f32,
 }
 
+impl MTextPreview {
+    /// Visible-char offset (0..=N) nearest the cursor point (bounds-local px).
+    fn offset_at(&self, p: iced::Point) -> usize {
+        if self.boxes.is_empty() {
+            return 0;
+        }
+        let wx = self.minx + (p.x - MTEXT_PREVIEW_PAD) / self.scale;
+        let wy = self.miny + (self.content_h - p.y - MTEXT_PREVIEW_PAD) / self.scale;
+        let mut best = 0usize;
+        let mut best_d = f32::MAX;
+        for b in &self.boxes {
+            let dx = if wx < b.xmin {
+                b.xmin - wx
+            } else if wx > b.xmax {
+                wx - b.xmax
+            } else {
+                0.0
+            };
+            let dy = if wy < b.ymin {
+                b.ymin - wy
+            } else if wy > b.ymax {
+                wy - b.ymax
+            } else {
+                0.0
+            };
+            let d = dy * 1000.0 + dx; // prefer the correct line first
+            if d < best_d {
+                best_d = d;
+                best = b.vis;
+                // After the glyph centre → caret sits after this char.
+                if wx > (b.xmin + b.xmax) * 0.5 {
+                    best = b.vis + 1;
+                }
+            }
+        }
+        best
+    }
+}
+
+#[derive(Default)]
+struct MTextPreviewState {
+    dragging: bool,
+}
+
 impl iced::widget::canvas::Program<Message> for MTextPreview {
-    type State = ();
+    type State = MTextPreviewState;
+
+    fn update(
+        &self,
+        state: &mut MTextPreviewState,
+        event: &iced::Event,
+        bounds: iced::Rectangle,
+        cursor: iced::mouse::Cursor,
+    ) -> Option<iced::widget::canvas::Action<Message>> {
+        use iced::mouse::{Button, Event as Me};
+        use iced::widget::canvas::Action;
+        use iced::Event;
+        match event {
+            Event::Mouse(Me::ButtonPressed(Button::Left)) => {
+                if let Some(p) = cursor.position_in(bounds) {
+                    state.dragging = true;
+                    let off = self.offset_at(p);
+                    return Some(Action::publish(Message::MTextSelStart(off)).and_capture());
+                }
+            }
+            Event::Mouse(Me::CursorMoved { .. }) => {
+                if state.dragging {
+                    if let Some(p) = cursor.position_in(bounds) {
+                        let off = self.offset_at(p);
+                        return Some(Action::publish(Message::MTextSelTo(off)));
+                    }
+                }
+            }
+            Event::Mouse(Me::ButtonReleased(Button::Left)) => {
+                if state.dragging {
+                    state.dragging = false;
+                    return Some(Action::capture());
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     fn draw(
         &self,
-        _state: &(),
+        _state: &MTextPreviewState,
         renderer: &iced::Renderer,
         _theme: &Theme,
         bounds: iced::Rectangle,
@@ -1380,6 +1463,20 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
                 self.content_h - (pad + (y - self.miny) * self.scale),
             )
         };
+        // Selection highlight behind the glyphs.
+        if let Some((a, b)) = self.sel {
+            for bx in &self.boxes {
+                if bx.vis >= a && bx.vis < b {
+                    let p0 = map(bx.xmin, bx.ymax);
+                    let p1 = map(bx.xmax, bx.ymin);
+                    let rect = Path::rectangle(
+                        iced::Point::new(p0.x.min(p1.x), p0.y.min(p1.y)),
+                        iced::Size::new((p1.x - p0.x).abs(), (p1.y - p0.y).abs()),
+                    );
+                    frame.fill(&rect, Color { r: 0.20, g: 0.42, b: 0.72, a: 0.45 });
+                }
+            }
+        }
         for seg in &self.segments {
             if seg.len() < 2 {
                 continue;
@@ -1601,6 +1698,14 @@ fn mtext_editor_overlay<'a>(
                 maxy = maxy.max(y);
             }
         }
+        // Include glyph boxes so all-whitespace / box-only lines still anchor
+        // the transform (hit-testing relies on minx/miny).
+        for b in &ed.glyph_boxes {
+            minx = minx.min(b.xmin);
+            miny = miny.min(b.ymin);
+            maxx = maxx.max(b.xmax);
+            maxy = maxy.max(b.ymax);
+        }
         let h_unit = ed.height_value() as f32;
         // Real text size: fixed pixels per em so more/taller text grows the
         // canvas (and scrolls) instead of shrinking to fit.
@@ -1610,7 +1715,15 @@ fn mtext_editor_overlay<'a>(
         } else {
             40.0
         };
-        let prog = MTextPreview { segments, minx, miny, scale, content_h };
+        let prog = MTextPreview {
+            segments,
+            boxes: ed.glyph_boxes.clone(),
+            sel: ed.sel,
+            minx,
+            miny,
+            scale,
+            content_h,
+        };
         let cv = canvas(prog).width(Fill).height(iced::Length::Fixed(content_h));
         container(iced::widget::scrollable(cv).height(iced::Length::Fixed(VIEW_H)))
             .style(move |_: &Theme| container::Style {

@@ -208,6 +208,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             v_anchor,
             line_spacing_factor: 1.0,
             vertical_text: false,
+            want_glyph_boxes: false,
         });
         let _ = input.line_count;
         let _ = input.is_multiline;

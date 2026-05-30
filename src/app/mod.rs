@@ -740,6 +740,10 @@ pub enum Message {
     /// Switch the editor body between raw code input (`false`) and the
     /// rendered preview (`true`).
     MTextShowPreview(bool),
+    /// Begin a preview text selection at the given visible-character offset.
+    MTextSelStart(usize),
+    /// Extend the preview selection to the given visible-character offset.
+    MTextSelTo(usize),
     /// Commit the editor: create or update the MText entity.
     MTextOk,
     /// Discard the editor without creating / changing the entity.

@@ -1067,6 +1067,22 @@ pub struct MTextRenderOpts<'a> {
     pub line_spacing_factor: f32,
     /// `true` when the entity is laid out top-to-bottom (DXF code 71 = 2).
     pub vertical_text: bool,
+    /// When true, `layout_mtext` also fills `MTextLayout::glyph_boxes` with
+    /// one world-space box per visible character (used by the MText editor's
+    /// click-to-select preview). Off in the hot render path.
+    pub want_glyph_boxes: bool,
+}
+
+/// One selectable character in the laid-out text: its world-space AABB plus
+/// the running index of visible characters (in reading order) so the editor
+/// can map a clicked box back to an offset in the value.
+#[derive(Clone, Copy, Debug)]
+pub struct GlyphBox {
+    pub vis: usize,
+    pub xmin: f32,
+    pub xmax: f32,
+    pub ymin: f32,
+    pub ymax: f32,
 }
 
 /// Output of [`layout_mtext`]: stroke groups + the geometry the caller
@@ -1088,6 +1104,9 @@ pub struct MTextLayout {
     /// Y of the first sub-line's baseline relative to the insertion point
     /// (in the entity-local, pre-rotation frame).
     pub v_offset: f32,
+    /// One world-space AABB per visible character — only populated when
+    /// `MTextRenderOpts::want_glyph_boxes` is set.
+    pub glyph_boxes: Vec<GlyphBox>,
 }
 
 /// Lay out and render an MText-formatted value, returning the stroke
@@ -1232,6 +1251,18 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
     // ── 4. Render each sub-line ──────────────────────────────────────────
     let mut all_strokes: Vec<TextStroke> = Vec::new();
     let mut line_widths: Vec<f32> = Vec::with_capacity(sub_lines.len());
+    let mut glyph_boxes: Vec<GlyphBox> = Vec::new();
+    let mut vis: usize = 0;
+    // Transform an entity-local point to world space (mirrors the stroke
+    // origin maths) so glyph boxes line up with the drawn glyphs.
+    let to_world = |line_base_x: f32, line_base_y: f32, lx: f32, ly: f32| -> (f32, f32) {
+        let wdx = lx * cos_r - ly * sin_r;
+        let wdy = lx * sin_r + ly * cos_r;
+        (
+            ins_x as f32 + line_base_x + wdx,
+            ins_y as f32 + line_base_y + wdy,
+        )
+    };
     for (i, sub) in sub_lines.iter().enumerate() {
         let li = i as f32;
         let (line_base_x, line_base_y) = if opts.vertical_text {
@@ -1337,12 +1368,52 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         origin,
                         color,
                     });
+                    if opts.want_glyph_boxes {
+                        // Per-character boxes, advancing exactly as
+                        // `measure_word` does so they track the glyphs.
+                        let scale = run_scale(&atom.state, entity_h, base_wf);
+                        let font = cxf::get_font(font_name);
+                        let mut cx = cursor_x;
+                        for ch in text.chars() {
+                            let adv = match font.glyph(ch) {
+                                Some(g) => {
+                                    (g.advance + font.letter_spacing * tracking) * scale
+                                }
+                                None => (6.0 + font.letter_spacing * tracking) * scale,
+                            };
+                            let (ax, ay) = to_world(line_base_x, line_base_y, cx, ly);
+                            let (bx, by) = to_world(line_base_x, line_base_y, cx + adv, ly + run_h);
+                            glyph_boxes.push(GlyphBox {
+                                vis,
+                                xmin: ax.min(bx),
+                                xmax: ax.max(bx),
+                                ymin: ay.min(by),
+                                ymax: ay.max(by),
+                            });
+                            vis += 1;
+                            cx += adv;
+                        }
+                    }
                     cursor_x +=
                         measure_word(text, &atom.state, entity_h, base_wf, &base_font_name);
                 }
                 AtomKind::Space => {
-                    cursor_x +=
-                        measure_space(&atom.state, entity_h, base_wf, &base_font_name);
+                    let adv = measure_space(&atom.state, entity_h, base_wf, &base_font_name);
+                    if opts.want_glyph_boxes {
+                        let run_h = atom.state.height_mul * entity_h;
+                        let (ax, ay) = to_world(line_base_x, line_base_y, cursor_x, 0.0);
+                        let (bx, by) =
+                            to_world(line_base_x, line_base_y, cursor_x + adv, run_h);
+                        glyph_boxes.push(GlyphBox {
+                            vis,
+                            xmin: ax.min(bx),
+                            xmax: ax.max(bx),
+                            ymin: ay.min(by),
+                            ymax: ay.max(by),
+                        });
+                        vis += 1;
+                    }
+                    cursor_x += adv;
                 }
                 AtomKind::Tab => {
                     cursor_x = next_tab_position(
@@ -1362,6 +1433,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         line_count: sub_lines.len(),
         line_height: line_h,
         v_offset,
+        glyph_boxes,
     }
 }
 pub(crate) fn text_obb_corners_native(

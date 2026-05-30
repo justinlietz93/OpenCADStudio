@@ -267,6 +267,7 @@ impl TruckConvertible for Table {
                     v_anchor,
                     line_spacing_factor: 1.0,
                     vertical_text: false,
+                    want_glyph_boxes: false,
                 });
                 // Flatten TextStroke groups into the table's Lines buffer.
                 // Per-run inline `\C` / `\c` colour is dropped here because the

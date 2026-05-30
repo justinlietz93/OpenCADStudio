@@ -114,6 +114,13 @@ pub struct MTextEditorState {
     /// When true the panel shows the rendered preview; when false the raw
     /// code/text input. Toggled so the two never stack.
     pub show_preview: bool,
+    /// Per-visible-character boxes (world XY, world_offset already removed) for
+    /// click-to-select in the preview, and the current selection as a visible-
+    /// character range `[start, end)`.
+    pub glyph_boxes: Vec<crate::entities::text_support::GlyphBox>,
+    pub sel: Option<(usize, usize)>,
+    /// Anchor offset for an in-progress drag selection.
+    pub sel_anchor: usize,
     /// Canvas-space anchor where the toolbar + text area are drawn (the
     /// insertion-point click position).
     pub screen_anchor: iced::Point,
@@ -136,6 +143,9 @@ impl MTextEditorState {
             char_space: "0".to_string(),
             preview_wires: Vec::new(),
             show_preview: true,
+            glyph_boxes: Vec::new(),
+            sel: None,
+            sel_anchor: 0,
             attachment: AttachmentPoint::TopLeft,
             line_spacing: 1.0,
             // Default box ~20 characters wide; overwritten with the entity's
@@ -191,9 +201,6 @@ impl MTextEditorState {
         }
     }
 
-    pub fn build_entity(&self) -> EntityType {
-        EntityType::MText(self.build_mtext())
-    }
 }
 
 /// Parse a numeric field, returning `Some(v)` only when it differs from the
@@ -205,6 +212,97 @@ fn parse_non_default(s: &str, default: f64) -> Option<f64> {
     } else {
         Some(v)
     }
+}
+
+/// Map each visible character of a raw MText value to its byte span
+/// `(start, end)` in that raw string, in the same reading order the layout
+/// counts glyph boxes (paragraphs split on `\P`/`\n`/`\N`, leading/trailing
+/// spaces trimmed per paragraph, inline codes skipped). Lets a preview
+/// selection (visible-char range) be spliced back into the raw value.
+pub fn visible_spans(raw: &str) -> Vec<(usize, usize)> {
+    let is_sp = |c: char| c == ' ' || c == '\u{00A0}';
+    let mut result: Vec<(usize, usize)> = Vec::new();
+    let mut para: Vec<(usize, usize, char)> = Vec::new();
+    let mut flush = |para: &mut Vec<(usize, usize, char)>, result: &mut Vec<(usize, usize)>| {
+        let s = para.iter().position(|t| !is_sp(t.2)).unwrap_or(para.len());
+        let e = para.iter().rposition(|t| !is_sp(t.2)).map(|i| i + 1).unwrap_or(s);
+        for t in &para[s..e] {
+            result.push((t.0, t.1));
+        }
+        para.clear();
+    };
+    let mut it = raw.char_indices().peekable();
+    while let Some((i, ch)) = it.next() {
+        match ch {
+            '\\' => match it.peek().map(|&(_, c)| c) {
+                Some('P') | Some('n') | Some('N') => {
+                    it.next();
+                    flush(&mut para, &mut result);
+                }
+                Some('~') => {
+                    let (j, c) = it.next().unwrap();
+                    para.push((i, j + c.len_utf8(), '\u{00A0}'));
+                }
+                Some('\\') | Some('{') | Some('}') => {
+                    let (j, c) = it.next().unwrap();
+                    para.push((i, j + c.len_utf8(), c));
+                }
+                Some(c) if "LlOoKk".contains(c) => {
+                    it.next(); // value-less toggle, no visible glyph
+                }
+                Some(_) => {
+                    // Value code (\f… \C… \H… \pxq… \U… etc) — skip to ';'.
+                    it.next();
+                    while let Some(&(_, c)) = it.peek() {
+                        it.next();
+                        if c == ';' {
+                            break;
+                        }
+                    }
+                }
+                None => {}
+            },
+            '{' | '}' => { /* group markers — not visible */ }
+            '%' if it.peek().map(|&(_, c)| c) == Some('%') => {
+                it.next(); // second '%'
+                match it.peek().copied() {
+                    Some((k, '%')) => {
+                        it.next();
+                        para.push((i, k + 1, '%'));
+                    }
+                    Some((_, d)) if d.is_ascii_digit() => {
+                        let mut last = i;
+                        let mut n = 0;
+                        while n < 3 {
+                            match it.peek().copied() {
+                                Some((m, c)) if c.is_ascii_digit() => {
+                                    last = m;
+                                    it.next();
+                                    n += 1;
+                                }
+                                _ => break,
+                            }
+                        }
+                        para.push((i, last + 1, '\u{25A1}'));
+                    }
+                    Some((m, c)) => {
+                        it.next();
+                        let g = match c {
+                            'd' | 'D' => '°',
+                            'c' | 'C' => 'Ø',
+                            'p' | 'P' => '±',
+                            other => other,
+                        };
+                        para.push((i, m + c.len_utf8(), g));
+                    }
+                    None => para.push((i, i + 1, '%')),
+                }
+            }
+            _ => para.push((i, i + ch.len_utf8(), ch)),
+        }
+    }
+    flush(&mut para, &mut result);
+    result
 }
 
 /// Prefix/suffix inline codes for a character-level toggle. `Uppercase` /
@@ -266,7 +364,8 @@ impl super::OpenCADStudio {
     pub(super) fn rebuild_mtext_preview(&mut self) {
         let i = self.active_tab;
         let Some(ed) = self.mtext_editor.as_ref() else { return };
-        let entity = ed.build_entity();
+        let mt = ed.build_mtext();
+        let entity = EntityType::MText(mt.clone());
         let woff = self.tabs[i].scene.world_offset;
         let anno = self.tabs[i].scene.annotation_scale;
         let wires: Vec<WireModel> = tessellate::tessellate(
@@ -281,35 +380,94 @@ impl super::OpenCADStudio {
             woff,
             anno,
         );
+        // Per-character boxes in the same offset-subtracted frame as the
+        // preview wires (tessellate removes world_offset; mirror that).
+        let mut boxes = crate::entities::mtext::glyph_boxes(&mt, &self.tabs[i].scene.document);
+        let (ox, oy) = (woff[0] as f32, woff[1] as f32);
+        for b in &mut boxes {
+            b.xmin -= ox;
+            b.xmax -= ox;
+            b.ymin -= oy;
+            b.ymax -= oy;
+        }
         if let Some(ed) = self.mtext_editor.as_mut() {
             ed.preview_wires = wires;
+            ed.glyph_boxes = boxes;
         }
     }
 
-    /// Apply a character-format toggle to the current selection (or insert at
-    /// the cursor when there is no selection).
+    /// Splice text around the preview selection (visible-char range) in the
+    /// raw value. `case` optionally transforms the selected slice. Returns
+    /// true when a preview selection was present and applied.
+    fn mtext_splice_sel(&mut self, prefix: &str, suffix: &str, case: Option<bool>) -> bool {
+        let Some(ed) = self.mtext_editor.as_mut() else { return false };
+        let Some((a, b)) = ed.sel else { return false };
+        if a >= b {
+            return false;
+        }
+        let raw = ed.content.text();
+        let raw = raw.strip_suffix('\n').unwrap_or(&raw).to_string();
+        let spans = visible_spans(&raw);
+        if a >= spans.len() || b > spans.len() {
+            return false;
+        }
+        let start = spans[a].0;
+        let end = spans[b - 1].1;
+        let mut s = raw;
+        if let Some(upper) = case {
+            let slice = &s[start..end];
+            let repl = if upper { slice.to_uppercase() } else { slice.to_lowercase() };
+            s.replace_range(start..end, &repl);
+            // Length may change; recompute end for the suffix insert.
+            let new_end = start + repl.len();
+            s.insert_str(new_end, suffix);
+            s.insert_str(start, prefix);
+        } else {
+            s.insert_str(end, suffix);
+            s.insert_str(start, prefix);
+        }
+        ed.content = iced::widget::text_editor::Content::with_text(&s);
+        ed.sel = None;
+        true
+    }
+
+    /// Apply a character-format toggle to the preview selection (preferred) or
+    /// the Edit-box selection.
     pub(super) fn mtext_apply_fmt(&mut self, kind: MTextFmt) {
-        if let Some(ed) = self.mtext_editor.as_mut() {
-            let sel = ed.content.selection();
-            let text = match kind {
-                MTextFmt::Uppercase => sel.as_deref().unwrap_or("").to_uppercase(),
-                MTextFmt::Lowercase => sel.as_deref().unwrap_or("").to_lowercase(),
-                _ => {
-                    let (pre, suf) = fmt_wrap(kind).unwrap();
-                    format!("{pre}{}{suf}", sel.as_deref().unwrap_or(""))
-                }
-            };
-            ed.content.perform(Action::Edit(Edit::Paste(Arc::new(text))));
+        let applied = match kind {
+            MTextFmt::Uppercase => self.mtext_splice_sel("", "", Some(true)),
+            MTextFmt::Lowercase => self.mtext_splice_sel("", "", Some(false)),
+            _ => {
+                let (pre, suf) = fmt_wrap(kind).unwrap();
+                self.mtext_splice_sel(pre, suf, None)
+            }
+        };
+        if !applied {
+            if let Some(ed) = self.mtext_editor.as_mut() {
+                let sel = ed.content.selection();
+                let text = match kind {
+                    MTextFmt::Uppercase => sel.as_deref().unwrap_or("").to_uppercase(),
+                    MTextFmt::Lowercase => sel.as_deref().unwrap_or("").to_lowercase(),
+                    _ => {
+                        let (pre, suf) = fmt_wrap(kind).unwrap();
+                        format!("{pre}{}{suf}", sel.as_deref().unwrap_or(""))
+                    }
+                };
+                ed.content.perform(Action::Edit(Edit::Paste(Arc::new(text))));
+            }
         }
         self.rebuild_mtext_preview();
     }
 
-    /// Prefix the selection with a paragraph-alignment code.
+    /// Prefix the selection (or cursor) with a paragraph-alignment code.
     pub(super) fn mtext_apply_align(&mut self, align: ParaAlign) {
-        if let Some(ed) = self.mtext_editor.as_mut() {
-            let sel = ed.content.selection().unwrap_or_default();
-            let text = format!("\\pxq{};{sel}", align.code());
-            ed.content.perform(Action::Edit(Edit::Paste(Arc::new(text))));
+        let code = format!("\\pxq{};", align.code());
+        if !self.mtext_splice_sel(&code, "", None) {
+            if let Some(ed) = self.mtext_editor.as_mut() {
+                let sel = ed.content.selection().unwrap_or_default();
+                let text = format!("{code}{sel}");
+                ed.content.perform(Action::Edit(Edit::Paste(Arc::new(text))));
+            }
         }
         self.rebuild_mtext_preview();
     }

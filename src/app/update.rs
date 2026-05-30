@@ -3546,6 +3546,20 @@ impl OpenCADStudio {
                 self.rebuild_mtext_preview();
                 Task::none()
             }
+            Message::MTextSelStart(off) => {
+                if let Some(ed) = self.mtext_editor.as_mut() {
+                    ed.sel_anchor = off;
+                    ed.sel = Some((off, off));
+                }
+                Task::none()
+            }
+            Message::MTextSelTo(off) => {
+                if let Some(ed) = self.mtext_editor.as_mut() {
+                    let a = ed.sel_anchor;
+                    ed.sel = Some((a.min(off), a.max(off)));
+                }
+                Task::none()
+            }
             Message::MTextOk => {
                 self.mtext_commit();
                 Task::none()
