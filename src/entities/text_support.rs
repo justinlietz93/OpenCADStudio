@@ -427,6 +427,20 @@ fn flush_glyph_buf(line: &mut MTextLine, buf: &mut String, state: &RunState) {
 /// the height-multiplier representation carried in [`RunState`]; pass the
 /// MTEXT entity's `height` field.
 pub fn parse_mtext_paragraphs(s: &str, entity_height: f32) -> Vec<MTextLine> {
+    parse_mtext_paragraphs_ex(s, entity_height, true)
+}
+
+/// Like [`parse_mtext_paragraphs`] but with control over blank-edge trimming.
+///
+/// `trim_blank_edges` drops leading and trailing blank paragraphs (the
+/// rendering default, so a stray trailing `\P` adds no empty space). The MText
+/// editor passes `false` so a freshly inserted newline keeps its empty
+/// paragraph and the caret can sit on the new line.
+pub fn parse_mtext_paragraphs_ex(
+    s: &str,
+    entity_height: f32,
+    trim_blank_edges: bool,
+) -> Vec<MTextLine> {
     let mut lines: Vec<MTextLine> = Vec::new();
     let mut current = MTextLine::default();
     let mut buf = String::new();
@@ -692,6 +706,9 @@ pub fn parse_mtext_paragraphs(s: &str, entity_height: f32) -> Vec<MTextLine> {
     current.tab_stops = props.tab_stops.clone();
     lines.push(current);
 
+    if !trim_blank_edges {
+        return lines;
+    }
     let start = lines.iter().position(|l| !l.is_blank()).unwrap_or(0);
     let end = lines
         .iter()
@@ -1123,7 +1140,9 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
     let rect_w = opts.rect_w;
 
     // ── 1. Parse ─────────────────────────────────────────────────────────
-    let paragraphs = parse_mtext_paragraphs(opts.value, entity_h);
+    // The editor (want_glyph_boxes) keeps blank edges so a freshly typed
+    // trailing newline yields an empty paragraph the caret can sit on.
+    let paragraphs = parse_mtext_paragraphs_ex(opts.value, entity_h, !opts.want_glyph_boxes);
 
     // ── 2. Atomise + wrap each paragraph into sub-lines ──────────────────
     struct SubLine {
@@ -1179,13 +1198,19 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         // on the paragraph's visible content. Without this a stray trailing
         // space measures wider than it draws and centring / right-alignment
         // is off by half a space-width.
-        let first_word = atoms
-            .iter()
-            .position(|a| !matches!(a.kind, AtomKind::Space))
-            .unwrap_or(atoms.len());
-        atoms.drain(..first_word);
-        while matches!(atoms.last().map(|a| &a.kind), Some(AtomKind::Space)) {
-            atoms.pop();
+        //
+        // Skipped when emitting glyph boxes (the MText editor) so a space the
+        // user just typed at the end keeps a selectable box and the caret can
+        // sit after it.
+        if !opts.want_glyph_boxes {
+            let first_word = atoms
+                .iter()
+                .position(|a| !matches!(a.kind, AtomKind::Space))
+                .unwrap_or(atoms.len());
+            atoms.drain(..first_word);
+            while matches!(atoms.last().map(|a| &a.kind), Some(AtomKind::Space)) {
+                atoms.pop();
+            }
         }
 
         let wrapped = wrap_paragraph(
@@ -1326,6 +1351,22 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
             .iter()
             .map(|a| a.state.height_mul * entity_h)
             .fold(entity_h, f32::max);
+
+        // A paragraph break (explicit `\n` / `\P`) that started this line gets
+        // a zero-width caret slot at the line start, so the MText editor can
+        // place the caret on a fresh/empty line.
+        if opts.want_glyph_boxes && i > 0 && sub.is_first_in_paragraph {
+            let (ax, ay) = to_world(line_base_x, line_base_y, cursor_start, 0.0);
+            let (_, by) = to_world(line_base_x, line_base_y, cursor_start, entity_h);
+            glyph_boxes.push(GlyphBox {
+                vis,
+                xmin: ax,
+                xmax: ax,
+                ymin: ay.min(by),
+                ymax: ay.max(by),
+            });
+            vis += 1;
+        }
 
         let mut cursor_x = cursor_start;
         for atom in &sub.atoms {

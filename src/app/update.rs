@@ -1211,6 +1211,15 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::CommandSpace => {
+                // Space is a literal space inside the MText preview; otherwise
+                // it finalises the active command like Enter.
+                if self.mtext_editor.as_ref().is_some_and(|e| e.show_preview) {
+                    self.mtext_type(" ");
+                    return Task::none();
+                }
+                return self.update(Message::CommandFinalize);
+            }
             Message::CommandFinalize => {
                 // In the MText preview, Enter inserts a line break.
                 if self.mtext_editor.as_ref().is_some_and(|e| e.show_preview) {
@@ -3580,6 +3589,7 @@ impl OpenCADStudio {
                     ed.sel_anchor = off;
                     ed.sel = Some((off, off));
                     ed.caret = off;
+                    ed.caret_blink_on = true;
                 }
                 Task::none()
             }
@@ -3588,11 +3598,18 @@ impl OpenCADStudio {
                     let a = ed.sel_anchor;
                     ed.sel = Some((a.min(off), a.max(off)));
                     ed.caret = off;
+                    ed.caret_blink_on = true;
                 }
                 Task::none()
             }
             Message::MTextCaretMove(d) => {
                 self.mtext_caret_move(d);
+                Task::none()
+            }
+            Message::MTextCaretBlink => {
+                if let Some(ed) = self.mtext_editor.as_mut() {
+                    ed.caret_blink_on = !ed.caret_blink_on;
+                }
                 Task::none()
             }
             Message::MTextOk => {

@@ -550,6 +550,9 @@ pub enum Message {
     WindowResized(f32, f32),
     /// Enter pressed globally — finalises the active command (no text-input involvement).
     CommandFinalize,
+    /// Space pressed globally — a literal space in the MText preview, otherwise
+    /// finalises like Enter.
+    CommandSpace,
     /// Escape pressed globally — cancels the active command.
     CommandEscape,
     /// Toggle the global snap on/off (OSNAP button body click).
@@ -746,6 +749,8 @@ pub enum Message {
     MTextSelTo(usize),
     /// Move the preview caret by N visible characters.
     MTextCaretMove(i32),
+    /// Timer tick toggling the preview caret's blink phase.
+    MTextCaretBlink,
     /// Commit the editor: create or update the MText entity.
     MTextOk,
     /// Discard the editor without creating / changing the entity.

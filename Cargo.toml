@@ -5,7 +5,7 @@ edition = "2021"
 build = "build.rs"
 
 [dependencies]
-iced = { version = "0.14", features = ["debug", "image", "svg", "advanced", "canvas"] }
+iced = { version = "0.14", features = ["debug", "image", "svg", "advanced", "canvas", "smol"] }
 bytemuck = { version = "1.25", features = ["derive"] }
 glam = { version = "0.33", features = ["bytemuck"] }
 truck-modeling = "0.6"

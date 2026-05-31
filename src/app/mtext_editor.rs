@@ -124,6 +124,9 @@ pub struct MTextEditorState {
     /// Text caret as a visible-character offset (0..=count). Used for typing
     /// directly into the preview.
     pub caret: usize,
+    /// Blink phase — the caret is drawn only when true; reset to true on any
+    /// edit/caret move so it's solid right after activity.
+    pub caret_blink_on: bool,
     /// Canvas-space anchor where the toolbar + text area are drawn (the
     /// insertion-point click position).
     pub screen_anchor: iced::Point,
@@ -150,6 +153,7 @@ impl MTextEditorState {
             sel: None,
             sel_anchor: 0,
             caret: 0,
+            caret_blink_on: true,
             attachment: AttachmentPoint::TopLeft,
             line_spacing: 1.0,
             // Default box ~20 characters wide; overwritten with the entity's
@@ -169,8 +173,10 @@ impl MTextEditorState {
     /// dropdowns and value fields set. Per-selection toggles already live
     /// inside the text.
     pub fn composed_value(&self) -> String {
+        // No trailing-newline strip: a trailing line break is a real empty
+        // line the user typed; keeping it lets the layout emit the caret slot
+        // so the caret shows on the new line right after Enter.
         let body = self.content.text();
-        let body = body.strip_suffix('\n').unwrap_or(&body);
         let mut prefix = String::new();
         if !self.font.trim().is_empty() {
             prefix.push_str(&format!("\\f{};", self.font.trim()));
@@ -224,23 +230,24 @@ fn parse_non_default(s: &str, default: f64) -> Option<f64> {
 /// spaces trimmed per paragraph, inline codes skipped). Lets a preview
 /// selection (visible-char range) be spliced back into the raw value.
 pub fn visible_spans(raw: &str) -> Vec<(usize, usize)> {
-    let is_sp = |c: char| c == ' ' || c == '\u{00A0}';
     let mut result: Vec<(usize, usize)> = Vec::new();
     let mut para: Vec<(usize, usize, char)> = Vec::new();
+    // No leading/trailing-space trim here: the editor's layout keeps those
+    // boxes (want_glyph_boxes), so caret offsets must count every space.
     let flush = |para: &mut Vec<(usize, usize, char)>, result: &mut Vec<(usize, usize)>| {
-        let s = para.iter().position(|t| !is_sp(t.2)).unwrap_or(para.len());
-        let e = para.iter().rposition(|t| !is_sp(t.2)).map(|i| i + 1).unwrap_or(s);
-        for t in &para[s..e] {
+        for t in para.drain(..) {
             result.push((t.0, t.1));
         }
-        para.clear();
     };
     let mut it = raw.char_indices().peekable();
     while let Some((i, ch)) = it.next() {
         match ch {
             '\\' => match it.peek().map(|&(_, c)| c) {
                 Some('P') | Some('n') | Some('N') => {
-                    it.next();
+                    let (j, c) = it.next().unwrap();
+                    // Paragraph break gets a caret slot (matches the layout's
+                    // line-start box), then the paragraph flushes.
+                    para.push((i, j + c.len_utf8(), '\n'));
                     flush(&mut para, &mut result);
                 }
                 Some('~') => {
@@ -267,7 +274,11 @@ pub fn visible_spans(raw: &str) -> Vec<(usize, usize)> {
                 None => {}
             },
             '{' | '}' => { /* group markers — not visible */ }
-            '\n' | '\r' => flush(&mut para, &mut result), // raw line break = paragraph
+            '\n' | '\r' => {
+                // Raw line break = paragraph break with a caret slot.
+                para.push((i, i + ch.len_utf8(), '\n'));
+                flush(&mut para, &mut result);
+            }
             '%' if it.peek().map(|&(_, c)| c) == Some('%') => {
                 it.next(); // second '%'
                 match it.peek().copied() {
@@ -401,7 +412,6 @@ impl super::OpenCADStudio {
             return false;
         }
         let raw = ed.content.text();
-        let raw = raw.strip_suffix('\n').unwrap_or(&raw).to_string();
         let spans = visible_spans(&raw);
         if a >= spans.len() || b > spans.len() {
             return false;
@@ -485,7 +495,7 @@ impl super::OpenCADStudio {
     pub(super) fn mtext_type(&mut self, s: &str) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let raw0 = ed.content.text();
-            let raw = raw0.strip_suffix('\n').unwrap_or(&raw0).to_string();
+            let raw = raw0.clone();
             let spans = visible_spans(&raw);
             let added = visible_spans(s).len();
             let (new_text, new_caret) = match ed.sel {
@@ -505,6 +515,7 @@ impl super::OpenCADStudio {
             ed.content = iced::widget::text_editor::Content::with_text(&new_text);
             ed.caret = new_caret;
             ed.sel = Some((new_caret, new_caret));
+            ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
     }
@@ -513,7 +524,7 @@ impl super::OpenCADStudio {
     pub(super) fn mtext_backspace(&mut self) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let raw0 = ed.content.text();
-            let raw = raw0.strip_suffix('\n').unwrap_or(&raw0).to_string();
+            let raw = raw0.clone();
             let spans = visible_spans(&raw);
             let (new_text, new_caret) = match ed.sel {
                 Some((a, b)) if a < b && a < spans.len() && b <= spans.len() => {
@@ -533,6 +544,7 @@ impl super::OpenCADStudio {
             ed.content = iced::widget::text_editor::Content::with_text(&new_text);
             ed.caret = new_caret;
             ed.sel = Some((new_caret, new_caret));
+            ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
     }
@@ -541,7 +553,7 @@ impl super::OpenCADStudio {
     pub(super) fn mtext_delete(&mut self) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let raw0 = ed.content.text();
-            let raw = raw0.strip_suffix('\n').unwrap_or(&raw0).to_string();
+            let raw = raw0.clone();
             let spans = visible_spans(&raw);
             let (new_text, new_caret) = match ed.sel {
                 Some((a, b)) if a < b && a < spans.len() && b <= spans.len() => {
@@ -561,6 +573,7 @@ impl super::OpenCADStudio {
             ed.content = iced::widget::text_editor::Content::with_text(&new_text);
             ed.caret = new_caret;
             ed.sel = Some((new_caret, new_caret));
+            ed.caret_blink_on = true;
         }
         self.rebuild_mtext_preview();
     }
@@ -569,11 +582,12 @@ impl super::OpenCADStudio {
     pub(super) fn mtext_caret_move(&mut self, delta: i32) {
         if let Some(ed) = self.mtext_editor.as_mut() {
             let raw0 = ed.content.text();
-            let raw = raw0.strip_suffix('\n').unwrap_or(&raw0);
+            let raw = raw0.as_str();
             let n = visible_spans(raw).len() as i32;
             let c = (ed.caret as i32 + delta).clamp(0, n) as usize;
             ed.caret = c;
             ed.sel = Some((c, c));
+            ed.caret_blink_on = true;
         }
     }
 
@@ -583,7 +597,7 @@ impl super::OpenCADStudio {
             .as_ref()
             .map(|ed| {
                 let raw0 = ed.content.text();
-                let raw = raw0.strip_suffix('\n').unwrap_or(&raw0);
+                let raw = raw0.as_str();
                 visible_spans(raw).len()
             })
             .unwrap_or(0)

@@ -998,10 +998,18 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
+        // Blink the MText preview caret while the editor is open.
+        let caret_blink = if self.mtext_editor.is_some() {
+            iced::time::every(std::time::Duration::from_millis(530))
+                .map(|_| Message::MTextCaretBlink)
+        } else {
+            Subscription::none()
+        };
         iced::Subscription::batch([
             frames,
             history_tick,
             grip_dwell,
+            caret_blink,
             event::listen_with(|ev, status, win_id| {
                 use iced::event::Status;
                 match ev {
@@ -1040,8 +1048,15 @@ impl OpenCADStudio {
                             }
                         }
                         match key {
+                            // Space is a literal space inside the MText preview
+                            // but finalises a command otherwise; the handler
+                            // decides based on editor state.
+                            keyboard::Key::Named(keyboard::key::Named::Space)
+                                if status == Status::Ignored =>
+                            {
+                                Some(Message::CommandSpace)
+                            }
                             keyboard::Key::Named(keyboard::key::Named::Enter)
-                            | keyboard::Key::Named(keyboard::key::Named::Space)
                                 if status == Status::Ignored =>
                             {
                                 Some(Message::CommandFinalize)
@@ -1385,6 +1400,8 @@ struct MTextPreview {
     sel: Option<(usize, usize)>,
     /// Caret position as a visible-char offset.
     caret: usize,
+    /// Whether the caret is in its visible blink phase.
+    caret_on: bool,
     /// World-space min corner (bbox) and pixels-per-world-unit scale.
     minx: f32,
     miny: f32,
@@ -1522,7 +1539,9 @@ impl iced::widget::canvas::Program<Message> for MTextPreview {
         }
         // Caret — a vertical bar at the caret's glyph boundary, shown when the
         // selection is empty (a plain text cursor).
-        let collapsed = self.sel.map(|(a, b)| a == b).unwrap_or(true);
+        // Caret is shown only when the selection is empty and the blink is in
+        // its visible phase.
+        let collapsed = self.caret_on && self.sel.map(|(a, b)| a == b).unwrap_or(true);
         if collapsed && self.boxes.is_empty() {
             // Empty text: show a caret at the top-left so the user can type.
             let path = Path::new(|p| {
@@ -1799,6 +1818,7 @@ fn mtext_editor_overlay<'a>(
             boxes: ed.glyph_boxes.clone(),
             sel: ed.sel,
             caret: ed.caret,
+            caret_on: ed.caret_blink_on,
             minx,
             miny,
             scale,
