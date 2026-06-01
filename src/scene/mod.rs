@@ -922,6 +922,35 @@ impl Scene {
         vp.center.x.abs() >= 0.5 || vp.center.y.abs() >= 0.5
     }
 
+    fn current_layout_sheet_viewport_handle(&self) -> Handle {
+        self.document.objects.values().find_map(|obj| {
+            let ObjectType::Layout(layout) = obj else {
+                return None;
+            };
+            if layout.name == self.current_layout {
+                Some(layout.viewport)
+            } else {
+                None
+            }
+        }).unwrap_or(Handle::NULL)
+    }
+
+    fn is_content_viewport_in_layout(
+        &self,
+        vp: &acadrust::entities::Viewport,
+        layout_block: Handle,
+    ) -> bool {
+        if vp.common.owner_handle != layout_block {
+            return false;
+        }
+        let sheet_handle = self.current_layout_sheet_viewport_handle();
+        if sheet_handle.is_valid() {
+            vp.common.handle != sheet_handle
+        } else {
+            Self::is_content_viewport(vp)
+        }
+    }
+
     /// Public accessor for the block-record handle of the current layout.
     /// Used by external callers (e.g. `commit_entity`) that need the handle
     /// without going through private API.
@@ -1081,7 +1110,7 @@ impl Scene {
         }
         self.document.entities().find_map(|e| {
             if let EntityType::Viewport(vp) = e {
-                if Self::is_content_viewport(vp) && vp.common.owner_handle == layout_block {
+                if self.is_content_viewport_in_layout(vp, layout_block) {
                     return Some(vp_effective_scale(
                         vp.custom_scale,
                         vp.view_height,
@@ -1107,7 +1136,7 @@ impl Scene {
             .entities()
             .filter_map(|e| {
                 if let EntityType::Viewport(vp) = e {
-                    if Self::is_content_viewport(vp) && vp.common.owner_handle == layout_block {
+                    if self.is_content_viewport_in_layout(vp, layout_block) {
                         Some((vp.common.handle, vp.id, vp.frozen_layers.clone()))
                     } else {
                         None
@@ -1145,7 +1174,7 @@ impl Scene {
             .entities()
             .filter(|e| {
                 if let EntityType::Viewport(vp) = e {
-                    Self::is_content_viewport(vp) && vp.common.owner_handle == layout_block
+                    self.is_content_viewport_in_layout(vp, layout_block)
                 } else {
                     false
                 }
@@ -1173,7 +1202,7 @@ impl Scene {
         }
         self.document.entities().find_map(|e| {
             if let EntityType::Viewport(vp) = e {
-                if Self::is_content_viewport(vp) && vp.common.owner_handle == layout_block {
+                if self.is_content_viewport_in_layout(vp, layout_block) {
                     return Some(vp.common.handle);
                 }
             }
@@ -2187,8 +2216,7 @@ impl Scene {
                 }
             })
             .filter(|vp| {
-                Self::is_content_viewport(vp)
-                    && vp.common.owner_handle == paper_block
+                self.is_content_viewport_in_layout(vp, paper_block)
                     && vp.status.is_on
                     && only_vp.map_or(true, |h| vp.common.handle == h)
                     && exclude_vp.map_or(true, |h| vp.common.handle != h)
@@ -2668,8 +2696,7 @@ impl Scene {
             let EntityType::Viewport(vp) = e else {
                 return None;
             };
-            if !Self::is_content_viewport(vp)
-                || vp.common.owner_handle != layout_block
+            if !self.is_content_viewport_in_layout(vp, layout_block)
                 || !vp.status.is_on
             {
                 return None;
@@ -2694,8 +2721,7 @@ impl Scene {
             let EntityType::Viewport(vp) = e else {
                 return None;
             };
-            if Self::is_content_viewport(vp)
-                && vp.common.owner_handle == layout_block
+            if self.is_content_viewport_in_layout(vp, layout_block)
                 && vp.status.is_on
             {
                 Some(vp.common.handle)
@@ -4690,66 +4716,49 @@ impl Scene {
         }
     }
 
-    /// Restore `model_tiles` from `*OCS_Tile_*` VPort entries that a previous
-    /// save left in the document. Returns true on success — the caller skips
-    /// `apply_active_vport_camera` in that case because the active tile's
-    /// camera has already been loaded into `self.camera`.
+    /// Restore `model_tiles` from VPort entries that a previous save left in
+    /// the document. Native AutoCAD tiled model-space layouts are represented
+    /// by duplicate `*Active` VPort entries.
+    /// Returns true on success — the caller skips `apply_active_vport_camera`
+    /// in that case because the active tile's camera has already been loaded
+    /// into `self.camera`.
     fn restore_model_tiles_from_vports(&mut self) -> bool {
-        let mut indexed: Vec<(usize, acadrust::tables::VPort)> = self
+        let active_vports: Vec<acadrust::tables::VPort> = self
             .document
             .vports
             .iter()
-            .filter_map(|v| {
-                let idx: usize = v
-                    .name
-                    .strip_prefix("*OCS_Tile_")
-                    .and_then(|s| s.parse().ok())?;
-                Some((idx, v.clone()))
-            })
+            .filter(|v| v.name == "*Active")
+            .cloned()
             .collect();
-        if indexed.len() < 2 {
+
+        if active_vports.len() <= 1 {
             return false;
         }
-        indexed.sort_by_key(|(i, _)| *i);
-        let mut tiles = Vec::with_capacity(indexed.len());
-        for (_, vp) in &indexed {
-            let Some(cam) = self.camera_from_vport(vp) else {
-                return false;
-            };
-            tiles.push(ModelTile {
-                rect: Self::vport_to_tile_rect(vp.lower_left, vp.upper_right),
-                camera: cam,
-            });
-        }
-        // Active tile = the one whose stored camera fields match `*Active`.
-        // The save path writes `*Active` to mirror the active tile's view, so
-        // this matches by view_target (the most discriminating field).
-        let active_idx = self
-            .document
-            .vports
+
+        let tiles: Vec<ModelTile> = active_vports
             .iter()
-            .find(|v| v.name == "*Active")
-            .and_then(|act| {
-                indexed.iter().position(|(_, vp)| {
-                    let dx = vp.view_target.x - act.view_target.x;
-                    let dy = vp.view_target.y - act.view_target.y;
-                    let dz = vp.view_target.z - act.view_target.z;
-                    dx * dx + dy * dy + dz * dz < 1e-12
+            .filter_map(|vp| {
+                self.camera_from_vport(vp).map(|cam| ModelTile {
+                    rect: Self::vport_to_tile_rect(vp.lower_left, vp.upper_right),
+                    camera: cam,
                 })
             })
-            .unwrap_or(0);
-        let active_cam = tiles[active_idx].camera.clone();
+            .collect();
+
+        if tiles.len() <= 1 {
+            return false;
+        }
+
+        let active_cam = tiles[0].camera.clone();
         *self.model_tiles.borrow_mut() = tiles;
-        self.active_model_tile.set(active_idx);
+        self.active_model_tile.set(0);
         *self.camera.borrow_mut() = active_cam;
         self.camera_generation += 1;
         true
     }
 
-    /// Persist `model_tiles` to the VPort table. The active tile is also
-    /// mirrored to `*Active` (already written by `sync_camera_to_document`);
-    /// every tile (including a single full-screen one) is written as a
-    /// `*OCS_Tile_<i>` entry so the layout survives roundtrip.
+    /// Persist `model_tiles` to the VPort table. Native AutoCAD tiled model
+    /// viewports are written as duplicate `*Active` entries.
     fn save_model_tiles_to_vports(&mut self) {
         // Stash the live camera into the active tile so the about-to-write
         // snapshot reflects the user's most recent orbit / pan / zoom.
@@ -4761,29 +4770,40 @@ impl Scene {
                 t.camera = live_cam;
             }
         }
-        // Remove every previous tile entry — names are reassigned by index.
-        let to_remove: Vec<String> = self
+
+        let table_handle = self.document.vports.handle();
+        let preserved_vps: Vec<acadrust::tables::VPort> = self
             .document
             .vports
             .iter()
-            .filter(|v| v.name.starts_with("*OCS_Tile_"))
-            .map(|v| v.name.clone())
+            .filter(|v| v.name != "*Active")
+            .cloned()
             .collect();
-        for name in to_remove {
-            self.document.vports.remove(&name);
+        let mut new_vports = acadrust::tables::Table::with_handle(table_handle);
+        for vp in preserved_vps {
+            new_vports.add_or_replace(vp);
         }
-        // Skip writing tile entries for the trivial single-tile config —
-        // `*Active` alone is enough and keeps the file noise-free.
+        self.document.vports = new_vports;
+
         let tiles = self.model_tiles.borrow().clone();
-        if tiles.len() <= 1 {
+        if tiles.is_empty() {
             return;
         }
+
+        let active = self.active_model_tile.get().min(tiles.len().saturating_sub(1));
+        let mut ordered_tiles = Vec::with_capacity(tiles.len());
+        ordered_tiles.push(tiles[active].clone());
         for (i, tile) in tiles.iter().enumerate() {
+            if i != active {
+                ordered_tiles.push(tile.clone());
+            }
+        }
+
+        for tile in ordered_tiles {
             let (ll, ur) = Self::tile_rect_to_vport(tile.rect);
-            let name = format!("*OCS_Tile_{i}");
-            let mut entry = self.vport_from_camera(&name, &tile.camera, ll, ur);
+            let mut entry = self.vport_from_camera("*Active", &tile.camera, ll, ur);
             entry.handle = self.document.allocate_handle();
-            self.document.vports.add_or_replace(entry);
+            self.document.vports.add_allow_duplicate(entry);
         }
     }
 
@@ -4817,7 +4837,7 @@ impl Scene {
                     None
                 }
             })
-            .find(|vp| vp.common.owner_handle == layout_block && !Self::is_content_viewport(vp));
+.find(|vp| !self.is_content_viewport_in_layout(vp, layout_block));
 
         let vp = match sheet_vp {
             Some(v) => v,
@@ -4906,9 +4926,7 @@ impl Scene {
                 vp.view_height = view_height as f64;
             }
 
-            // Persist the tiled layout (multiple `*OCS_Tile_<i>` entries) so
-            // the panel split survives save→reopen. Single-tile configs skip
-            // this — `*Active` alone is enough.
+            // Persist the tiled layout as duplicate `*Active` VPort entries.
             self.save_model_tiles_to_vports();
 
             // Also write to View table — survives DWG save without override.
@@ -4936,7 +4954,7 @@ impl Scene {
                         }
                     })
                     .find(|vp| {
-                        vp.common.owner_handle == layout_block && !Self::is_content_viewport(vp)
+                        vp.common.owner_handle == layout_block && !self.is_content_viewport_in_layout(vp, layout_block)
                     })
                     .map(|vp| vp.common.handle);
 
@@ -5610,8 +5628,7 @@ impl Scene {
             let EntityType::Viewport(vp) = e else {
                 continue;
             };
-            if !Self::is_content_viewport(vp)
-                || vp.common.owner_handle != layout_block
+            if !self.is_content_viewport_in_layout(vp, layout_block)
                 || !vp.status.is_on
             {
                 continue;
@@ -6995,4 +7012,3 @@ fn is_unindexable_entity(e: &acadrust::EntityType) -> bool {
         E::Insert(_) | E::Viewport(_) | E::Block(_) | E::BlockEnd(_)
     )
 }
-
