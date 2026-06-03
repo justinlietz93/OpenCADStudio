@@ -235,6 +235,12 @@ impl OpenCADStudio {
                 .map(|s| s.name.clone())
                 .collect();
             let doc = &tab.scene.document;
+            // Dropdown options (names must match the records exactly so the
+            // selection can be resolved back to a handle on the update side).
+            let mut block_opts: Vec<String> = vec!["Default".to_string()];
+            block_opts.extend(doc.block_records.iter().map(|b| b.name.clone()));
+            let mut lt_opts: Vec<String> = vec!["ByBlock".to_string()];
+            lt_opts.extend(doc.line_types.iter().map(|lt| lt.name.clone()));
             let blk_name = |h: acadrust::types::Handle| -> String {
                 if h.is_null() {
                     "Default".to_string()
@@ -242,8 +248,8 @@ impl OpenCADStudio {
                     doc.block_records
                         .iter()
                         .find(|b| b.handle == h)
-                        .map(|b| b.name.trim_start_matches('_').to_string())
-                        .unwrap_or_else(|| "?".to_string())
+                        .map(|b| b.name.clone())
+                        .unwrap_or_else(|| "Default".to_string())
                 }
             };
             let lt_name = |h: acadrust::types::Handle| -> String {
@@ -254,7 +260,7 @@ impl OpenCADStudio {
                         .iter()
                         .find(|lt| lt.handle == h)
                         .map(|lt| lt.name.clone())
-                        .unwrap_or_else(|| "?".to_string())
+                        .unwrap_or_else(|| "ByBlock".to_string())
                 }
             };
             let ds_sel = doc.dim_styles.get(&self.dimstyle_selected);
@@ -359,6 +365,8 @@ impl OpenCADStudio {
                     dimltex_name,
                     dimltex1_name,
                     dimltex2_name,
+                    block_opts,
+                    lt_opts,
                 },
             );
         }

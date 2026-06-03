@@ -1,7 +1,9 @@
 //! Table Style Manager window — fills the entire OS window.
 
 use crate::app::Message;
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{
+    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+};
 use iced::{Background, Border, Color, Element, Fill, Theme};
 
 const TB: Color = Color {
@@ -241,11 +243,26 @@ pub fn view_window<'a>(
             cell_in("  Fill color (ACI):", "256", &cell_fillcolor[r], "fillcolor"),
             row![
                 text("  Alignment:").size(11).color(DIM).width(150),
-                text(format!("{:?}", rs.alignment)).size(11).width(120),
-                button(text("Cycle").size(10))
-                    .on_press(Message::TableStyleCellCycleAlign(row))
-                    .style(btn_s(false))
-                    .padding([2, 8]),
+                pick_list(
+                    [
+                        "TopLeft",
+                        "TopCenter",
+                        "TopRight",
+                        "MiddleLeft",
+                        "MiddleCenter",
+                        "MiddleRight",
+                        "BottomLeft",
+                        "BottomCenter",
+                        "BottomRight",
+                    ]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
+                    Some(format!("{:?}", rs.alignment)),
+                    move |value| Message::TableStyleCellSetAlign { row, value },
+                )
+                .text_size(11)
+                .width(140),
             ]
             .spacing(8)
             .align_y(iced::Center),

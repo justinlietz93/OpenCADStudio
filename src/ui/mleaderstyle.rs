@@ -1,7 +1,9 @@
 //! Multileader Style Manager window — fills the entire OS window.
 
 use crate::app::Message;
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{
+    button, checkbox, column, container, pick_list, row, scrollable, text, text_input, Space,
+};
 use iced::{Background, Border, Color, Element, Fill, Theme};
 
 const TB: Color = Color {
@@ -169,16 +171,17 @@ fn num_row<'a>(
 
 fn enum_row<'a>(
     label: &'static str,
-    val: String,
+    options: Vec<String>,
+    selected: String,
     field: &'static str,
 ) -> Element<'a, Message> {
     row![
         text(label).size(11).color(DIM).width(150),
-        text(val).size(11).width(150),
-        button(text("Cycle").size(10))
-            .on_press(Message::MLeaderStyleCycle(field))
-            .style(btn_s(false))
-            .padding([2, 8]),
+        pick_list(options, Some(selected), move |value| {
+            Message::MLeaderStyleSetEnum { field, value }
+        })
+        .text_size(11)
+        .width(190),
     ]
     .spacing(8)
     .align_y(iced::Center)
@@ -276,7 +279,15 @@ pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
                 .spacing(8),
                 // Leader Format
                 section("Leader Format"),
-                enum_row("Path type:", format!("{:?}", s.path_type), "path_type"),
+                enum_row(
+                    "Path type:",
+                    ["Invisible", "StraightLineSegments", "Spline"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    format!("{:?}", s.path_type),
+                    "path_type"
+                ),
                 num_row("Line color (ACI):", "256", v.line_color, "line_color"),
                 num_row("Arrowhead size:", "0.18", v.arrowhead_size, "arrowhead_size"),
                 num_row("Break gap size:", "0.125", v.break_gap, "break_gap"),
@@ -293,17 +304,33 @@ pub fn view_window<'a>(v: MLeaderStyleView<'a>) -> Element<'a, Message> {
                 chk("Annotative", s.is_annotative, "annotative"),
                 // Content
                 section("Content"),
-                enum_row("Content type:", format!("{:?}", s.content_type), "content_type"),
+                enum_row(
+                    "Content type:",
+                    ["None", "Block", "MText", "Tolerance"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
+                    format!("{:?}", s.content_type),
+                    "content_type"
+                ),
                 num_row("Default text:", "", v.default_text, "default_text"),
                 num_row("Text height:", "0.18", v.text_height, "text_height"),
                 num_row("Text color (ACI):", "256", v.text_color, "text_color"),
                 enum_row(
                     "Text angle:",
+                    ["ParallelToLastLeaderLine", "Horizontal", "Optimized"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     format!("{:?}", s.text_angle_type),
                     "text_angle_type"
                 ),
                 enum_row(
                     "Text alignment:",
+                    ["Left", "Center", "Right"]
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect(),
                     format!("{:?}", s.text_alignment),
                     "text_alignment"
                 ),

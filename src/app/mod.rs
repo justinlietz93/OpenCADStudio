@@ -1026,8 +1026,11 @@ pub enum Message {
     },
     /// Toggle background fill on a cell style.
     TableStyleCellToggleFill(u8),
-    /// Cycle the alignment of a cell style.
-    TableStyleCellCycleAlign(u8),
+    /// Set the alignment of a cell style from the dropdown.
+    TableStyleCellSetAlign {
+        row: u8,
+        value: String,
+    },
     /// Write a cell's edit buffers back into the selected table style.
     TableStyleCellApply(u8),
     // ── MLineStyle Dialog ─────────────────────────────────────────────────
@@ -1051,7 +1054,10 @@ pub enum Message {
         value: String,
     },
     MLeaderStyleToggle(&'static str),
-    MLeaderStyleCycle(&'static str),
+    MLeaderStyleSetEnum {
+        field: &'static str,
+        value: String,
+    },
     MLeaderStyleApply,
     // ── DimStyle Dialog ───────────────────────────────────────────────────
     DimStyleDialogOpen,
@@ -1071,9 +1077,12 @@ pub enum Message {
     // Field edit messages:
     DsEdit(DsField, String),
     DsToggle(DsField),
-    /// Cycle a block/linetype Handle field on the selected dim style to the
-    /// next available block-record / linetype.
-    DsCycleHandle(&'static str),
+    /// Set a block/linetype Handle field on the selected dim style from a
+    /// dropdown of available block-records / linetypes (by name).
+    DsSetHandle {
+        field: &'static str,
+        value: String,
+    },
     // ── Raster Image ──────────────────────────────────────────────────────
     /// Open file-picker dialog for IMAGE command (async).
     ImagePick,

@@ -5810,21 +5810,21 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::TableStyleCellCycleAlign(row) => {
+            Message::TableStyleCellSetAlign { row, value } => {
                 use acadrust::objects::CellAlignment;
                 let i = self.active_tab;
                 if let Some(s) = self.tablestyle_mut(i) {
                     if let Some(c) = Self::ts_cell_of(s, row) {
-                        c.alignment = match c.alignment {
-                            CellAlignment::TopLeft => CellAlignment::TopCenter,
-                            CellAlignment::TopCenter => CellAlignment::TopRight,
-                            CellAlignment::TopRight => CellAlignment::MiddleLeft,
-                            CellAlignment::MiddleLeft => CellAlignment::MiddleCenter,
-                            CellAlignment::MiddleCenter => CellAlignment::MiddleRight,
-                            CellAlignment::MiddleRight => CellAlignment::BottomLeft,
-                            CellAlignment::BottomLeft => CellAlignment::BottomCenter,
-                            CellAlignment::BottomCenter => CellAlignment::BottomRight,
-                            CellAlignment::BottomRight => CellAlignment::TopLeft,
+                        c.alignment = match value.as_str() {
+                            "TopLeft" => CellAlignment::TopLeft,
+                            "TopCenter" => CellAlignment::TopCenter,
+                            "TopRight" => CellAlignment::TopRight,
+                            "MiddleLeft" => CellAlignment::MiddleLeft,
+                            "MiddleRight" => CellAlignment::MiddleRight,
+                            "BottomLeft" => CellAlignment::BottomLeft,
+                            "BottomCenter" => CellAlignment::BottomCenter,
+                            "BottomRight" => CellAlignment::BottomRight,
+                            _ => CellAlignment::MiddleCenter,
                         };
                     }
                     self.push_undo_snapshot(i, "TABLESTYLE EDIT");
@@ -6298,7 +6298,7 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
-            Message::MLeaderStyleCycle(field) => {
+            Message::MLeaderStyleSetEnum { field, value } => {
                 use acadrust::objects::{
                     LeaderContentType, MultiLeaderPathType, TextAlignmentType, TextAngleType,
                 };
@@ -6306,38 +6306,34 @@ impl OpenCADStudio {
                 if let Some(s) = self.mleaderstyle_mut(i) {
                     match field {
                         "path_type" => {
-                            s.path_type = match s.path_type {
-                                MultiLeaderPathType::Invisible => {
-                                    MultiLeaderPathType::StraightLineSegments
-                                }
-                                MultiLeaderPathType::StraightLineSegments => {
-                                    MultiLeaderPathType::Spline
-                                }
-                                MultiLeaderPathType::Spline => MultiLeaderPathType::Invisible,
+                            s.path_type = match value.as_str() {
+                                "Invisible" => MultiLeaderPathType::Invisible,
+                                "Spline" => MultiLeaderPathType::Spline,
+                                _ => MultiLeaderPathType::StraightLineSegments,
                             };
                         }
                         "content_type" => {
-                            s.content_type = match s.content_type {
-                                LeaderContentType::None => LeaderContentType::Block,
-                                LeaderContentType::Block => LeaderContentType::MText,
-                                LeaderContentType::MText => LeaderContentType::Tolerance,
-                                LeaderContentType::Tolerance => LeaderContentType::None,
+                            s.content_type = match value.as_str() {
+                                "None" => LeaderContentType::None,
+                                "Block" => LeaderContentType::Block,
+                                "Tolerance" => LeaderContentType::Tolerance,
+                                _ => LeaderContentType::MText,
                             };
                         }
                         "text_angle_type" => {
-                            s.text_angle_type = match s.text_angle_type {
-                                TextAngleType::ParallelToLastLeaderLine => TextAngleType::Horizontal,
-                                TextAngleType::Horizontal => TextAngleType::Optimized,
-                                TextAngleType::Optimized => {
+                            s.text_angle_type = match value.as_str() {
+                                "ParallelToLastLeaderLine" => {
                                     TextAngleType::ParallelToLastLeaderLine
                                 }
+                                "Optimized" => TextAngleType::Optimized,
+                                _ => TextAngleType::Horizontal,
                             };
                         }
                         "text_alignment" => {
-                            s.text_alignment = match s.text_alignment {
-                                TextAlignmentType::Left => TextAlignmentType::Center,
-                                TextAlignmentType::Center => TextAlignmentType::Right,
-                                TextAlignmentType::Right => TextAlignmentType::Left,
+                            s.text_alignment = match value.as_str() {
+                                "Center" => TextAlignmentType::Center,
+                                "Right" => TextAlignmentType::Right,
+                                _ => TextAlignmentType::Left,
                             };
                         }
                         _ => {}
@@ -6534,7 +6530,7 @@ impl OpenCADStudio {
                 self.apply_ds_toggle(field);
                 Task::none()
             }
-            Message::DsCycleHandle(field) => {
+            Message::DsSetHandle { field, value } => {
                 let i = self.active_tab;
                 let name = self.dimstyle_selected.clone();
                 let is_lt = matches!(
@@ -6542,38 +6538,31 @@ impl OpenCADStudio {
                     "dimltex_handle" | "dimltex1_handle" | "dimltex2_handle"
                 );
                 let doc = &self.tabs[i].scene.document;
-                let mut candidates: Vec<acadrust::types::Handle> =
-                    vec![acadrust::types::Handle::NULL];
-                if is_lt {
-                    candidates.extend(doc.line_types.iter().map(|lt| lt.handle));
+                let handle = if value == "Default" || value == "ByBlock" {
+                    acadrust::types::Handle::NULL
+                } else if is_lt {
+                    doc.line_types
+                        .iter()
+                        .find(|lt| lt.name == value)
+                        .map(|lt| lt.handle)
+                        .unwrap_or(acadrust::types::Handle::NULL)
                 } else {
-                    candidates.extend(doc.block_records.iter().map(|b| b.handle));
-                }
-                let Some(ds) = doc.dim_styles.get(&name) else {
-                    return Task::none();
+                    doc.block_records
+                        .iter()
+                        .find(|b| b.name == value)
+                        .map(|b| b.handle)
+                        .unwrap_or(acadrust::types::Handle::NULL)
                 };
-                let cur = match field {
-                    "dimblk" => ds.dimblk,
-                    "dimblk1" => ds.dimblk1,
-                    "dimblk2" => ds.dimblk2,
-                    "dimldrblk" => ds.dimldrblk,
-                    "dimltex_handle" => ds.dimltex_handle,
-                    "dimltex1_handle" => ds.dimltex1_handle,
-                    "dimltex2_handle" => ds.dimltex2_handle,
-                    _ => return Task::none(),
-                };
-                let idx = candidates.iter().position(|h| *h == cur).unwrap_or(0);
-                let next = candidates[(idx + 1) % candidates.len()];
                 self.push_undo_snapshot(i, "DIMSTYLE EDIT");
                 if let Some(ds) = self.tabs[i].scene.document.dim_styles.get_mut(&name) {
                     match field {
-                        "dimblk" => ds.dimblk = next,
-                        "dimblk1" => ds.dimblk1 = next,
-                        "dimblk2" => ds.dimblk2 = next,
-                        "dimldrblk" => ds.dimldrblk = next,
-                        "dimltex_handle" => ds.dimltex_handle = next,
-                        "dimltex1_handle" => ds.dimltex1_handle = next,
-                        "dimltex2_handle" => ds.dimltex2_handle = next,
+                        "dimblk" => ds.dimblk = handle,
+                        "dimblk1" => ds.dimblk1 = handle,
+                        "dimblk2" => ds.dimblk2 = handle,
+                        "dimldrblk" => ds.dimldrblk = handle,
+                        "dimltex_handle" => ds.dimltex_handle = handle,
+                        "dimltex1_handle" => ds.dimltex1_handle = handle,
+                        "dimltex2_handle" => ds.dimltex2_handle = handle,
                         _ => {}
                     }
                 }
