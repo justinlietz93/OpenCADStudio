@@ -1283,6 +1283,19 @@ impl OpenCADStudio {
                 // A hot grip (click-move-click placement in progress) ends on
                 // Escape, leaving the entity at its last previewed position.
                 if self.tabs[self.active_tab].active_grip.take().is_some() {
+                    // An Add-Leader arrow being placed: Esc removes it again.
+                    if let Some((h, gid)) = self.grip_add_provisional.take() {
+                        let i = self.active_tab;
+                        use crate::entities::traits::EntityTypeOps;
+                        if let Some(e) = self.tabs[i].scene.document.get_entity_mut(h) {
+                            e.apply_grip_menu(
+                                gid,
+                                crate::scene::object::GripMenuAction::RemoveLeader,
+                            );
+                        }
+                        self.tabs[i].scene.bump_geometry();
+                        self.refresh_selected_grips();
+                    }
                     self.tabs[self.active_tab].snap_result = None;
                     self.refresh_properties();
                     return Task::none();
@@ -2516,6 +2529,8 @@ impl OpenCADStudio {
                         return Task::none();
                     }
                     self.tabs[i].active_grip = None;
+                    // Placement confirmed — keep the just-added leader.
+                    self.grip_add_provisional = None;
                     self.tabs[i].snap_result = None;
                     self.refresh_properties();
                     return Task::none();
@@ -3310,20 +3325,33 @@ impl OpenCADStudio {
                 };
                 use crate::entities::traits::EntityTypeOps;
                 use crate::scene::object::GripMenuAction;
-                if matches!(item.action, GripMenuAction::Stretch) {
-                    // Stretch = move this grip. Engage it so the next click
-                    // places it (click-move-click) — same as picking the grip
-                    // directly in the viewport. Without this the menu just
+                if matches!(
+                    item.action,
+                    GripMenuAction::Stretch
+                        | GripMenuAction::MoveWithLeader
+                        | GripMenuAction::MoveIndependent
+                ) {
+                    // Stretch / Move = grab this grip. Engage it so the next
+                    // click places it (click-move-click) — same as picking the
+                    // grip directly in the viewport. Without this the menu just
                     // closed and the grip never became hot (issue #48).
                     if let Some(g) = self.tabs[i]
                         .selected_grips
                         .iter()
                         .find(|g| g.id == popup.grip_id)
                     {
+                        // "Move with Leader" drags the whole multileader; the
+                        // others move just the picked grip.
+                        let (grip_id, is_translate) =
+                            if matches!(item.action, GripMenuAction::MoveWithLeader) {
+                                (crate::entities::multileader::MOVE_ALL_GRIP, true)
+                            } else {
+                                (popup.grip_id, g.is_midpoint)
+                            };
                         self.tabs[i].active_grip = Some(GripEdit {
                             handle: popup.handle,
-                            grip_id: popup.grip_id,
-                            is_translate: g.is_midpoint,
+                            grip_id,
+                            is_translate,
                             origin_world: g.world,
                             last_world: g.world,
                         });
@@ -3351,6 +3379,27 @@ impl OpenCADStudio {
                 }
                 // One-shot action — apply immediately.
                 self.push_undo_snapshot(i, item.label);
+                // For Add Leader, the new arrow becomes the last grip; remember
+                // its id so we can grab it for placement right after.
+                let add_leader_gid = if matches!(item.action, GripMenuAction::AddLeader) {
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(popup.handle)
+                        .and_then(|e| match e {
+                            acadrust::EntityType::MultiLeader(ml) => Some(
+                                ml.context
+                                    .leader_roots
+                                    .iter()
+                                    .flat_map(|r| r.lines.iter())
+                                    .map(|l| l.points.len())
+                                    .sum::<usize>(),
+                            ),
+                            _ => None,
+                        })
+                } else {
+                    None
+                };
                 if let Some(entity) = self
                     .tabs[i]
                     .scene
@@ -3363,6 +3412,22 @@ impl OpenCADStudio {
                 self.tabs[i].dirty = true;
                 self.refresh_selected_grips();
                 self.refresh_properties();
+                // Grab the new arrow so it follows the cursor (click places it,
+                // Esc removes it).
+                if let Some(new_gid) = add_leader_gid {
+                    if let Some(g) =
+                        self.tabs[i].selected_grips.iter().find(|g| g.id == new_gid)
+                    {
+                        self.tabs[i].active_grip = Some(GripEdit {
+                            handle: popup.handle,
+                            grip_id: new_gid,
+                            is_translate: false,
+                            origin_world: g.world,
+                            last_world: g.world,
+                        });
+                        self.grip_add_provisional = Some((popup.handle, new_gid));
+                    }
+                }
                 Task::none()
             }
 

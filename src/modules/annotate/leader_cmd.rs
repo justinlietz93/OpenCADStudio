@@ -1,6 +1,6 @@
 // LEADER command
 //
-// Flow (matching the classic AutoCAD LEADER):
+// Flow:
 //   1. Click the arrowhead point, then one or more bend points.
 //   2. Enter (≥2 points) places the leader line plus a linked, empty MText
 //      annotation at the landing, and opens the in-place MText editor so the
@@ -132,7 +132,7 @@ fn build_mtext(text: &str, pos: Vec3, height: f64, attach: AttachmentPoint) -> M
 fn preview_wire(pts: &[Vec3]) -> WireModel {
     let mut points: Vec<[f32; 3]> = pts.iter().map(|p| [p.x, p.y, p.z]).collect();
     if pts.len() >= 2 {
-        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.0);
+        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.5);
         points.push([f32::NAN; 3]);
         points.push([w1.x, w1.y, w1.z]);
         points.push([pts[0].x, pts[0].y, pts[0].z]);

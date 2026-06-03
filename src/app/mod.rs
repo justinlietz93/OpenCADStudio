@@ -205,6 +205,10 @@ pub(super) struct OpenCADStudio {
     /// until dismissed (click outside, ESC, cursor leaves the grip).
     grip_popup: Option<GripPopup>,
     grip_pending: Option<GripPendingValue>,
+    /// A leader line just added via the "Add Leader" grip menu whose arrow is
+    /// being placed (follows the cursor). `(entity handle, new-arrow grip id)`.
+    /// Esc before the placement click removes it again.
+    grip_add_provisional: Option<(acadrust::Handle, usize)>,
     /// Open Quick Select panel state. `None` = panel closed. Filters are
     /// applied via `Message::QSelectApply`; the panel is dismissed on
     /// Apply / Cancel / Esc / outside-click.
@@ -980,6 +984,7 @@ impl OpenCADStudio {
             grip_hover: None,
             grip_popup: None,
             grip_pending: None,
+            grip_add_provisional: None,
             qselect: None,
             show_ucs_icon: true,
             show_viewcube: true,

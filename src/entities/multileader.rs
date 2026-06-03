@@ -1,9 +1,9 @@
 use acadrust::entities::{
-    LeaderContentType, MultiLeader, MultiLeaderPathType, TextAttachmentPointType, TextAttachmentType,
+    LeaderContentType, MultiLeader, MultiLeaderPathType, TextAttachmentType,
 };
 
 use crate::entities::text_support::{
-    layout_mtext, resolve_text_style, MTextRenderOpts, MTextVAnchor,
+    layout_mtext, resolve_text_style, MTextRenderOpts, MTextVAnchor, ResolvedTextStyle,
 };
 
 /// Map MLEADER's vertical attachment enum onto the shared `MTextVAnchor`
@@ -29,7 +29,9 @@ pub(crate) fn mleader_v_anchor(attach: TextAttachmentType) -> MTextVAnchor {
 use glam::Vec3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{center_grip, edit_prop as edit, ro_prop as ro, square_grip};
+use crate::entities::common::{
+    center_grip, edit_prop as edit, ro_prop as ro, square_grip, triangle_grip,
+};
 use crate::entities::traits::{TruckConvertible};
 use crate::scene::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::object::{GripApply, GripDef, PropSection, PropValue, Property};
@@ -88,6 +90,81 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
         )
     };
 
+    // Text-side geometry, recomputed every frame so dragging the arrow or the
+    // text re-mirrors the whole layout. The text block is centred on its grip
+    // (text_location); the landing meets the text's near edge and the leader
+    // line ends one dogleg before that.
+    let text_loc = ml.context.text_location;
+    let leader_ref = ml
+        .context
+        .leader_roots
+        .first()
+        .and_then(|r| r.lines.first())
+        .and_then(|l| l.points.last())
+        .copied()
+        .or_else(|| ml.context.leader_roots.first().map(|r| r.connection_point))
+        .unwrap_or(text_loc);
+    let text_sign: f64 = if text_loc.x >= leader_ref.x { 1.0 } else { -1.0 };
+
+    // Lay the text out once, up front: its width fixes where the landing meets
+    // the text. The same layout is reused below to emit the glyph strokes.
+    let text_layout = if ml.content_type == LeaderContentType::MText
+        && !ml.context.text_string.is_empty()
+    {
+        let ctx = &ml.context;
+        let height = if ctx.text_height > 0.0 {
+            ctx.text_height as f32
+        } else {
+            ml.text_height as f32 * ml.scale_factor as f32
+        };
+        let td = ctx.text_direction;
+        let mut rot = if td.x.abs() > 1e-9 || td.y.abs() > 1e-9 {
+            (td.y as f32).atan2(td.x as f32)
+        } else {
+            ctx.text_rotation as f32
+        };
+        let style_name = ctx
+            .text_style_handle
+            .as_ref()
+            .and_then(|h| {
+                document
+                    .text_styles
+                    .iter()
+                    .find(|s| s.handle == *h)
+                    .map(|s| s.name.clone())
+            })
+            .unwrap_or_else(|| "STANDARD".to_string());
+        let resolved = resolve_text_style(&style_name, document);
+        if resolved.is_upside_down {
+            rot += std::f32::consts::PI;
+        }
+        Some(layout_mtext(&MTextRenderOpts {
+            value: &ctx.text_string,
+            insertion: [text_loc.x, text_loc.y, text_loc.z],
+            height,
+            rect_w: ctx.text_width as f32,
+            rotation: rot,
+            style: &resolved,
+            // Side-anchored on the leader-facing edge so the text reads
+            // outward; flips live with the leader/text side.
+            attach_h_anchor: if text_sign >= 0.0 { 0.0 } else { 1.0 },
+            v_anchor: mleader_v_anchor(ctx.text_left_attachment),
+            line_spacing_factor: ctx.line_spacing_factor as f32,
+            vertical_text: false,
+            want_glyph_boxes: false,
+        }))
+    } else {
+        None
+    };
+    let dogleg = if ml.enable_landing && ml.enable_dogleg {
+        ml.dogleg_length.max(0.0)
+    } else {
+        0.0
+    };
+    // text_location is the leader-facing (near) edge; the landing runs one
+    // dogleg from there back toward the leader.
+    let landing_pt = [text_loc.x - text_sign * dogleg, text_loc.y, text_loc.z];
+
     for root in &ml.context.leader_roots {
         let cp = &root.connection_point;
         let cp_f = p3(cp);
@@ -104,12 +181,13 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
                 }
                 first = false;
 
-                // Build the full control-point list: line.points + connection_point
+                // Build the full control-point list: line.points + landing point
                 let mut ctrl: Vec<[f64; 3]> = line.points.iter().map(|p| p3(p)).collect();
-                let last_f = *ctrl.last().unwrap_or(&cp_f);
-                let dist = ((last_f[0] - cp_f[0]).powi(2) + (last_f[1] - cp_f[1]).powi(2)).sqrt();
+                let last_f = *ctrl.last().unwrap_or(&landing_pt);
+                let dist =
+                    ((last_f[0] - landing_pt[0]).powi(2) + (last_f[1] - landing_pt[1]).powi(2)).sqrt();
                 if dist > 1e-9 {
-                    ctrl.push(cp_f);
+                    ctrl.push(landing_pt);
                 }
                 for &c in &ctrl {
                     key_verts.push(c);
@@ -168,97 +246,18 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
             }
         }
 
-        // Landing shelf at connection_point
-        if ml.enable_landing && ml.enable_dogleg && ml.dogleg_length > 0.0 {
-            let dir = &root.direction;
-            let dl = (dir.x * dir.x + dir.y * dir.y).sqrt().max(1e-9);
-            let d = ml.dogleg_length;
+        // Horizontal landing from the leader end to the text's near edge.
+        if dogleg > 0.0 {
             points.push(nan);
-            points.push(cp_f);
-            points.push([cp.x + dir.x / dl * d, cp.y + dir.y / dl * d, cp.z]);
+            points.push(landing_pt);
+            points.push([text_loc.x, text_loc.y, text_loc.z]);
         }
     }
 
-    // Text strokes (MText content rendered inline). Mirrors the MText pipeline:
-    // strip inline format codes, split / word-wrap into lines, then place each
-    // line with the multileader's rotation, horizontal & vertical attachment,
-    // line spacing and scale_factor applied. Annotation scale is NOT applied
-    // here — this path is consumed by snap / truck export which work in WCS.
-    if ml.content_type == LeaderContentType::MText && !ml.context.text_string.is_empty() {
-        let ctx = &ml.context;
-        // `ctx.text_height` (when > 0) is already in WCS — scale_factor is
-        // baked in. Only the fallback path needs to multiply.
-        let scale_factor = ml.scale_factor as f32;
-        let height = if ctx.text_height > 0.0 {
-            ctx.text_height as f32
-        } else {
-            ml.text_height as f32 * scale_factor
-        };
-
-        let ins = &ctx.text_location;
-        let ins_x = ins.x;
-        let ins_y = ins.y;
-        let z = ins.z;
-        // Prefer text_direction (carries through rotations/mirrors); fall back
-        // to text_rotation when no direction has been set.
-        let td = ctx.text_direction;
-        let mut rot = if td.x.abs() > 1e-9 || td.y.abs() > 1e-9 {
-            (td.y as f32).atan2(td.x as f32)
-        } else {
-            ctx.text_rotation as f32
-        };
-        snap_pts.push(node([ins_x, ins_y, z]));
-
-        // Resolve text style via handle when available, falling back to STANDARD.
-        let style_name = ctx
-            .text_style_handle
-            .as_ref()
-            .and_then(|h| {
-                document
-                    .text_styles
-                    .iter()
-                    .find(|s| s.handle == *h)
-                    .map(|s| s.name.clone())
-            })
-            .unwrap_or_else(|| "STANDARD".to_string());
-        let resolved = resolve_text_style(&style_name, document);
-        if resolved.is_upside_down {
-            rot += std::f32::consts::PI;
-        }
-
-        // ml.text_alignment overrides ctx.text_attachment_point when not
-        // Left (which is the default zero); otherwise honour the stored
-        // attachment.
-        use acadrust::entities::multileader::TextAlignmentType;
-        let attach_h_anchor: f32 = match (ml.text_alignment, ctx.text_attachment_point) {
-            (TextAlignmentType::Center, _) => 0.5,
-            (TextAlignmentType::Right, _) => 1.0,
-            (TextAlignmentType::Left, TextAttachmentPointType::Center) => 0.5,
-            (TextAlignmentType::Left, TextAttachmentPointType::Right) => 1.0,
-            _ => 0.0,
-        };
-        let v_anchor = mleader_v_anchor(ctx.text_left_attachment);
-
-        // Shared MText pipeline — handles every inline format code (font,
-        // colour, height, width factor, oblique, tracking, paragraph align,
-        // tabs, indents, decorations, stacked fractions, …). Inline per-run
-        // colour (`\C` / `\c`) is dropped here because the entity-level
-        // MultiLeader output is a single `TruckObject::Lines` (leader +
-        // arrowheads + text in one polyline blob); preserving the override
-        // would require emitting a separate object per colour.
-        let layout = layout_mtext(&MTextRenderOpts {
-            value: &ctx.text_string,
-            insertion: [ins_x, ins_y, z],
-            height,
-            rect_w: ctx.text_width as f32,
-            rotation: rot,
-            style: &resolved,
-            attach_h_anchor,
-            v_anchor,
-            line_spacing_factor: ctx.line_spacing_factor as f32,
-            vertical_text: false,
-            want_glyph_boxes: false,
-        });
+    // Text strokes, drawn from the layout computed up front (centred on the
+    // text grip). The snap node is the grip itself.
+    if let Some(layout) = &text_layout {
+        snap_pts.push(node([text_loc.x, text_loc.y, text_loc.z]));
         for ts in &layout.strokes {
             let ox = ts.origin[0];
             let oy = ts.origin[1];
@@ -268,7 +267,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
                 }
                 points.push(nan);
                 for &[x, y] in stroke {
-                    points.push([ox + x as f64, oy + y as f64, z]);
+                    points.push([ox + x as f64, oy + y as f64, text_loc.z]);
                 }
             }
         }
@@ -293,6 +292,55 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
 //   0 .. total_line_pts - 1  : square grips on every LeaderLine vertex
 //   total_line_pts            : diamond grip on context.text_location (if MText)
 
+/// Side the text reads toward (+1 right / -1 left) and the text box's far
+/// edge (the wrap-width grip position). The box width is the explicit wrap
+/// width when set, else the natural laid-out width.
+fn text_box_geom(ml: &MultiLeader) -> (f64, [f64; 3]) {
+    let tl = ml.context.text_location;
+    let leader_ref = ml
+        .context
+        .leader_roots
+        .first()
+        .and_then(|r| r.lines.first())
+        .and_then(|l| l.points.last())
+        .copied()
+        .or_else(|| ml.context.leader_roots.first().map(|r| r.connection_point))
+        .unwrap_or(tl);
+    let sign = if tl.x >= leader_ref.x { 1.0 } else { -1.0 };
+    let height = if ml.context.text_height > 0.0 {
+        ml.context.text_height as f32
+    } else {
+        ml.text_height as f32 * ml.scale_factor as f32
+    };
+    let style = ResolvedTextStyle {
+        font_name: "STANDARD".to_string(),
+        width_factor: 1.0,
+        oblique_angle: 0.0,
+        is_backward: false,
+        is_upside_down: false,
+    };
+    let layout = layout_mtext(&MTextRenderOpts {
+        value: &ml.context.text_string,
+        insertion: [0.0, 0.0, 0.0],
+        height,
+        rect_w: ml.context.text_width as f32,
+        rotation: 0.0,
+        style: &style,
+        attach_h_anchor: if sign >= 0.0 { 0.0 } else { 1.0 },
+        v_anchor: MTextVAnchor::Middle,
+        line_spacing_factor: ml.context.line_spacing_factor as f32,
+        vertical_text: false,
+        want_glyph_boxes: false,
+    });
+    let nat_w = layout.line_widths.iter().cloned().fold(0.0_f32, f32::max) as f64;
+    let box_w = if ml.context.text_width > 1e-6 {
+        ml.context.text_width
+    } else {
+        nat_w.max(height as f64)
+    };
+    (sign, [tl.x + sign * box_w, tl.y, tl.z])
+}
+
 fn grips(ml: &MultiLeader) -> Vec<GripDef> {
     let mut result: Vec<GripDef> = Vec::new();
     let mut id = 0usize;
@@ -311,16 +359,54 @@ fn grips(ml: &MultiLeader) -> Vec<GripDef> {
 
     if ml.content_type == LeaderContentType::MText {
         let tl = &ml.context.text_location;
+        // Text-location grip, then the wrap-width grip at the box's far edge.
         result.push(center_grip(
             id,
             Vec3::new(tl.x as f32, tl.y as f32, tl.z as f32),
+        ));
+        id += 1;
+        let (_, far) = text_box_geom(ml);
+        result.push(triangle_grip(
+            id,
+            Vec3::new(far[0] as f32, far[1] as f32, far[2] as f32),
         ));
     }
 
     result
 }
 
+/// Sentinel grip id meaning "translate the whole multileader" — used by the
+/// text grip's "Move with Leader" action so the leader follows the text.
+pub(crate) const MOVE_ALL_GRIP: usize = usize::MAX;
+
 fn apply_grip(ml: &mut MultiLeader, grip_id: usize, apply: GripApply) {
+    if grip_id == MOVE_ALL_GRIP {
+        let (dx, dy, dz) = match apply {
+            GripApply::Translate(d) => (d.x as f64, d.y as f64, d.z as f64),
+            GripApply::Absolute(a) => (
+                a.x as f64 - ml.context.text_location.x,
+                a.y as f64 - ml.context.text_location.y,
+                a.z as f64 - ml.context.text_location.z,
+            ),
+        };
+        for root in &mut ml.context.leader_roots {
+            for line in &mut root.lines {
+                for p in &mut line.points {
+                    p.x += dx;
+                    p.y += dy;
+                    p.z += dz;
+                }
+            }
+            root.connection_point.x += dx;
+            root.connection_point.y += dy;
+            root.connection_point.z += dz;
+        }
+        ml.context.text_location.x += dx;
+        ml.context.text_location.y += dy;
+        ml.context.text_location.z += dz;
+        return;
+    }
+
     let mut idx = 0usize;
 
     for root in &mut ml.context.leader_roots {
@@ -346,20 +432,34 @@ fn apply_grip(ml: &mut MultiLeader, grip_id: usize, apply: GripApply) {
         }
     }
 
-    // Text location grip
-    if ml.content_type == LeaderContentType::MText && idx == grip_id {
-        let tl = &mut ml.context.text_location;
-        match apply {
-            GripApply::Absolute(a) => {
-                tl.x = a.x as f64;
-                tl.y = a.y as f64;
-                tl.z = a.z as f64;
+    // Text-location grip (idx == n_vertices), then the wrap-width grip.
+    if ml.content_type == LeaderContentType::MText {
+        if idx == grip_id {
+            let tl = &mut ml.context.text_location;
+            match apply {
+                GripApply::Absolute(a) => {
+                    tl.x = a.x as f64;
+                    tl.y = a.y as f64;
+                    tl.z = a.z as f64;
+                }
+                GripApply::Translate(d) => {
+                    tl.x += d.x as f64;
+                    tl.y += d.y as f64;
+                    tl.z += d.z as f64;
+                }
             }
-            GripApply::Translate(d) => {
-                tl.x += d.x as f64;
-                tl.y += d.y as f64;
-                tl.z += d.z as f64;
-            }
+            return;
+        }
+        idx += 1;
+        if idx == grip_id {
+            // Dragging the box edge sets the MText wrap width.
+            let (sign, far) = text_box_geom(ml);
+            let new_far_x = match apply {
+                GripApply::Absolute(a) => a.x as f64,
+                GripApply::Translate(d) => far[0] + d.x as f64,
+            };
+            let min_w = ml.text_height.max(1.0) * 0.5;
+            ml.context.text_width = (sign * (new_far_x - ml.context.text_location.x)).max(min_w);
         }
     }
 }
@@ -840,7 +940,6 @@ impl crate::entities::traits::Grippable for MultiLeader {
         grip_id: usize,
     ) -> Vec<crate::scene::object::GripMenuItem> {
         use crate::scene::object::{GripMenuAction, GripMenuItem};
-        // Compute vertex count to identify text-location grip (last id).
         let n_vertices: usize = self
             .context
             .leader_roots
@@ -848,16 +947,26 @@ impl crate::entities::traits::Grippable for MultiLeader {
             .flat_map(|r| r.lines.iter())
             .map(|l| l.points.len())
             .sum();
-        let is_text_loc = self.content_type == LeaderContentType::MText
-            && grip_id == n_vertices;
-
-        if is_text_loc {
-            vec![
-                GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
-                GripMenuItem { label: "Move with Leader", action: GripMenuAction::MoveWithLeader },
-                GripMenuItem { label: "Move Independent", action: GripMenuAction::MoveIndependent },
-            ]
+        if self.content_type == LeaderContentType::MText && grip_id >= n_vertices {
+            if grip_id == n_vertices {
+                // Text-location grip.
+                vec![
+                    GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
+                    GripMenuItem {
+                        label: "Move with Leader",
+                        action: GripMenuAction::MoveWithLeader,
+                    },
+                    GripMenuItem {
+                        label: "Move Independent",
+                        action: GripMenuAction::MoveIndependent,
+                    },
+                ]
+            } else {
+                // Wrap-width grip: drag only.
+                Vec::new()
+            }
         } else {
+            // Leader-line vertex.
             vec![
                 GripMenuItem { label: "Stretch", action: GripMenuAction::Stretch },
                 GripMenuItem { label: "Add Leader", action: GripMenuAction::AddLeader },
@@ -867,12 +976,50 @@ impl crate::entities::traits::Grippable for MultiLeader {
     }
     fn apply_grip_menu(
         &mut self,
-        _grip_id: usize,
-        _action: crate::scene::object::GripMenuAction,
+        grip_id: usize,
+        action: crate::scene::object::GripMenuAction,
     ) {
-        // Add/Remove Leader, Move with Leader, Move Independent — these
-        // require deeper structural edits across leader_roots/lines and
-        // are stubbed here; Stretch falls through to the regular drag.
+        use crate::scene::object::GripMenuAction as A;
+        // Locate the (root, line) and vertex position owning this grip id.
+        let mut idx = 0usize;
+        let mut loc: Option<(usize, usize, acadrust::types::Vector3)> = None;
+        'find: for (ri, root) in self.context.leader_roots.iter().enumerate() {
+            for (li, line) in root.lines.iter().enumerate() {
+                let n = line.points.len();
+                if grip_id < idx + n {
+                    loc = Some((ri, li, line.points[grip_id - idx]));
+                    break 'find;
+                }
+                idx += n;
+            }
+        }
+        let Some((ri, li, vpos)) = loc else { return };
+        match action {
+            A::RemoveLeader => {
+                let total: usize =
+                    self.context.leader_roots.iter().map(|r| r.lines.len()).sum();
+                if total > 1 {
+                    self.context.leader_roots[ri].lines.remove(li);
+                    if self.context.leader_roots[ri].lines.is_empty()
+                        && self.context.leader_roots.len() > 1
+                    {
+                        self.context.leader_roots.remove(ri);
+                    }
+                }
+            }
+            A::AddLeader => {
+                // Append to the last root so the new arrow is the last grip id
+                // (so the caller can immediately grab it for placement). Seed it
+                // below the picked vertex; the user drags it to the final spot.
+                let _ = ri;
+                let off = self.text_height.max(1.0) * 4.0;
+                let arrow = acadrust::types::Vector3::new(vpos.x, vpos.y - off, vpos.z);
+                if let Some(root) = self.context.leader_roots.last_mut() {
+                    root.create_line(vec![arrow]);
+                }
+            }
+            _ => {}
+        }
     }
 }
 
@@ -1004,6 +1151,20 @@ impl MultiLeaderTess for MultiLeader {
         let mut arrow_fill: Vec<[f32; 3]> = Vec::new();
         let mut first = true;
 
+        // Which side the text grip sits on, recomputed every frame so the text
+        // alignment and the landing mirror live when the arrow or text moves.
+        let text_loc_w = ml.context.text_location;
+        let leader_ref_w = ml
+            .context
+            .leader_roots
+            .first()
+            .and_then(|r| r.lines.first())
+            .and_then(|l| l.points.last())
+            .copied()
+            .or_else(|| ml.context.leader_roots.first().map(|r| r.connection_point))
+            .unwrap_or(text_loc_w);
+        let text_sign_w: f64 = if text_loc_w.x >= leader_ref_w.x { 1.0 } else { -1.0 };
+
         for root in &ml.context.leader_roots {
             let cp = &root.connection_point;
             let cp_f = p3(cp);
@@ -1078,21 +1239,19 @@ impl MultiLeaderTess for MultiLeader {
             }
 
             if ml.enable_landing && ml.enable_dogleg && ml.dogleg_length > 0.0 {
-                let dir = &root.direction;
-                let dl = (dir.x * dir.x + dir.y * dir.y).sqrt().max(1e-9);
+                // Horizontal landing toward the text's side (mirrors live).
                 let d = ml.dogleg_length * effective_scale as f64;
                 let landing_end = [
-                    (cp.x + dir.x / dl * d - ox) as f32,
-                    (cp.y + dir.y / dl * d - oy) as f32,
+                    (cp.x + text_sign_w * d - ox) as f32,
+                    (cp.y - oy) as f32,
                     cp_f[2],
                 ];
                 points.push(nan);
                 points.push(cp_f);
                 points.push(landing_end);
-                // extend_leader_to_text: continue past the landing to the text
-                // insertion point along the same direction.
-                if ml.extend_leader_to_text
-                    && ml.content_type == LeaderContentType::MText
+                // Continue the landing to the text's near edge so it stays
+                // attached as the text moves.
+                if ml.content_type == LeaderContentType::MText
                     && !ml.context.text_string.is_empty()
                 {
                     let tx = (ml.context.text_location.x - ox) as f32;
@@ -1262,17 +1421,10 @@ impl MultiLeaderTess for MultiLeader {
             }
             let (cos_r, sin_r) = (rot.cos(), rot.sin());
 
-            // ml.text_alignment overrides the per-context attachment_point when
-            // not Left (which is the default zero). Otherwise we honour the
-            // context's stored attachment_point (Left/Center/Right).
-            use acadrust::entities::multileader::{TextAlignmentType, TextAttachmentDirectionType};
-            let h_anchor = match (ml.text_alignment, ctx.text_attachment_point) {
-                (TextAlignmentType::Center, _) => 0.5_f32,
-                (TextAlignmentType::Right, _) => 1.0,
-                (TextAlignmentType::Left, TextAttachmentPointType::Center) => 0.5,
-                (TextAlignmentType::Left, TextAttachmentPointType::Right) => 1.0,
-                _ => 0.0,
-            };
+            // Side-anchored on the leader-facing edge so the text reads
+            // outward; flips live with the leader/text side.
+            use acadrust::entities::multileader::TextAttachmentDirectionType;
+            let h_anchor: f32 = if text_sign_w >= 0.0 { 0.0 } else { 1.0 };
             // Pick the vertical-anchor attachment based on text_attachment_direction:
             //   Horizontal — leader attaches left/right; use ml.text_left_attachment
             //                (matches the file's stored ctx.text_left_attachment).

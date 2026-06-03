@@ -44,7 +44,8 @@ fn to_truck(leader: &Leader) -> TruckEntity {
         let dy = next.y - tip.y;
         let len = (dx * dx + dy * dy).sqrt().max(1e-9);
         let (dx, dy) = (dx / len, dy / len);
-        let sz = (leader.text_height).max(1.0) * 0.8;
+        // Arrowhead sized to the text height, matching the MLEADER arrowhead.
+        let sz = (leader.text_height).max(1.0);
         let a = std::f64::consts::PI / 6.0;
         let (s, c) = a.sin_cos();
         let tip_f = p3(tip);
@@ -627,7 +628,7 @@ impl LeaderTess for Leader {
                 .unwrap_or(anno_scale as f64);
             let arrow_size = match style {
                 Some(s) => (s.dimasz * dim_scale) as f32,
-                None => (self.text_height as f32).max(1.0) * 0.8 * anno_scale,
+                None => (self.text_height as f32).max(1.0) * anno_scale,
             };
             let arrow = match style {
                 Some(s) => arrow_from_block(document, s.dimldrblk, arrow_size.max(0.001)),

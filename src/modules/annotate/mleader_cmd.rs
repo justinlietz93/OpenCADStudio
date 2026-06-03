@@ -102,17 +102,27 @@ fn build_mleader(text: &str, verts: &[Vec3]) -> MultiLeader {
     ml.arrowhead_size = 2.5;
     ml.dogleg_length = 2.5;
 
-    // Direction: from last leader pt toward content
-    if let (Some(last_leader), Some(root)) =
-        (leader_pts.last(), ml.context.leader_roots.first_mut())
-    {
-        let dx = (content_pt.x - last_leader.x) as f64;
-        let dy = (content_pt.y - last_leader.y) as f64;
-        let len = (dx * dx + dy * dy).sqrt().max(1e-9);
-        root.direction = Vector3::new(dx / len, dy / len, 0.0);
+    const DOGLEG: f64 = 2.5;
+    // Which side of the leader the text sits on, from the last leader
+    // segment's horizontal direction. The landing is always horizontal.
+    let last_leader = leader_pts.last().copied().unwrap_or(content_pt);
+    let to_right = (content_pt.x - last_leader.x) >= 0.0;
+    let sign = if to_right { 1.0 } else { -1.0 };
+
+    if let Some(root) = ml.context.leader_roots.first_mut() {
+        // Leader ends at the clicked point; a horizontal landing runs from
+        // there toward the text.
+        root.direction = Vector3::new(sign, 0.0, 0.0);
         root.connection_point = content_v3;
-        root.landing_distance = 2.5;
+        root.landing_distance = DOGLEG;
     }
+
+    // Seed the text one landing-length past the leader end, on the side the
+    // user dragged toward. The actual horizontal alignment and the landing are
+    // recomputed every frame from the text grip's position relative to the
+    // leader, so moving the arrow or the text re-mirrors the layout.
+    ml.context.text_location =
+        Vector3::new(content_v3.x + sign * DOGLEG, content_v3.y, content_v3.z);
 
     ml
 }
@@ -120,7 +130,7 @@ fn build_mleader(text: &str, verts: &[Vec3]) -> MultiLeader {
 fn preview_wire(pts: &[Vec3]) -> WireModel {
     let mut points: Vec<[f32; 3]> = pts.iter().map(|p| [p.x, p.y, p.z]).collect();
     if pts.len() >= 2 {
-        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.0);
+        let [w1, w2] = arrowhead_wings(pts[0], pts[1], 2.5);
         points.push([f32::NAN; 3]);
         points.push([w1.x, w1.y, w1.z]);
         points.push([pts[0].x, pts[0].y, pts[0].z]);
