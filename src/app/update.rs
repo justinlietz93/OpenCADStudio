@@ -5740,7 +5740,69 @@ impl OpenCADStudio {
                 }
             }
             Message::TableStyleDialogSelect(name) => {
+                use acadrust::objects::ObjectType;
                 self.tablestyle_selected = name;
+                let i = self.active_tab;
+                for obj in self.tabs[i].scene.document.objects.values() {
+                    if let ObjectType::TableStyle(s) = obj {
+                        if s.name == self.tablestyle_selected {
+                            self.ts_hmargin = format!("{:.4}", s.horizontal_margin);
+                            self.ts_vmargin = format!("{:.4}", s.vertical_margin);
+                        }
+                    }
+                }
+                Task::none()
+            }
+
+            Message::TableStyleEdit { field, value } => {
+                match field {
+                    "hmargin" => self.ts_hmargin = value,
+                    "vmargin" => self.ts_vmargin = value,
+                    _ => {}
+                }
+                Task::none()
+            }
+
+            Message::TableStyleApply => {
+                use acadrust::objects::ObjectType;
+                let i = self.active_tab;
+                let name = self.tablestyle_selected.clone();
+                let h: Option<f64> = self.ts_hmargin.trim().parse().ok();
+                let v: Option<f64> = self.ts_vmargin.trim().parse().ok();
+                self.push_undo_snapshot(i, "TABLESTYLE EDIT");
+                for obj in self.tabs[i].scene.document.objects.values_mut() {
+                    if let ObjectType::TableStyle(s) = obj {
+                        if s.name == name {
+                            if let Some(h) = h {
+                                s.horizontal_margin = h;
+                            }
+                            if let Some(v) = v {
+                                s.vertical_margin = v;
+                            }
+                        }
+                    }
+                }
+                self.tabs[i].dirty = true;
+                Task::none()
+            }
+
+            Message::TableStyleToggle(field) => {
+                use acadrust::objects::ObjectType;
+                let i = self.active_tab;
+                let name = self.tablestyle_selected.clone();
+                self.push_undo_snapshot(i, "TABLESTYLE EDIT");
+                for obj in self.tabs[i].scene.document.objects.values_mut() {
+                    if let ObjectType::TableStyle(s) = obj {
+                        if s.name == name {
+                            match field {
+                                "title_sup" => s.title_suppressed = !s.title_suppressed,
+                                "header_sup" => s.header_suppressed = !s.header_suppressed,
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                self.tabs[i].dirty = true;
                 Task::none()
             }
 

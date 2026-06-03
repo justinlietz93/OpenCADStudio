@@ -296,6 +296,9 @@ pub(super) struct OpenCADStudio {
 
     // ── TableStyle Dialog ─────────────────────────────────────────────────
     tablestyle_selected: String,
+    /// Edit buffers for the table style's general margins.
+    ts_hmargin: String,
+    ts_vmargin: String,
 
     // ── TextStyle Font Browser ────────────────────────────────────────────
     textstyle_selected: String,
@@ -987,6 +990,13 @@ pub enum Message {
     TableStyleDialogDelete,
     /// Toggle the Annotative flag on the selected table style.
     TableStyleToggleAnnotative,
+    /// Toggle a boolean flag (title_suppressed / header_suppressed / flow) on
+    /// the selected table style.
+    TableStyleToggle(&'static str),
+    /// Update a general edit buffer (hmargin / vmargin).
+    TableStyleEdit { field: &'static str, value: String },
+    /// Write the general edit buffers back into the selected table style.
+    TableStyleApply,
     // ── MLineStyle Dialog ─────────────────────────────────────────────────
     MlStyleDialogOpen,
     #[allow(dead_code)]
@@ -1158,6 +1168,8 @@ impl OpenCADStudio {
             textstyle_ttf: String::new(),
             // TableStyle dialog
             tablestyle_selected: "Standard".to_string(),
+            ts_hmargin: "1.5".to_string(),
+            ts_vmargin: "1.5".to_string(),
             // MLineStyle dialog
             mlstyle_selected: "Standard".to_string(),
             // DimStyle dialog

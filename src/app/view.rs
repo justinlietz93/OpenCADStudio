@@ -117,6 +117,8 @@ impl OpenCADStudio {
                 styles,
                 &self.tablestyle_selected,
                 selected_style,
+                &self.ts_hmargin,
+                &self.ts_vmargin,
             );
         }
         if Some(window_id) == self.mlstyle_window {

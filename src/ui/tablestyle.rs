@@ -1,7 +1,7 @@
 //! Table Style Manager window — fills the entire OS window.
 
 use crate::app::Message;
-use iced::widget::{button, checkbox, column, container, row, scrollable, text, Space};
+use iced::widget::{button, checkbox, column, container, row, scrollable, text, text_input, Space};
 use iced::{Background, Border, Color, Element, Fill, Theme};
 
 const TB: Color = Color {
@@ -129,6 +129,8 @@ pub fn view_window<'a>(
     styles: Vec<String>,
     selected: &'a str,
     selected_style: Option<&'a acadrust::objects::TableStyle>,
+    hmargin_buf: &'a str,
+    vmargin_buf: &'a str,
 ) -> Element<'a, Message> {
     // ── Toolbar ───────────────────────────────────────────────────────────
     let toolbar = container(
@@ -227,10 +229,38 @@ pub fn view_window<'a>(
                     .on_toggle(|_| Message::TableStyleToggleAnnotative)
                     .size(14)
                     .text_size(11),
-                info_row("H Margin:", format!("{:.4}", s.horizontal_margin)),
-                info_row("V Margin:", format!("{:.4}", s.vertical_margin)),
-                info_row("Title Suppressed:", s.title_suppressed.to_string()),
-                info_row("Header Suppressed:", s.header_suppressed.to_string()),
+                row![
+                    text("H Margin:").size(11).color(DIM).width(160),
+                    text_input("1.5", hmargin_buf)
+                        .on_input(|v| Message::TableStyleEdit { field: "hmargin", value: v })
+                        .size(11)
+                        .width(100),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                row![
+                    text("V Margin:").size(11).color(DIM).width(160),
+                    text_input("1.5", vmargin_buf)
+                        .on_input(|v| Message::TableStyleEdit { field: "vmargin", value: v })
+                        .size(11)
+                        .width(100),
+                ]
+                .spacing(8)
+                .align_y(iced::Center),
+                checkbox(s.title_suppressed)
+                    .label("Title row suppressed")
+                    .on_toggle(|_| Message::TableStyleToggle("title_sup"))
+                    .size(14)
+                    .text_size(11),
+                checkbox(s.header_suppressed)
+                    .label("Header row suppressed")
+                    .on_toggle(|_| Message::TableStyleToggle("header_sup"))
+                    .size(14)
+                    .text_size(11),
+                button(text("Apply margins").size(11))
+                    .on_press(Message::TableStyleApply)
+                    .style(btn_s(true))
+                    .padding([4, 12]),
                 row_info("Data Row:", &s.data_row_style),
                 row_info("Header Row:", &s.header_row_style),
                 row_info("Title Row:", &s.title_row_style),
