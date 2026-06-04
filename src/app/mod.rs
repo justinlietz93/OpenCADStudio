@@ -769,6 +769,9 @@ pub enum Message {
     CycleSelect(acadrust::Handle),
     /// Preview (highlight) a cycling-list row's object, or clear with `None`.
     CycleHover(Option<acadrust::Handle>),
+    /// Cursor left a cycling-list row; clear the preview only if it still
+    /// points at this row (guards against enter/exit event reordering).
+    CycleHoverExit(acadrust::Handle),
     /// Dismiss the selection-cycling list box without picking.
     CycleCancel,
     /// Toggle the selection-filter type picker open/closed.

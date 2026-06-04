@@ -59,7 +59,7 @@ fn item_row(handle: acadrust::Handle, label: String) -> Element<'static, Message
     // Highlight the underlying object while the cursor is over this row.
     mouse_area(btn)
         .on_enter(Message::CycleHover(Some(handle)))
-        .on_exit(Message::CycleHover(None))
+        .on_exit(Message::CycleHoverExit(handle))
         .into()
 }
 

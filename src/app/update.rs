@@ -3649,6 +3649,15 @@ impl OpenCADStudio {
                 self.tabs[i].scene.set_hover_highlight(handle);
                 Task::none()
             }
+            Message::CycleHoverExit(handle) => {
+                // Only clear if another row hasn't already taken the highlight;
+                // enter/exit can fire out of order when moving between rows.
+                let i = self.active_tab;
+                if self.tabs[i].scene.hover_highlight == Some(handle) {
+                    self.tabs[i].scene.set_hover_highlight(None);
+                }
+                Task::none()
+            }
             Message::CycleCancel => {
                 self.cycle_candidates = None;
                 self.tabs[self.active_tab].scene.set_hover_highlight(None);
