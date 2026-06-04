@@ -118,9 +118,26 @@ Download `OpenCADStudio-*-windows-x86_64.exe` from the [latest release](https://
 
 ### macOS (Apple Silicon)
 
-Download `OpenCADStudio-*-macos-arm64.dmg` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest) — Apple Silicon (M-series) only; Intel macOS isn't built.
+Apple Silicon (M-series) only; Intel macOS isn't built. The app is ad-hoc signed but **not Apple-notarised** (notarisation requires a paid Apple Developer ID), so macOS Gatekeeper guards the first launch. Pick whichever path is easiest:
 
-Open the .dmg and drag `OpenCADStudio.app` to `/Applications`. The first launch may be blocked by Gatekeeper because the app is not notarised — right-click `OpenCADStudio.app → Open` and confirm, or run once via `xattr -dr com.apple.quarantine /Applications/OpenCADStudio.app`.
+**Option A — Homebrew (recommended):**
+
+```bash
+brew install --cask --no-quarantine \
+  https://raw.githubusercontent.com/HakanSeven12/OpenCADStudio/main/packaging/homebrew/open-cad-studio.rb
+```
+
+`--no-quarantine` lets Gatekeeper skip the unsigned-app prompt. See [`packaging/homebrew/`](packaging/homebrew/) for publishing this as a `brew tap`.
+
+**Option B — manual .dmg:**
+
+Download `OpenCADStudio-*-macos-arm64.dmg` from the [latest release](https://github.com/HakanSeven12/OpenCADStudio/releases/latest), open it, and drag `OpenCADStudio.app` to `/Applications`. If the first launch is blocked, clear the quarantine flag once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/OpenCADStudio.app
+```
+
+On older macOS you can instead right-click `OpenCADStudio.app → Open` and confirm; on macOS Ventura and later, approve it via **System Settings → Privacy & Security → Open Anyway**.
 
 ### Build from Source
 
