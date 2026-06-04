@@ -116,7 +116,7 @@ pub fn prepare_xref_block(scene: &mut Scene, path: &str) -> String {
     // Resolve the XREF content immediately.
     let path_buf = std::path::PathBuf::from(path);
     if let Some(base_dir) = path_buf.parent() {
-        crate::io::xref::resolve_xrefs(&mut scene.document, base_dir);
+        let _ = crate::io::xref::resolve_xrefs(&mut scene.document, base_dir);
     }
 
     block_name

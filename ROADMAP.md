@@ -27,7 +27,7 @@ Source-scan summary (references):
 **Goal:** measurably halve the wall time between "Open" click and "first
 frame" for a 50 MB DWG.
 
-### 1.1 Drop the second `purge_corrupt_entities`
+### 1.1 Drop the second `purge_corrupt_entities` ✅ DONE
 
 Today `purge_corrupt_entities` runs once on the
 [background thread](src/io/mod.rs#L62-L74) and again in the
@@ -56,7 +56,9 @@ list back. The UI thread only emits log lines.
 - corrupt-entity detection,
 - hatch / image / mesh handle lists,
 - AABB accumulation for `world_offset` (currently a separate pass inside
-  `compute_world_offset`).
+  `compute_world_offset`).  ✅ the world_offset AABB scan is now folded into
+  the cache-handle walk (see 2.4); corrupt-detect + hatch/image/mesh planning
+  remain a follow-up.
 
 Target: three `O(N)` passes → one.
 
@@ -131,7 +133,7 @@ On the first frame emit a **coarse**-tol wire pass (e.g. 4× the normal
 tol); refine to full tol on the second frame. The user sees *something*
 within 16 ms; detail snaps in smoothly afterwards.
 
-### 2.4 Merge the world-offset scan into the single-pass walk
+### 2.4 Merge the world-offset scan into the single-pass walk ✅ DONE
 
 [`compute_world_offset`](src/scene/mod.rs#L128) walks the whole MSPACE
 AABB when the header is unreliable. That scan should join the single-pass

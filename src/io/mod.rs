@@ -256,7 +256,7 @@ fn finite_vec3(v: &acadrust::types::Vector3) -> bool {
 }
 
 /// Returns true if the entity looks like parser garbage and should be dropped.
-fn is_entity_corrupt(e: &EntityType) -> bool {
+pub(crate) fn is_entity_corrupt(e: &EntityType) -> bool {
     use acadrust::entities::EntityType as E;
     // Reject polylines at or above this vertex count. Even valid drawings
     // rarely use this many — and parser desync produces exactly-100_000-vertex

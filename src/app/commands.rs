@@ -641,7 +641,7 @@ impl OpenCADStudio {
                 // Reload all xrefs for the current drawing.
                 if let Some(path) = &self.tabs[i].current_path.clone() {
                     if let Some(base_dir) = path.parent() {
-                        let infos = crate::io::xref::resolve_xrefs(
+                        let (infos, _dropped) = crate::io::xref::resolve_xrefs(
                             &mut self.tabs[i].scene.document,
                             base_dir,
                         );

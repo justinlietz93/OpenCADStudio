@@ -146,16 +146,19 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     // filters that `block_cache::build_defn` already uses for block defns)
     // and prefer the entity-scan when the header center drifts more than
     // 10× its own half-span away from the entity centroid.
-    let (world_offset, local_extent_max) = compute_world_offset(doc, model_block);
-
     use rayon::prelude::*;
 
-    // Single pass over entities — collect only handles per kind. No clones.
+    // Single pass over entities does triple duty: classify cache-kind handle
+    // lists (hatch / image / mesh) AND accumulate per-entity centroids for the
+    // world_offset median. Folding the offset scan in here collapses what were
+    // two O(N) `entities()` walks (offset scan + handle collection) into one.
     // Heavy tessellation runs in parallel below, reading entities via
-    // `doc.get_entity(h)` (O(1) HashMap lookup).
+    // `doc.get_entity(h)` (O(1) HashMap lookup); no clones in this pass.
+    let prep = offset_prep(doc, model_block);
     let mut hatch_handles: Vec<Handle> = Vec::new();
     let mut image_handles: Vec<Handle> = Vec::new();
     let mut mesh_handles: Vec<Handle> = Vec::new();
+    let mut centers: Vec<[f64; 3]> = Vec::new();
     for e in doc.entities() {
         let h = e.common().handle;
         match e {
@@ -166,7 +169,11 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             }
             _ => {}
         }
+        if let Some(c) = offset_centroid(e, model_block, &prep) {
+            centers.push(c);
+        }
     }
+    let (world_offset, local_extent_max) = world_offset_from_centers(centers, &doc.header);
 
     // Default bg adaptation target at load: the model background (paper
     // bg is only relevant after the user enters a paper layout, and
@@ -233,34 +240,28 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     }
 }
 
-/// Pick the model-space precision-preserving offset and the `fit_all`
-/// outlier-rejection limit.
-///
-/// Tries header `$EXTMIN/$EXTMAX` first, then cross-checks against a direct
-/// MSPACE entity AABB scan. The entity scan wins when the header is invalid
-/// (sentinel / sub-empty) or when the header center has drifted more than
-/// 10× its own half-span from the entity centroid (a stale-extents DXF).
-fn compute_world_offset(
-    doc: &acadrust::CadDocument,
-    model_block: Handle,
-) -> ([f64; 3], f32) {
-    // Mirrors `block_cache::SANE_EXTENT` — wire coords past this magnitude
-    // are treated as corruption rather than precision-relevant geometry.
-    const SANE_EXTENT: f64 = 1.0e8;
+/// Mirrors `block_cache::SANE_EXTENT` — wire coords past this magnitude
+/// are treated as corruption rather than precision-relevant geometry.
+const WORLD_OFFSET_SANE_EXTENT: f64 = 1.0e8;
 
-    // The filter here MUST agree with `belongs_to_visible_block` (the
-    // render-time filter): if rendering treats an entity as MSPACE but
-    // we skip it here, our offset misses the geometry that's actually on
-    // screen, and direct WCS-coordinate wires drag f32 precision to its
-    // knees. Likewise, including block-defn entities that the render
-    // path strictly drops would pull the centroid toward block-local
-    // origins.
-    //
-    // Authoritative path: if the model BlockRecord enumerates its
-    // entities via `entity_handles`, use that set directly. Falls back
-    // to the legacy permissive interpretation when no BlockRecord
-    // enumerates anything (legacy DXF without group-code 330) — match
-    // `belongs_to_visible_block`'s permissive default for that case.
+/// MSPACE-membership prep shared by the world-offset centroid scan.
+///
+/// The filter here MUST agree with `belongs_to_visible_block` (the
+/// render-time filter): if rendering treats an entity as MSPACE but we skip
+/// it here, our offset misses on-screen geometry and direct WCS-coordinate
+/// wires drag f32 precision to its knees. Conversely, including block-defn
+/// entities the render path drops would pull the centroid toward block-local
+/// origins.
+struct OffsetPrep {
+    /// `Some` when the model BlockRecord enumerates its entities; the offset
+    /// scan uses this set directly. `None` falls back to the legacy
+    /// permissive owner-based interpretation.
+    mspace_set: Option<std::collections::HashSet<Handle>>,
+    any_enumerated: bool,
+    owned_by_other_block: std::collections::HashSet<Handle>,
+}
+
+fn offset_prep(doc: &acadrust::CadDocument, model_block: Handle) -> OffsetPrep {
     let model_br = doc
         .block_records
         .iter()
@@ -281,76 +282,89 @@ fn compute_world_offset(
     } else {
         std::collections::HashSet::new()
     };
+    OffsetPrep { mspace_set, any_enumerated, owned_by_other_block }
+}
 
-    // ── Pass 1: collect per-entity centroids ─────────────────────────────
-    // Min/max midpoint is wrecked by a single bogus entity at WCS distance
-    // (e.g. a Ray with bad direction, an orphan reference at WCS x=-510k
-    // when the real drawing sits at WCS x=+510k — the midpoint lands
-    // halfway between, far from both clusters). Per-entity centroids let
-    // us take the median, which is immune to single outliers regardless
-    // of how far they sit.
-    let mut centers: Vec<[f64; 3]> = Vec::new();
-    for e in doc.entities() {
-        let c = e.common();
-        let h = c.handle;
-        let include = if let Some(ref set) = mspace_set {
-            set.contains(&h)
-        } else if c.owner_handle == model_block {
-            true
-        } else if !c.owner_handle.is_null() {
-            false
-        } else if owned_by_other_block.contains(&h) {
-            false
-        } else {
-            // owner null + h not enumerated by any block: legacy permissive
-            // when no block enumerated at all, strict drop otherwise (same
-            // as belongs_to_visible_block).
-            !any_enumerated
-        };
-        if !include {
-            continue;
-        }
-        // Skip block-defn sentinels and AttributeDefinition — same as
-        // block_cache::build_defn. Their bboxes don't represent drawable
-        // MSPACE geometry.
-        if matches!(
-            e,
-            EntityType::Block(_)
-                | EntityType::BlockEnd(_)
-                | EntityType::AttributeDefinition(_)
-        ) {
-            continue;
-        }
-        let (bmin, bmax) = match e {
-            EntityType::Insert(ins) => (ins.insert_point, ins.insert_point),
-            _ => {
-                let bb = e.as_entity().bounding_box();
-                (bb.min, bb.max)
-            }
-        };
-        // Empty-entity placeholder (Polyline/Hatch/Spline/Mesh with no
-        // vertices). Including these would pull the centroid toward origin
-        // and destroy precision on UTM-authored content.
-        if bmin.x == 0.0
-            && bmin.y == 0.0
-            && bmin.z == 0.0
-            && bmax.x == 0.0
-            && bmax.y == 0.0
-            && bmax.z == 0.0
-        {
-            continue;
-        }
-        let cx = (bmin.x + bmax.x) * 0.5;
-        let cy = (bmin.y + bmax.y) * 0.5;
-        let cz = (bmin.z + bmax.z) * 0.5;
-        if !cx.is_finite() || !cy.is_finite() || !cz.is_finite() {
-            continue;
-        }
-        if cx.abs() > SANE_EXTENT || cy.abs() > SANE_EXTENT {
-            continue;
-        }
-        centers.push([cx, cy, cz]);
+/// Per-entity centroid for the world-offset scan, or `None` if the entity is
+/// not MSPACE geometry / has no usable bbox. Single-outlier-robust because
+/// the caller takes the median of these per-entity centroids rather than a
+/// global min/max midpoint.
+fn offset_centroid(
+    e: &EntityType,
+    model_block: Handle,
+    prep: &OffsetPrep,
+) -> Option<[f64; 3]> {
+    let c = e.common();
+    let h = c.handle;
+    let include = if let Some(ref set) = prep.mspace_set {
+        set.contains(&h)
+    } else if c.owner_handle == model_block {
+        true
+    } else if !c.owner_handle.is_null() {
+        false
+    } else if prep.owned_by_other_block.contains(&h) {
+        false
+    } else {
+        // owner null + h not enumerated by any block: legacy permissive
+        // when no block enumerated at all, strict drop otherwise (same
+        // as belongs_to_visible_block).
+        !prep.any_enumerated
+    };
+    if !include {
+        return None;
     }
+    // Skip block-defn sentinels and AttributeDefinition — same as
+    // block_cache::build_defn. Their bboxes don't represent drawable
+    // MSPACE geometry.
+    if matches!(
+        e,
+        EntityType::Block(_) | EntityType::BlockEnd(_) | EntityType::AttributeDefinition(_)
+    ) {
+        return None;
+    }
+    let (bmin, bmax) = match e {
+        EntityType::Insert(ins) => (ins.insert_point, ins.insert_point),
+        _ => {
+            let bb = e.as_entity().bounding_box();
+            (bb.min, bb.max)
+        }
+    };
+    // Empty-entity placeholder (Polyline/Hatch/Spline/Mesh with no
+    // vertices). Including these would pull the centroid toward origin
+    // and destroy precision on UTM-authored content.
+    if bmin.x == 0.0
+        && bmin.y == 0.0
+        && bmin.z == 0.0
+        && bmax.x == 0.0
+        && bmax.y == 0.0
+        && bmax.z == 0.0
+    {
+        return None;
+    }
+    let cx = (bmin.x + bmax.x) * 0.5;
+    let cy = (bmin.y + bmax.y) * 0.5;
+    let cz = (bmin.z + bmax.z) * 0.5;
+    if !cx.is_finite() || !cy.is_finite() || !cz.is_finite() {
+        return None;
+    }
+    if cx.abs() > WORLD_OFFSET_SANE_EXTENT || cy.abs() > WORLD_OFFSET_SANE_EXTENT {
+        return None;
+    }
+    Some([cx, cy, cz])
+}
+
+/// Pick the model-space precision-preserving offset and the `fit_all`
+/// outlier-rejection limit from the collected per-entity `centers`.
+///
+/// Prefers the entity-centroid median; cross-checks against header
+/// `$EXTMIN/$EXTMAX` only as a fallback when the entity scan found nothing.
+/// `centers` is gathered by the caller's single entity walk (see
+/// [`build_derived_caches`]) so no separate AABB pass is needed.
+fn world_offset_from_centers(
+    centers: Vec<[f64; 3]>,
+    header: &acadrust::document::HeaderVariables,
+) -> ([f64; 3], f32) {
+    const SANE_EXTENT: f64 = WORLD_OFFSET_SANE_EXTENT;
     let entity_ok = !centers.is_empty();
 
     // Median of per-entity centroids → robust drawing center.
@@ -381,10 +395,9 @@ fn compute_world_offset(
         (0.0, 0.0, 0.0, 0.0)
     };
 
-    // ── Pass 2: read header extents ──────────────────────────────────────
-    let h = &doc.header;
-    let hmin = h.model_space_extents_min;
-    let hmax = h.model_space_extents_max;
+    // ── Header extents (fallback only) ───────────────────────────────────
+    let hmin = header.model_space_extents_min;
+    let hmax = header.model_space_extents_max;
     let header_ok = hmin.x < hmax.x
         && hmin.y < hmax.y
         && hmin.x.abs() < SANE_EXTENT

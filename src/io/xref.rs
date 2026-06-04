@@ -35,8 +35,12 @@ pub struct XrefInfo {
 /// `base_dir`, and populate each xref block with entities from the
 /// referenced file.
 ///
-/// Returns a list of [`XrefInfo`] describing each xref block found.
-pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> Vec<XrefInfo> {
+/// Returns a list of [`XrefInfo`] describing each xref block found, plus the
+/// number of corrupt xref entities dropped during merge. Purging happens
+/// inline as each xref's entities are merged — xref content is parser output
+/// just like the host doc, so it gets the same corrupt-entity guard. Folding
+/// it in here avoids a second full-document `entities()` walk after resolve.
+pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> (Vec<XrefInfo>, usize) {
     // Auto-resolve every xref — frustum + LOD culling keep GPU cost bounded.
     let xref_entries: Vec<(String, String, Handle)> = doc
         .block_records
@@ -46,6 +50,7 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> Vec<XrefInfo> {
         .collect();
 
     let mut result = Vec::new();
+    let mut dropped = 0usize;
 
     for (block_name, raw_path, br_handle) in xref_entries {
         let resolved = resolve_path(&raw_path, base_dir);
@@ -56,7 +61,7 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> Vec<XrefInfo> {
                 Err(_) => XrefStatus::NotFound,
                 Ok(xref_doc) => {
                     ensure_block_entities(doc, &block_name);
-                    merge_xref_into_block(doc, &block_name, br_handle, xref_doc);
+                    dropped += merge_xref_into_block(doc, &block_name, br_handle, xref_doc);
                     XrefStatus::Loaded
                 }
             },
@@ -71,7 +76,7 @@ pub fn resolve_xrefs(doc: &mut CadDocument, base_dir: &Path) -> Vec<XrefInfo> {
         });
     }
 
-    result
+    (result, dropped)
 }
 
 /// Try to build an absolute path from a raw xref path string.
@@ -135,12 +140,13 @@ fn ensure_block_entities(doc: &mut CadDocument, block_name: &str) {
 /// — which doesn't know about the xref's layers — and silently falls
 /// back to WHITE / 1 px line weight. AutoCAD's BIND command uses the
 /// same naming scheme.
+/// Returns the number of corrupt entities skipped during the merge.
 fn merge_xref_into_block(
     doc: &mut CadDocument,
     xref_block_name: &str,
     br_handle: Handle,
     xref_doc: CadDocument,
-) {
+) -> usize {
     let prefix = xref_block_name;
 
     // Carry the xref's INSUNITS onto the host BlockRecord. Used at INSERT
@@ -223,7 +229,15 @@ fn merge_xref_into_block(
         .cloned()
         .collect();
 
+    let mut dropped = 0usize;
     for mut entity in entities {
+        // Drop parser-garbage entities (bad normals / vertex counts / inf
+        // coords) before they enter the host doc — they trigger huge
+        // allocations and unbounded recursion in the wire pipeline.
+        if super::is_entity_corrupt(&entity) {
+            dropped += 1;
+            continue;
+        }
         // Remap layer / linetype names so the host's resolver hits the
         // copies we just inserted.
         {
@@ -262,6 +276,7 @@ fn merge_xref_into_block(
         set_handle(&mut entity, Handle::NULL);
         let _ = doc.add_entity(entity);
     }
+    dropped
 }
 
 fn is_sentinel_linetype(name: &str) -> bool {

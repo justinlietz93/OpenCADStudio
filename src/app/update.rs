@@ -172,14 +172,13 @@ impl OpenCADStudio {
 
                 // Auto-resolve XREFs relative to the opened file's directory.
                 if let Some(base_dir) = path.parent() {
-                    let xrefs =
-                        crate::io::xref::resolve_xrefs(&mut self.tabs[i].scene.document, base_dir);
                     // xref content arrives un-purged: parser-garbage entities
                     // inside the referenced file can trigger infinite loops in
-                    // tessellation. Run the corrupt-entity guard again.
-                    let extra_dropped = crate::io::purge_corrupt_entities(
-                        &mut self.tabs[i].scene.document,
-                    );
+                    // tessellation. `resolve_xrefs` runs the corrupt-entity
+                    // guard inline as it merges each xref, so no second
+                    // full-document walk is needed here.
+                    let (xrefs, extra_dropped) =
+                        crate::io::xref::resolve_xrefs(&mut self.tabs[i].scene.document, base_dir);
                     if extra_dropped > 0 {
                         self.command_line.push_error(&format!(
                             "Warning: {extra_dropped} corrupt xref entities dropped"
