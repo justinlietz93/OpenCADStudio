@@ -1313,13 +1313,20 @@ impl OpenCADStudio {
                         self.tabs[i].scene.bump_geometry();
                         self.refresh_selected_grips();
                     }
-                    // Commit/cleanup an in-progress grip drag: un-hide the
-                    // edited entity, re-tessellate once, drop the preview.
+                    // Cancel an in-progress grip drag: restore the edited
+                    // entity from its pre-drag backup, un-hide it, re-tessellate
+                    // once, and drop the preview.
                     if let Some(h) = self.grip_preview_handle.take() {
                         let i = self.active_tab;
+                        if let Some(orig) = self.grip_original.take() {
+                            if let Some(e) = self.tabs[i].scene.document.get_entity_mut(h) {
+                                *e = orig;
+                            }
+                        }
                         self.tabs[i].scene.hidden.remove(&h);
                         self.tabs[i].scene.clear_preview_wire();
                         self.tabs[i].scene.bump_geometry();
+                        self.refresh_selected_grips();
                     }
                     self.tabs[self.active_tab].snap_result = None;
                     self.refresh_properties();
@@ -2116,6 +2123,9 @@ impl OpenCADStudio {
                         if let Some(prev) = self.grip_preview_handle.take() {
                             self.tabs[i].scene.hidden.remove(&prev);
                         }
+                        // Back up the original geometry so Esc can cancel the drag.
+                        self.grip_original =
+                            self.tabs[i].scene.document.get_entity(grip.handle).cloned();
                         self.tabs[i].scene.hidden.insert(grip.handle);
                         self.tabs[i].scene.bump_geometry();
                         self.grip_preview_handle = Some(grip.handle);
@@ -2633,10 +2643,11 @@ impl OpenCADStudio {
                         return Task::none();
                     }
                     self.tabs[i].active_grip = None;
-                    // Commit the grip drag: un-hide the edited entity and
-                    // re-tessellate the base once with its final geometry,
-                    // dropping the overlay preview.
+                    // Commit the grip drag: keep the doc's dragged geometry
+                    // (drop the cancel backup), un-hide the edited entity and
+                    // re-tessellate the base once, dropping the overlay preview.
                     if let Some(h) = self.grip_preview_handle.take() {
+                        self.grip_original = None;
                         self.tabs[i].scene.hidden.remove(&h);
                         self.tabs[i].scene.clear_preview_wire();
                         self.tabs[i].scene.bump_geometry();

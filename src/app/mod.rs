@@ -237,6 +237,11 @@ pub(super) struct OpenCADStudio {
     /// updates only the overlay rather than re-tessellating the whole model.
     /// Committed (un-hidden + one re-tess) when the drag ends. `None` = idle.
     grip_preview_handle: Option<acadrust::Handle>,
+    /// Snapshot of the edited entity taken at the start of a grip drag, used to
+    /// restore it if the user presses Esc to cancel the drag. The drag mutates
+    /// the document live (so grips / properties track), so cancel reverts from
+    /// this backup. Dropped (kept) on a normal commit.
+    grip_original: Option<acadrust::EntityType>,
     /// Open Quick Select panel state. `None` = panel closed. Filters are
     /// applied via `Message::QSelectApply`; the panel is dismissed on
     /// Apply / Cancel / Esc / outside-click.
@@ -1279,6 +1284,7 @@ impl OpenCADStudio {
             grip_pending: None,
             grip_add_provisional: None,
             grip_preview_handle: None,
+            grip_original: None,
             qselect: None,
             show_ucs_icon: true,
             show_viewcube: true,
