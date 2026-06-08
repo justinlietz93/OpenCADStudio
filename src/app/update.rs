@@ -926,14 +926,15 @@ impl OpenCADStudio {
                         self.command_line.autocomplete_cursor = None;
                         return self.focus_cmd_input();
                     }
-                    // While dynamic input is showing fields, numeric
-                    // glyphs edit the focused field instead of the
-                    // command line. Letters still go to the command line
+                    // While dynamic input is showing fields, numeric and
+                    // expression glyphs edit the focused field instead of
+                    // the command line. Letters still go to the command line
                     // so command-option keywords keep working.
-                    let numeric = !s.is_empty()
+                    let dyn_field_char = !s.is_empty()
                         && s.chars()
-                            .all(|c| c.is_ascii_digit() || matches!(c, '.' | '-' | '+'));
-                    if numeric && self.dyn_input && !self.tabs[i].dyn_fields.is_empty() {
+                            .all(|c| c.is_ascii_digit()
+                                || matches!(c, '.' | '-' | '+' | '*' | '/' | '^' | '%' | '(' | ')'));
+                    if dyn_field_char && self.dyn_input && !self.tabs[i].dyn_fields.is_empty() {
                         let a = self.tabs[i].dyn_active.min(self.tabs[i].dyn_fields.len() - 1);
                         self.tabs[i].dyn_fields[a]
                             .buffer
@@ -1055,7 +1056,7 @@ impl OpenCADStudio {
                 // Grip-menu value prompt — consume the typed number and
                 // route it through `apply_grip_menu_value`.
                 if let Some(pending) = self.grip_pending.take() {
-                    let raw = self.command_line.input.trim().to_string();
+                    let raw = super::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
                     let Ok(v) = raw.parse::<f64>() else {
                         self.command_line.push_error(&format!(
@@ -1117,7 +1118,7 @@ impl OpenCADStudio {
                     }
                 }
                 if self.tabs[i].active_cmd.is_some() {
-                    let text = self.command_line.input.trim().to_string();
+                    let text = super::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
 
                     if self.tabs[i]
@@ -4484,8 +4485,9 @@ impl OpenCADStudio {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
-                    if let Some(val) = self.tabs[i].properties.edit_buf.remove(field) {
-                        self.push_undo_snapshot(i, "CHPROP");
+                   if let Some(raw_val) = self.tabs[i].properties.edit_buf.remove(field) {
+                         let val = super::expr_eval::eval_to_string(&raw_val);
+                         self.push_undo_snapshot(i, "CHPROP");
                         if field == "frozen_layers" {
                             // Resolve layer names → handles, then apply to viewports.
                             let layer_handles: Vec<acadrust::Handle> = val
@@ -7309,8 +7311,9 @@ impl OpenCADStudio {
         let val = |idx: usize, live: f32| -> f32 {
             fields[idx]
                 .buffer
-                .as_ref()
-                .and_then(|s| s.trim().replace(',', ".").parse::<f32>().ok())
+     .as_ref()
+                .map(|s| s.trim().replace(',', "."))
+                .and_then(|s| crate::app::expr_eval::eval_number(&s).map(|v| v as f32))
                 .unwrap_or(live)
         };
         let dx = w.x - base.x;

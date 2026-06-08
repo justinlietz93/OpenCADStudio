@@ -1,6 +1,7 @@
 mod cmd_result;
 mod commands;
 mod document;
+mod expr_eval;
 mod helpers;
 mod history;
 mod layers;
