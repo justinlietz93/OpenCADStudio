@@ -14,5 +14,6 @@ pub fn all_modules() -> Vec<Box<dyn CadModule>> {
 		Box::new(super::view::ViewModule),
 		Box::new(super::manage::ManageModule),
 		Box::new(super::layout::LayoutModule),
+		Box::new(super::storm_sewer::StormSewerModule),
 	]
 }

@@ -29,6 +29,70 @@ impl OpenCADStudio {
         }
 
         match cmd {
+            // ── Storm Sewer module ──────────────────────────────────────────
+            "SS_ANALYZE" => {
+                use crate::modules::storm_sewer::analysis as ss;
+                match ss::pick_ssn_file() {
+                    Some(read) => match read.and_then(|t| ss::analyze_text(&t)) {
+                        Ok((ents, report)) => {
+                            for e in ents {
+                                let _ = self.tabs[i].scene.add_entity(e);
+                            }
+                            self.tabs[i].scene.bump_geometry();
+                            for line in report.lines() {
+                                self.command_line.push_output(line);
+                            }
+                        }
+                        Err(e) => self.command_line.push_error(&e),
+                    },
+                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                }
+            }
+            "SS_REPORT" => {
+                use crate::modules::storm_sewer::analysis as ss;
+                match ss::pick_ssn_file() {
+                    Some(read) => match read.and_then(|t| ss::report_text_from(&t)) {
+                        Ok(report) => {
+                            for line in report.lines() {
+                                self.command_line.push_output(line);
+                            }
+                        }
+                        Err(e) => self.command_line.push_error(&e),
+                    },
+                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                }
+            }
+            "SS_INLET" | "SS_JUNCTION" | "SS_OUTFALL" => {
+                use crate::modules::storm_sewer::structures::PlaceStructure;
+                let cmd = match cmd {
+                    "SS_INLET" => PlaceStructure::inlet(),
+                    "SS_JUNCTION" => PlaceStructure::junction(),
+                    _ => PlaceStructure::outfall(),
+                };
+                self.command_line.push_info(&cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(cmd));
+            }
+            "SS_PIPE" => {
+                let cmd = crate::modules::storm_sewer::structures::PlacePipe::new();
+                self.command_line.push_info(&cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(cmd));
+            }
+            "SS_PROFILE" => {
+                use crate::modules::storm_sewer::analysis as ss;
+                match ss::pick_ssn_file() {
+                    Some(read) => match read.and_then(|t| ss::profile_text(&t)) {
+                        Ok(ents) => {
+                            for e in ents {
+                                let _ = self.tabs[i].scene.add_entity(e);
+                            }
+                            self.tabs[i].scene.bump_geometry();
+                            self.command_line.push_info("Storm sewer HGL profile drawn.");
+                        }
+                        Err(e) => self.command_line.push_error(&e),
+                    },
+                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                }
+            }
             "NEW" => return Task::done(Message::TabNew),
             "OPEN" => return Task::done(Message::OpenFile),
             "SAVE" | "QSAVE" => return Task::done(Message::SaveFile),

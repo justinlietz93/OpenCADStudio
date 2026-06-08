@@ -137,6 +137,7 @@ pub mod insert;
 pub mod model;
 pub mod layout;
 pub mod manage;
+pub mod storm_sewer;
 pub mod view;
 
 // ── Auto-generated module registry ───────────────────────────────────────
