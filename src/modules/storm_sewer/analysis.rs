@@ -14,6 +14,51 @@ use stormsewer::network::{Analysis, AnalysisOptions, Network, Node, Pipe};
 use stormsewer::parse::parse_ssn;
 use stormsewer::report::format_analysis;
 
+use super::data;
+
+/// Default network-level analysis parameters used when analyzing a drawn
+/// network (per-entity data carries geometry/area; rainfall is global).
+fn default_params() -> (IdfCurve, AnalysisOptions) {
+    (IdfCurve::new(60.0, 10.0, 0.8), AnalysisOptions::default())
+}
+
+/// Annotation labels only (flow + HGL), for overlaying on an already-drawn
+/// network without re-drawing its geometry.
+fn build_annotations(net: &Network, a: &Analysis) -> Vec<EntityType> {
+    draw_network(net, a, &DrawConfig::default())
+        .plan_labels
+        .iter()
+        .map(|l| label(l.x, l.y, l.text.clone(), l.height))
+        .collect()
+}
+
+// ── Public API: analyze the network drawn in the active document ────────────
+
+/// Reconstruct the network from drawn entities, analyze it, and return
+/// annotation entities (flow/HGL labels) + the report.
+pub fn analyze_doc<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Result<(Vec<EntityType>, String), String> {
+    let net = data::network_from_entities(entities)?;
+    let (idf, opts) = default_params();
+    let a = run_analysis(&net, &idf, &opts)?;
+    Ok((build_annotations(&net, &a), format_analysis(&a)))
+}
+
+/// Reconstruct from drawn entities and return the HGL long-section entities.
+pub fn profile_doc<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Result<Vec<EntityType>, String> {
+    let net = data::network_from_entities(entities)?;
+    let (idf, opts) = default_params();
+    let a = run_analysis(&net, &idf, &opts)?;
+    Ok(build_profile(&net, &a))
+}
+
+/// Reconstruct from drawn entities and return the formatted report.
+pub fn report_doc<'a>(entities: impl Iterator<Item = &'a EntityType>) -> Result<String, String> {
+    let net = data::network_from_entities(entities)?;
+    let (idf, opts) = default_params();
+    let a = run_analysis(&net, &idf, &opts)?;
+    Ok(format_analysis(&a))
+}
+
 /// The built-in demonstration network (properly sized, with plan coordinates).
 fn demo() -> (Network, IdfCurve, AnalysisOptions) {
     let net = Network {

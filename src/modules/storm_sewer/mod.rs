@@ -7,6 +7,7 @@
 // INTEGRATION.md for where each `SS_*` command plugs in.
 
 pub mod analysis;
+pub mod data;
 pub mod structures;
 
 use crate::modules::{CadModule, IconKind, ModuleEvent, RibbonGroup, RibbonItem, ToolDef};
@@ -155,5 +156,39 @@ PIPE P2 N2 OUT 300 1.5 0.013
     fn bad_ssn_reports_error() {
         let err = super::analysis::analyze_text("NODE X inlet 0 0 oops 1 1 1").unwrap_err();
         assert!(err.contains("line 1"), "{err}");
+    }
+
+    #[test]
+    fn analyze_doc_runs_on_drawn_network() {
+        use acadrust::types::Vector3;
+        use acadrust::{Circle, EntityType, Handle, Line};
+        use stormsewer::network::NodeKind;
+
+        let mk_struct = |h: u64, kind, x: f64, inv: f64| {
+            let mut e = EntityType::Circle(Circle {
+                center: Vector3::new(x, 0.0, 0.0),
+                radius: 3.0,
+                ..Default::default()
+            });
+            e.common_mut().handle = Handle::new(h);
+            e.common_mut()
+                .extended_data
+                .add_record(super::data::structure_xdata(kind, inv, inv + 6.0, 1.0, 0.7));
+            e
+        };
+        let mut pipe =
+            EntityType::Line(Line::from_points(Vector3::new(0.0, 0.0, 0.0), Vector3::new(200.0, 0.0, 0.0)));
+        pipe.common_mut()
+            .extended_data
+            .add_record(super::data::pipe_xdata(1.5, 0.013, Handle::new(1), Handle::new(2)));
+        let ents = vec![
+            mk_struct(1, NodeKind::Inlet, 0.0, 104.0),
+            mk_struct(2, NodeKind::Outfall, 200.0, 100.0),
+            pipe,
+        ];
+
+        let (annotations, report) = super::analysis::analyze_doc(ents.iter()).expect("analyze drawn net");
+        assert!(!annotations.is_empty(), "expected flow/HGL labels");
+        assert!(report.contains("STORM SEWER ANALYSIS"), "report:\n{report}");
     }
 }

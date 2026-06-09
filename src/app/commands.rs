@@ -32,34 +32,31 @@ impl OpenCADStudio {
             // ── Storm Sewer module ──────────────────────────────────────────
             "SS_ANALYZE" => {
                 use crate::modules::storm_sewer::analysis as ss;
-                match ss::pick_ssn_file() {
-                    Some(read) => match read.and_then(|t| ss::analyze_text(&t)) {
-                        Ok((ents, report)) => {
-                            for e in ents {
-                                let _ = self.tabs[i].scene.add_entity(e);
-                            }
-                            self.tabs[i].scene.bump_geometry();
-                            for line in report.lines() {
-                                self.command_line.push_output(line);
-                            }
+                let result = ss::analyze_doc(self.tabs[i].scene.document.entities());
+                match result {
+                    Ok((ents, report)) => {
+                        for e in ents {
+                            let _ = self.tabs[i].scene.add_entity(e);
                         }
-                        Err(e) => self.command_line.push_error(&e),
-                    },
-                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                        self.tabs[i].scene.bump_geometry();
+                        self.command_line
+                            .push_info("Storm sewer: analyzed drawn network (default IDF 60/(t+10)^0.8).");
+                        for line in report.lines() {
+                            self.command_line.push_output(line);
+                        }
+                    }
+                    Err(e) => self.command_line.push_error(&e),
                 }
             }
             "SS_REPORT" => {
                 use crate::modules::storm_sewer::analysis as ss;
-                match ss::pick_ssn_file() {
-                    Some(read) => match read.and_then(|t| ss::report_text_from(&t)) {
-                        Ok(report) => {
-                            for line in report.lines() {
-                                self.command_line.push_output(line);
-                            }
+                match ss::report_doc(self.tabs[i].scene.document.entities()) {
+                    Ok(report) => {
+                        for line in report.lines() {
+                            self.command_line.push_output(line);
                         }
-                        Err(e) => self.command_line.push_error(&e),
-                    },
-                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                    }
+                    Err(e) => self.command_line.push_error(&e),
                 }
             }
             "SS_INLET" | "SS_JUNCTION" | "SS_OUTFALL" => {
@@ -79,18 +76,16 @@ impl OpenCADStudio {
             }
             "SS_PROFILE" => {
                 use crate::modules::storm_sewer::analysis as ss;
-                match ss::pick_ssn_file() {
-                    Some(read) => match read.and_then(|t| ss::profile_text(&t)) {
-                        Ok(ents) => {
-                            for e in ents {
-                                let _ = self.tabs[i].scene.add_entity(e);
-                            }
-                            self.tabs[i].scene.bump_geometry();
-                            self.command_line.push_info("Storm sewer HGL profile drawn.");
+                let result = ss::profile_doc(self.tabs[i].scene.document.entities());
+                match result {
+                    Ok(ents) => {
+                        for e in ents {
+                            let _ = self.tabs[i].scene.add_entity(e);
                         }
-                        Err(e) => self.command_line.push_error(&e),
-                    },
-                    None => self.command_line.push_info("Storm sewer: open cancelled."),
+                        self.tabs[i].scene.bump_geometry();
+                        self.command_line.push_info("Storm sewer HGL profile drawn.");
+                    }
+                    Err(e) => self.command_line.push_error(&e),
                 }
             }
             "NEW" => return Task::done(Message::TabNew),
