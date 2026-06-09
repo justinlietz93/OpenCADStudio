@@ -40,3 +40,49 @@ pub(crate) fn try_dispatch(app: &mut OpenCADStudio, tab: usize, cmd: &str) -> bo
     }
     false
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::OpenCADStudio;
+    #[test]
+    fn discovers_registered_plugins() {
+        let plugins = all_plugins();
+        assert!(
+            !plugins.is_empty(),
+            "expected at least one PluginRegistration (demo_plugin)"
+        );
+        assert!(
+            plugins
+                .iter()
+                .any(|p| p.manifest().id == "opencad.demo_plugin"),
+            "demo_plugin missing; ids: {:?}",
+            plugins.iter().map(|p| p.manifest().id).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn addon_ribbon_tabs_merge_after_core() {
+        let titles: Vec<&str> = all_ribbon_modules().iter().map(|m| m.title()).collect();
+        assert!(titles.contains(&"Demo Plugin"), "ribbon tabs: {titles:?}");
+        let core = core_registry::all_modules();
+        assert_eq!(titles.len(), core.len() + all_plugins().len());
+    }
+
+    #[test]
+    fn try_dispatch_routes_demo_command() {
+        let mut app = OpenCADStudio::new_for_test();
+        assert!(try_dispatch(&mut app, 0, "DP_HELLO"));
+        let info = app.command_history_info();
+        assert!(
+            info.iter().any(|t| t.contains("demo_plugin") && t.contains("plugin host OK")),
+            "info history: {info:?}"
+        );
+    }
+
+    #[test]
+    fn unknown_plugin_command_falls_through() {
+        let mut app = OpenCADStudio::new_for_test();
+        assert!(!try_dispatch(&mut app, 0, "DP_NOPE"));
+    }
+}

@@ -51,7 +51,7 @@ cargo build
 cargo test --lib
 ```
 
-No domain plugin is registered in this branch; existing core tests should pass unchanged.
+A minimal **`demo_plugin`** add-on registers at compile time for smoke tests (`DP_HELLO` command, Demo Plugin ribbon tab). Remove or gate it before release if maintainers prefer zero in-tree add-ons.
 
 ## Review questions
 

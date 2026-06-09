@@ -49,7 +49,7 @@ pub struct HistoryEntry {
     pub created_at: Instant,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryKind {
     Command,
     Output,

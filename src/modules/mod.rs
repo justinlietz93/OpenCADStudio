@@ -139,6 +139,7 @@ pub mod home;
 pub mod insert;
 pub mod model;
 pub mod layout;
+pub mod demo_plugin;
 pub mod manage;
 pub mod view;
 

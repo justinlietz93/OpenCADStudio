@@ -1475,6 +1475,22 @@ impl OpenCADStudio {
         app
     }
 
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn command_history_info(&self) -> Vec<String> {
+        use crate::ui::command_line::EntryKind;
+        self.command_line
+            .history
+            .iter()
+            .filter(|e| e.kind == EntryKind::Info)
+            .map(|e| e.text.clone())
+            .collect()
+    }
+
     /// Boot function for `iced::daemon`: returns initial state plus a task that
     /// opens the primary application window.
     fn boot() -> (Self, Task<Message>) {
