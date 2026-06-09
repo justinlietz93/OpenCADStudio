@@ -7,8 +7,18 @@
 
 use crate::scene::hatch_model::HatchModel;
 use crate::scene::wire_model::WireModel;
+use crate::scene::Scene;
 use acadrust::{EntityType, Handle};
 use glam::Vec3;
+
+/// Domain object resolved under the cursor for C3D-style ObjectPick snapping.
+#[derive(Clone, Copy, Debug)]
+pub struct ObjectPickHit {
+    pub handle: Handle,
+    pub x: f64,
+    pub y: f64,
+    pub label: &'static str,
+}
 
 // ── Transform ─────────────────────────────────────────────────────────────
 
@@ -271,6 +281,44 @@ pub trait CadCommand: Send {
         CmdResult::Cancel
     }
 
+    /// Point-click pick of domain objects (wire hit-test often misses small markers).
+    fn needs_structure_point_pick(&self) -> bool {
+        false
+    }
+
+    /// Resolve a domain object near `(x, y)` while `needs_structure_point_pick()` is active.
+    fn resolve_object_pick(&self, _scene: &Scene, _x: f64, _y: f64) -> Option<ObjectPickHit> {
+        None
+    }
+
+    /// Preview wires while hovering during object-point pick.
+    fn object_pick_hover_previews(&self, _scene: &Scene, _cursor: Vec3) -> Vec<WireModel> {
+        vec![]
+    }
+
+    /// Message when `resolve_object_pick` returns none on click.
+    fn object_pick_miss_message(&self) -> &'static str {
+        "No object near click."
+    }
+
+    /// Called when `needs_structure_point_pick()` is true and a structure is found near the click.
+    fn on_structure_pick(&mut self, _handle: Handle, _pt: Vec3) -> CmdResult {
+        CmdResult::Cancel
+    }
+
+    /// Extra acquisition previews during entity pick (besides `on_hover_entity`).
+    fn entity_pick_acquire_previews(&self, _scene: &Scene, _handle: Handle) -> Vec<WireModel> {
+        vec![]
+    }
+
+    /// Acquisition hint label during entity pick hover.
+    fn entity_pick_acquire_hint(&self, _handle: Handle) -> Option<&'static str> {
+        None
+    }
+
+    /// Hover label for C3D-style object acquisition (e.g. "Inlet" under cursor).
+    fn set_acquisition_hint(&mut self, _hint: Option<&str>) {}
+
     /// Called after `CmdResult::ReplaceEntity` is applied to the document.
     /// `old` is the erased handle; `new_handles` are the handles assigned to the replacement entities.
     /// Commands that stay active across replaces should update their internal snapshots here.
@@ -371,7 +419,13 @@ pub trait CadCommand: Send {
         self.on_point(hit)
     }
 
-    /// Called by update.rs after `on_entity_pick` to inject the cloned entity into commands
+    /// When true, `update.rs` injects the picked entity before calling
+    /// `on_entity_pick` (required when the pick handler reads injected state).
+    fn inject_before_entity_pick(&self) -> bool {
+        false
+    }
+
+    /// Called by update.rs to inject the cloned entity into commands
     /// that need to read/modify it (e.g. DIMTEDIT, MLEADERADD, MLEADERREMOVE).
     /// Default: no-op.
     fn inject_picked_entity(&mut self, _entity: acadrust::EntityType) {}

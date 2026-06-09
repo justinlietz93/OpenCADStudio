@@ -1,10 +1,13 @@
 // Module system — CadModule, ToolDef, RibbonGroup.
 //
-// To add a new module:
-//   1. Create `src/modules/my_name/` directory
+// To add a **core** ribbon tab (Home, View, …):
+//   1. Create `src/modules/my_name/` directory (no `plugin.toml`)
 //   2. Add `src/modules/my_name/mod.rs` implementing `CadModule` as `MyNameModule`
 //   3. Add `pub mod my_name;` below
-//   4. `cargo build` — module appears in the ribbon automatically
+//   4. `cargo build` — tab appears via build.rs registry
+//
+// To add an **add-on plugin** (Storm Sewer, …):
+//   See `docs/plugin-architecture.md` and copy `docs/plugin-template/`.
 //
 // Each module folder contains:
 //   - mod.rs       : module definition (ribbon groups + tool layout)
@@ -136,6 +139,7 @@ pub mod home;
 pub mod insert;
 pub mod model;
 pub mod layout;
+pub mod demo_plugin;
 pub mod manage;
 pub mod view;
 

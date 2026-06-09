@@ -1,0 +1,13 @@
+[plugin]
+id = "opencad.demo_plugin"
+name = "Demo Plugin"
+version = "0.1.0"
+description = "Minimal add-on for plugin-host integration tests"
+author = "Open CAD Studio contributors"
+license = "GPL-3.0-only"
+
+[opencad]
+api_version = 1
+ribbon_order = 99
+command_prefixes = ["DP_"]
+xdata_apps = []

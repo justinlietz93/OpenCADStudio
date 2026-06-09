@@ -28,6 +28,10 @@ impl OpenCADStudio {
             return Task::done(Message::OpenPathPicked(Some((path, size))));
         }
 
+        if crate::plugin::try_dispatch(self, i, cmd) {
+            return Task::none();
+        }
+
         match cmd {
             "NEW" => return Task::done(Message::TabNew),
             "OPEN" => return Task::done(Message::OpenFile),

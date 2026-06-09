@@ -251,6 +251,11 @@ impl OpenCADStudio {
             }
             CmdResult::ReplaceMany(replacements, additions) => {
                 let label = self.history_label_from_active_cmd(i, "FILLET");
+                let was_catchment = self
+                    .tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .is_some_and(|c| c.name() == "SS_CATCHMENT");
                 self.push_undo_snapshot(i, label);
                 for (handle, entities) in replacements {
                     self.tabs[i].scene.erase_entities(&[handle]);
@@ -265,6 +270,10 @@ impl OpenCADStudio {
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
+                if was_catchment {
+                    self.command_line
+                        .push_info("Catchment tagged successfully.");
+                }
                 self.refresh_properties();
             }
             CmdResult::ReplaceEntity(handle, new_entities) => {

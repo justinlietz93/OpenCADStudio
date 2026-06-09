@@ -10,6 +10,7 @@ mod entities;
 mod io;
 mod linetypes;
 mod modules;
+mod plugin;
 mod patterns;
 mod scene;
 mod snap;

@@ -7,6 +7,7 @@
 // Rules for a directory to be picked up:
 //   • Located directly in src/modules/
 //   • Contains a mod.rs file
+//   • Does NOT contain plugin.toml (add-ons register via BuiltinPlugin::ribbon)
 //   • Defines a pub struct {PascalCase}Module implementing CadModule
 //     (unit struct — no ::new() needed)
 //
@@ -38,7 +39,8 @@ fn main() {
             }
             let name = entry.file_name().into_string().ok()?;
             let mod_file = mods_dir.join(&name).join("mod.rs");
-            if mod_file.exists() {
+            let plugin_toml = mods_dir.join(&name).join("plugin.toml");
+            if mod_file.exists() && !plugin_toml.exists() {
                 Some(name)
             } else {
                 None

@@ -56,7 +56,7 @@ pub struct HistoryEntry {
     pub pinned: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EntryKind {
     Command,
     Output,

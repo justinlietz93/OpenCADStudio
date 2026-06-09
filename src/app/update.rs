@@ -2386,6 +2386,11 @@ impl OpenCADStudio {
                         .as_ref()
                         .map(|c| c.needs_entity_pick())
                         .unwrap_or(false);
+                    let needs_structure = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_structure_point_pick())
+                        .unwrap_or(false);
                     let is_gathering = self.tabs[i]
                         .active_cmd
                         .as_ref()
@@ -2396,7 +2401,7 @@ impl OpenCADStudio {
                         .as_ref()
                         .map(|c| c.needs_tangent_pick())
                         .unwrap_or(false);
-                    self.tabs[i].snap_result = if needs_entity || is_gathering {
+                    self.tabs[i].snap_result = if needs_entity || is_gathering || needs_structure {
                         None
                     } else if needs_tan {
                         self.snapper.snap_tangent_only(
@@ -2468,6 +2473,39 @@ impl OpenCADStudio {
                     };
                     self.tabs[i].last_cursor_world = effective;
                     self.tabs[i].last_cursor_screen = p_full;
+
+                    // C3D-style orange object snap (plugin commands implement resolve_object_pick).
+                    if needs_structure {
+                        use crate::snap::{SnapResult, SnapType};
+                        let pick = self.tabs[i].active_cmd.as_ref().and_then(|c| {
+                            c.resolve_object_pick(
+                                &self.tabs[i].scene,
+                                effective.x as f64,
+                                effective.y as f64,
+                            )
+                        });
+                        if let Some(pick) = pick {
+                            let world =
+                                glam::Vec3::new(pick.x as f32, pick.y as f32, effective.z);
+                            let ndc = view_proj.project_point3(world);
+                            let screen = iced::Point::new(
+                                (ndc.x + 1.0) * 0.5 * bounds.width,
+                                (1.0 - ndc.y) * 0.5 * bounds.height,
+                            );
+                            self.tabs[i].snap_result = Some(SnapResult {
+                                world,
+                                screen,
+                                snap_type: SnapType::ObjectPick,
+                                tangent_obj: None,
+                            });
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                cmd.set_acquisition_hint(Some(pick.label));
+                            }
+                        } else if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                            cmd.set_acquisition_hint(None);
+                        }
+                    }
+
                     // Snap glyph is positioned in canvas space; shift the
                     // tile-local snap screen point back to the full canvas.
                     if let Some(s) = self.tabs[i].snap_result.as_mut() {
@@ -2475,16 +2513,42 @@ impl OpenCADStudio {
                         s.screen.y += tile_b.y;
                     }
 
-                    let mut previews = if needs_entity {
+                    let mut previews = if needs_structure {
+                        let mut p = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|c| c.object_pick_hover_previews(&self.tabs[i].scene, effective))
+                            .unwrap_or_default();
+                        if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                            p.extend(cmd.on_preview_wires(effective));
+                        }
+                        p
+                    } else if needs_entity {
                         let hover_handle =
                             scene::hit_test::click_hit(p, &all_wires[..], view_proj, bounds)
                                 .and_then(|s| Scene::handle_from_wire_name(s))
                                 .unwrap_or(acadrust::Handle::NULL);
-                        self.tabs[i]
+                        let mut p = self.tabs[i]
                             .active_cmd
                             .as_mut()
                             .map(|c| c.on_hover_entity(hover_handle, effective))
-                            .unwrap_or_default()
+                            .unwrap_or_default();
+                        if !hover_handle.is_null() {
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_ref() {
+                                p.extend(cmd.entity_pick_acquire_previews(
+                                    &self.tabs[i].scene,
+                                    hover_handle,
+                                ));
+                            }
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                if let Some(hint) =
+                                    cmd.entity_pick_acquire_hint(hover_handle)
+                                {
+                                    cmd.set_acquisition_hint(Some(hint));
+                                }
+                            }
+                        }
+                        p
                     } else {
                         self.tabs[i]
                             .active_cmd
@@ -2948,6 +3012,36 @@ impl OpenCADStudio {
                     let result = if self.tabs[i]
                         .active_cmd
                         .as_ref()
+                        .map(|c| c.needs_structure_point_pick())
+                        .unwrap_or(false)
+                    {
+                        let pick = self.tabs[i].active_cmd.as_ref().and_then(|c| {
+                            c.resolve_object_pick(
+                                &self.tabs[i].scene,
+                                world_pt.x as f64,
+                                world_pt.y as f64,
+                            )
+                        });
+                        if let Some(pick) = pick {
+                            let center = glam::Vec3::new(pick.x as f32, pick.y as f32, world_pt.z);
+                            let result = self.tabs[i].active_cmd.as_mut().map(|c| {
+                                c.on_structure_pick(pick.handle, center)
+                            });
+                            self.command_line
+                                .push_info(&format!("{} acquired.", pick.label));
+                            result
+                        } else {
+                            let msg = self.tabs[i]
+                                .active_cmd
+                                .as_ref()
+                                .map(|c| c.object_pick_miss_message())
+                                .unwrap_or("No object near click.");
+                            self.command_line.push_error(msg);
+                            None
+                        }
+                    } else if self.tabs[i]
+                        .active_cmd
+                        .as_ref()
                         .map(|c| c.needs_entity_pick())
                         .unwrap_or(false)
                     {
@@ -2956,6 +3050,23 @@ impl OpenCADStudio {
                         let hit = scene::hit_test::click_hit(p, &all_wires2[..], vp_mat2, bounds)
                             .and_then(|s| Scene::handle_from_wire_name(s));
                         if let Some(handle) = hit {
+                            // Some commands (e.g. SS_CATCHMENT) need the entity
+                            // body before `on_entity_pick` can advance.
+                            let inject_first = self.tabs[i]
+                                .active_cmd
+                                .as_ref()
+                                .map(|c| c.inject_before_entity_pick())
+                                .unwrap_or(false);
+                            if inject_first {
+                                if let Some(entity) =
+                                    self.tabs[i].scene.document.get_entity(handle).cloned()
+                                {
+                                    if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                        cmd.inject_picked_entity(entity);
+                                    }
+                                }
+                            }
+
                             let result = self.tabs[i]
                                 .active_cmd
                                 .as_mut()

@@ -500,18 +500,37 @@ impl canvas::Program<Message> for SelectionCanvas {
 
         // ── Snap marker ───────────────────────────────────────────────────
         if let Some((sp, snap_type)) = self.snap {
-            let yellow = Color {
-                r: 1.0,
-                g: 0.9,
-                b: 0.1,
-                a: 1.0,
+            let (r, g, b) = if snap_type == SnapType::ObjectPick {
+                (0.95_f32, 0.50, 0.08) // C3D-style orange object snap
+            } else {
+                (1.0, 0.9, 0.1) // classic yellow OSNAP
             };
+            let marker = Color { r, g, b, a: 1.0 };
             let stroke = canvas::Stroke {
-                width: 1.5,
-                style: canvas::Style::Solid(yellow),
+                width: if snap_type == SnapType::ObjectPick { 2.0 } else { 1.5 },
+                style: canvas::Style::Solid(marker),
                 ..Default::default()
             };
             match snap_type {
+                SnapType::ObjectPick => {
+                    // Target box + center dot (Civil 3D acquisition glyph).
+                    let h = 7.0_f32;
+                    let rect = canvas::Path::rectangle(
+                        Point::new(sp.x - h, sp.y - h),
+                        Size::new(h * 2.0, h * 2.0),
+                    );
+                    frame.stroke(&rect, stroke.clone());
+                    let r = 3.0_f32;
+                    frame.fill(
+                        &canvas::Path::circle(sp, r),
+                        Color {
+                            r: 0.95,
+                            g: 0.50,
+                            b: 0.08,
+                            a: 0.85,
+                        },
+                    );
+                }
                 SnapType::Endpoint => {
                     let h = 5.0_f32;
                     let rect = canvas::Path::rectangle(
@@ -655,7 +674,7 @@ impl canvas::Program<Message> for SelectionCanvas {
                     let r = 1.4_f32;
                     for k in [-7.0_f32, 0.0, 7.0] {
                         let dot = canvas::Path::circle(Point::new(sp.x + k, sp.y), r);
-                        frame.fill(&dot, yellow);
+                        frame.fill(&dot, marker);
                     }
                 }
                 SnapType::Parallel => {

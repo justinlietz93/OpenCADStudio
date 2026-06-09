@@ -30,6 +30,8 @@ pub enum SnapType {
     ApparentIntersection,
     Parallel,
     Grid,
+    /// C3D-style object acquisition (storm structure / network pick) — orange marker.
+    ObjectPick,
 }
 
 /// Ordered list used by the popup and snap engine.

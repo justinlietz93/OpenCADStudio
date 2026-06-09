@@ -13,8 +13,8 @@ use iced::widget::{button, column, container, mouse_area, row, scrollable, svg, 
 use iced::{Background, Border, Color, Element, Fill, Length, Padding, Theme};
 
 use crate::app::Message;
-use crate::modules::registry;
 use crate::modules::{CadModule, IconKind, RibbonItem};
+use crate::plugin::all_ribbon_modules;
 use crate::ui::properties::{color_picker_dropdown, lw_options, LinetypeItem};
 
 mod widgets;
@@ -67,7 +67,7 @@ pub struct LayerInfo {
 impl Ribbon {
     pub fn new() -> Self {
         Self {
-            modules: registry::all_modules(),
+            modules: all_ribbon_modules(),
             active: 0,
             active_tool: None,
             wireframe: false,

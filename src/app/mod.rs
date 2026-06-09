@@ -1,5 +1,6 @@
 mod cmd_result;
 mod commands;
+pub mod plugin_host;
 mod document;
 mod expr_eval;
 mod helpers;
@@ -1491,6 +1492,22 @@ impl OpenCADStudio {
         app.last_saved_settings = Some(app.current_settings());
         app.sync_ribbon_layers();
         app
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test() -> Self {
+        Self::new()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn command_history_info(&self) -> Vec<String> {
+        use crate::ui::command_line::EntryKind;
+        self.command_line
+            .history
+            .iter()
+            .filter(|e| e.kind == EntryKind::Info)
+            .map(|e| e.text.clone())
+            .collect()
     }
 
     /// Boot function for `iced::daemon`: returns initial state plus a task that

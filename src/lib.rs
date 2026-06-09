@@ -6,6 +6,7 @@ pub mod entities;
 pub mod io;
 pub mod linetypes;
 pub mod modules;
+pub mod plugin;
 pub mod patterns;
 pub mod scene;
 pub mod snap;
