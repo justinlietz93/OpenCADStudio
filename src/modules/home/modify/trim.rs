@@ -11,7 +11,7 @@
 use std::f64::consts::TAU;
 
 use acadrust::entities::{
-    Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, Ray as RayEnt,
+    Arc as ArcEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline, LwVertex, Ray as RayEnt,
     Spline as SplineEnt, XLine as XLineEnt,
 };
 use acadrust::types::Vector3;
@@ -1223,6 +1223,148 @@ fn trim_arc(orig: &ArcEnt, ts: &[f64], t_click: f64) -> Vec<EntityType> {
         .collect()
 }
 
+/// Trim a clicked LwPolyline: remove the portion containing the click, bounded
+/// by the nearest boundary intersections on each side. A closed polyline needs
+/// ≥2 cuts and becomes an open polyline (the surviving arc); an open one yields
+/// the surviving piece(s). Bulges on fully-surviving segments are kept; the
+/// partial end segments at a cut become straight (issue #65).
+fn trim_lwpolyline(poly: &LwPolyline, cx: f64, cy: f64, geos: &[Geo]) -> Option<Vec<EntityType>> {
+    let handle = poly.common.handle;
+    let n = poly.vertices.len();
+    if n < 2 {
+        return None;
+    }
+    let closed = poly.is_closed;
+    let seg_count = if closed { n } else { n - 1 };
+    let total = seg_count as f64;
+
+    let vx = |i: usize| -> (f64, f64) {
+        let v = &poly.vertices[i % n];
+        (v.location.x, v.location.y)
+    };
+    let point_at = |t: f64| -> (f64, f64) {
+        let tt = if closed { t.rem_euclid(total) } else { t.clamp(0.0, total) };
+        let i = (tt.floor() as usize).min(seg_count.saturating_sub(1));
+        let u = tt - i as f64;
+        let (ax, ay) = vx(i);
+        let (bx, by) = vx(i + 1);
+        (ax + u * (bx - ax), ay + u * (by - ay))
+    };
+
+    // Boundary cuts as global params (segment index + local u).
+    let mut cuts: Vec<f64> = Vec::new();
+    for i in 0..seg_count {
+        let (ax, ay) = vx(i);
+        let (bx, by) = vx(i + 1);
+        for u in line_seg_ts(ax, ay, bx, by, handle, geos) {
+            cuts.push(i as f64 + u.clamp(0.0, 1.0));
+        }
+    }
+    cuts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    cuts.dedup_by(|a, b| (*a - *b).abs() < 1e-6);
+    if cuts.is_empty() {
+        return None;
+    }
+
+    // Click param: nearest point on the polyline.
+    let mut best = (f64::INFINITY, 0.0_f64);
+    for i in 0..seg_count {
+        let (ax, ay) = vx(i);
+        let (bx, by) = vx(i + 1);
+        let (dx, dy) = (bx - ax, by - ay);
+        let len2 = dx * dx + dy * dy;
+        let u = if len2 > 1e-12 {
+            (((cx - ax) * dx + (cy - ay) * dy) / len2).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+        let (px, py) = (ax + u * dx, ay + u * dy);
+        let d = (px - cx).powi(2) + (py - cy).powi(2);
+        if d < best.0 {
+            best = (d, i as f64 + u);
+        }
+    }
+    let t_click = best.1;
+
+    // Emit the surviving sub-polyline from param `s0` to `s1` (s1 > s0), with
+    // both ends treated as cut points (straight) and interior vertices keeping
+    // their original bulge.
+    let emit = |s0: f64, s1: f64, start_cut: bool, end_cut: bool| -> Vec<(f64, f64, f64)> {
+        let mut o: Vec<(f64, f64, f64)> = Vec::new();
+        let (sx, sy) = point_at(s0);
+        let s_idx = (s0.floor() as usize) % seg_count;
+        let s_bulge = if start_cut { 0.0 } else { poly.vertices[s_idx % n].bulge };
+        o.push((sx, sy, s_bulge));
+        let mut k = s0.floor() as i64 + 1;
+        while (k as f64) < s1 - 1e-9 {
+            let idx = (k as usize) % n;
+            let seg = (k as usize) % seg_count;
+            o.push((vx(idx).0, vx(idx).1, poly.vertices[seg].bulge));
+            k += 1;
+        }
+        if end_cut {
+            if let Some(l) = o.last_mut() {
+                l.2 = 0.0; // outgoing toward the cut is partial → straight
+            }
+        }
+        let (ex, ey) = point_at(s1);
+        o.push((ex, ey, 0.0));
+        o
+    };
+
+    let mut pieces: Vec<Vec<(f64, f64, f64)>> = Vec::new();
+    if closed {
+        if cuts.len() < 2 {
+            return None;
+        }
+        let hi = cuts
+            .iter()
+            .cloned()
+            .find(|&c| c > t_click + 1e-9)
+            .unwrap_or(cuts[0] + total);
+        let lo = cuts
+            .iter()
+            .cloned()
+            .rev()
+            .find(|&c| c < t_click - 1e-9)
+            .unwrap_or(cuts[cuts.len() - 1] - total);
+        let mut s1 = lo;
+        while s1 <= hi {
+            s1 += total;
+        }
+        pieces.push(emit(hi, s1, true, true));
+    } else {
+        let lo = cuts.iter().cloned().rev().find(|&c| c < t_click - 1e-9);
+        let hi = cuts.iter().cloned().find(|&c| c > t_click + 1e-9);
+        if let Some(lo) = lo {
+            pieces.push(emit(0.0, lo, false, true));
+        }
+        if let Some(hi) = hi {
+            pieces.push(emit(hi, total, true, false));
+        }
+    }
+
+    let mut out: Vec<EntityType> = Vec::new();
+    for verts in pieces {
+        if verts.len() < 2 {
+            continue;
+        }
+        let mut np = poly.clone();
+        np.common.handle = Handle::NULL;
+        np.is_closed = false;
+        np.vertices = verts
+            .into_iter()
+            .map(|(x, y, b)| {
+                let mut v = LwVertex::from_coords(x, y);
+                v.bulge = b;
+                v
+            })
+            .collect();
+        out.push(EntityType::LwPolyline(np));
+    }
+    Some(out)
+}
+
 // ── Extend helpers ────────────────────────────────────────────────────────
 
 /// Extend the first or last segment of an LwPolyline to the nearest boundary.
@@ -1946,6 +2088,12 @@ impl CadCommand for TrimCommand {
                     .unwrap_or(0.5);
                 Some(trim_spline(s, &ts, t_click))
             }
+            Some(EntityType::LwPolyline(p)) => {
+                match trim_lwpolyline(p, pt.x as f64, pt.y as f64, &self.geos) {
+                    Some(v) => Some(v),
+                    None => return CmdResult::NeedPoint,
+                }
+            }
             _ => None,
         };
 
@@ -2201,6 +2349,23 @@ impl CadCommand for TrimCommand {
                     out.push(WireModel::solid(
                         format!("trim_keep_{i}"),
                         pts,
+                        WireModel::CYAN,
+                        false,
+                    ));
+                }
+                out
+            }
+            Some(EntityType::LwPolyline(p)) => {
+                let Some(survivors) = trim_lwpolyline(p, pt.x as f64, pt.y as f64, &self.geos)
+                else {
+                    return vec![];
+                };
+                let orig = WireModel::solid("trim_rm".into(), entity_pts(entity.unwrap()), DIM_RED, false);
+                let mut out = vec![orig];
+                for (i, ent) in survivors.iter().enumerate() {
+                    out.push(WireModel::solid(
+                        format!("trim_keep_{i}"),
+                        entity_pts(ent),
                         WireModel::CYAN,
                         false,
                     ));
