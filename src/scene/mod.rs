@@ -633,13 +633,6 @@ pub struct Scene {
     /// invalidates the cull-dependent wire list as well as a geometry change.
     /// Uses `Arc` so `build_primitive()` avoids a full Vec clone during navigation.
     wire_cache: RefCell<Option<((u64, u64), Arc<Vec<WireModel>>)>>,
-    /// Camera-invariant full wire set for **picking** (Model layout), keyed on
-    /// `geometry_epoch` alone. The wires are world-space, so a pan/zoom must not
-    /// re-tessellate the whole un-culled model just to hit-test the next mouse
-    /// move (seconds on a 100k-entity drawing). Built once per geometry change
-    /// and reused across every camera move; a slightly stale curve tol is
-    /// harmless for an 8 px pick threshold.
-    hit_wire_cache: RefCell<Option<(u64, Arc<Vec<WireModel>>)>>,
     /// Per-Model-tile cached tessellation. Each tile has its own camera
     /// (live for the active tile, stored snapshot for the others), so
     /// LOD / frustum culling has to run independently — the shared
@@ -827,7 +820,6 @@ impl Scene {
             block_epoch: GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed),
             selection_generation: 0,
             wire_cache: RefCell::new(None),
-            hit_wire_cache: RefCell::new(None),
             model_tile_wire_cache: RefCell::new(HashMap::default()),
             sort_cache: RefCell::new(None),
             draw_depth_cache: RefCell::new(None),
@@ -2091,23 +2083,10 @@ impl Scene {
     ///   only — paper-space entities are NOT interactive.
     pub fn hit_test_wires(&self) -> Arc<Vec<WireModel>> {
         if self.current_layout == "Model" {
-            // Camera-invariant pick cache: reuse the full wire set across pan /
-            // zoom (world-space wires don't change), rebuilding only when the
-            // geometry changes. `entity_wires_arc` itself keys on the camera,
-            // so calling it on every mouse move after a navigate would
-            // re-tessellate the whole un-culled model — the large-file hover
-            // stutter. Gate on `geometry_epoch` here instead.
-            {
-                let c = self.hit_wire_cache.borrow();
-                if let Some((g, ref arc)) = *c {
-                    if g == self.geometry_epoch {
-                        return Arc::clone(arc);
-                    }
-                }
-            }
-            let arc = self.entity_wires_arc();
-            *self.hit_wire_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&arc)));
-            return arc;
+            // entity_wires_arc is culled to the current view and keyed on the
+            // camera, so it re-culls when the view changes — picking must reach
+            // entities that scroll into view after a pan/zoom.
+            return self.entity_wires_arc();
         }
         let layout_block = self.current_layout_block_handle();
         match self.active_viewport {
