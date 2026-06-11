@@ -2489,6 +2489,20 @@ impl OpenCADStudio {
                     self.tabs[i].last_cursor_world = effective;
                     self.tabs[i].last_cursor_screen = p_full;
 
+                    // Entity-pick previews (TRIM/EXTEND/FILLET…) compare the
+                    // cursor against WCS document entities and return WCS wires.
+                    // `effective` is offset-relative, so build a WCS copy for
+                    // the click and shift the returned wires back to the
+                    // offset-relative frame the renderer expects (model space
+                    // only; paper-space entities use sheet coordinates).
+                    let wo_local = if self.tabs[i].scene.current_layout == "Model" {
+                        self.tabs[i].scene.world_offset
+                    } else {
+                        [0.0; 3]
+                    };
+                    let wo_f = glam::Vec3::new(wo_local[0] as f32, wo_local[1] as f32, wo_local[2] as f32);
+                    let effective_wcs = effective + wo_f;
+
                     // C3D-style orange object snap (plugin commands implement resolve_object_pick).
                     if needs_structure {
                         use crate::snap::{SnapResult, SnapType};
@@ -2545,8 +2559,20 @@ impl OpenCADStudio {
                         let mut p = self.tabs[i]
                             .active_cmd
                             .as_mut()
-                            .map(|c| c.on_hover_entity(hover_handle, effective))
+                            .map(|c| c.on_hover_entity(hover_handle, effective_wcs))
                             .unwrap_or_default();
+                        // on_hover_entity returns WCS wires; shift to the
+                        // offset-relative frame so the preview lands on the
+                        // geometry on large-coordinate drawings.
+                        if wo_f != glam::Vec3::ZERO {
+                            for w in p.iter_mut() {
+                                for pt in w.points.iter_mut() {
+                                    pt[0] -= wo_f.x;
+                                    pt[1] -= wo_f.y;
+                                    pt[2] -= wo_f.z;
+                                }
+                            }
+                        }
                         if !hover_handle.is_null() {
                             if let Some(cmd) = self.tabs[i].active_cmd.as_ref() {
                                 p.extend(cmd.entity_pick_acquire_previews(
