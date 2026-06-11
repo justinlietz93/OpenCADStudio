@@ -14,6 +14,7 @@ mod style_ops;
 mod text_inline;
 mod update;
 mod view;
+mod visibility;
 
 pub use style_ops::StyleKind;
 
@@ -240,6 +241,8 @@ pub(super) struct OpenCADStudio {
     /// until dismissed (click outside, ESC, cursor leaves the grip).
     grip_popup: Option<GripPopup>,
     grip_pending: Option<GripPendingValue>,
+    /// Open dynamic-block visibility-state dropdown.
+    visibility_popup: Option<visibility::VisibilityPopup>,
     /// A leader line just added via the "Add Leader" grip menu whose arrow is
     /// being placed (follows the cursor). `(entity handle, new-arrow grip id)`.
     /// Esc before the placement click removes it again.
@@ -748,6 +751,9 @@ pub enum Message {
     /// User picked an item in the multi-functional grip popup menu —
     /// the index is into `grip_popup.items`.
     GripMenuPick(usize),
+    /// User picked a dynamic-block visibility state — index into the
+    /// visibility dropdown's items.
+    VisibilityPick(usize),
     /// Timer pulse while the cursor is dwelling on a grip; drives the
     /// dwell-to-popup transition without requiring further mouse motion.
     GripDwellTick,
@@ -1324,6 +1330,7 @@ impl OpenCADStudio {
             grip_hover: None,
             grip_popup: None,
             grip_pending: None,
+            visibility_popup: None,
             grip_add_provisional: None,
             grip_preview_handle: None,
             grip_original: None,

@@ -1052,6 +1052,73 @@ impl OpenCADStudio {
             }
         }
 
+        // Dynamic-block visibility-state dropdown.
+        if let Some(popup) = self.visibility_popup.as_ref() {
+            if !tab.is_start {
+                let max_len = popup
+                    .items
+                    .iter()
+                    .map(|s| s.chars().count())
+                    .max()
+                    .unwrap_or(4) as f32;
+                // +2 chars for the leading "✓ " / "  " marker column.
+                let row_w = (max_len + 2.0) * 7.0 + 24.0;
+                let mut col = column![].spacing(0).width(iced::Length::Fixed(row_w));
+                for (idx, name) in popup.items.iter().enumerate() {
+                    let is_cur = popup.current == Some(idx);
+                    let label = format!("{} {}", if is_cur { "✓" } else { "  " }, name);
+                    let btn = button(text(label).size(12).color(Color::WHITE))
+                        .on_press(Message::VisibilityPick(idx))
+                        .padding([3, 10])
+                        .width(Fill)
+                        .style(move |_: &Theme, status| iced::widget::button::Style {
+                            background: Some(Background::Color(match status {
+                                iced::widget::button::Status::Hovered => Color {
+                                    r: 0.20,
+                                    g: 0.45,
+                                    b: 0.95,
+                                    a: 1.0,
+                                },
+                                _ => Color::TRANSPARENT,
+                            })),
+                            border: Border {
+                                color: Color::TRANSPARENT,
+                                width: 0.0,
+                                radius: 0.0.into(),
+                            },
+                            text_color: Color::WHITE,
+                            ..Default::default()
+                        });
+                    col = col.push(btn);
+                }
+                let panel = container(iced::widget::scrollable(col).height(iced::Length::Shrink))
+                    .max_height(360.0)
+                    .padding(2)
+                    .style(|_: &Theme| container::Style {
+                        background: Some(Background::Color(Color {
+                            r: 0.10,
+                            g: 0.10,
+                            b: 0.10,
+                            a: 0.95,
+                        })),
+                        border: Border {
+                            color: Color {
+                                r: 0.40,
+                                g: 0.40,
+                                b: 0.40,
+                                a: 1.0,
+                            },
+                            width: 1.0,
+                            radius: 3.0.into(),
+                        },
+                        ..Default::default()
+                    });
+                let anchor = iced::Point::new(popup.anchor.x + 12.0, popup.anchor.y + 12.0);
+                viewport_stack =
+                    viewport_stack.push(position_canvas_overlay(anchor, panel.into()));
+            }
+        }
+
         // Quick Properties: compact floating property panel on selection,
         // anchored at the canvas top-left so it doesn't track the cursor.
         if self.quick_properties && !tab.is_start {

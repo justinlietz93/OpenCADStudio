@@ -71,6 +71,8 @@ pub(super) struct DocumentTab {
     pub(super) active_grip: Option<GripEdit>,
     pub(super) selected_grips: Vec<GripDef>,
     pub(super) selected_handle: Option<Handle>,
+    /// Dynamic-block visibility grip for the current single selection.
+    pub(super) visibility_grip: Option<super::visibility::VisibilityGrip>,
     pub(super) wireframe: bool,
     pub(super) render_mode: acadrust::entities::ViewportRenderMode,
     pub(super) visual_style: String,
@@ -134,6 +136,7 @@ impl DocumentTab {
             active_grip: None,
             selected_grips: vec![],
             selected_handle: None,
+            visibility_grip: None,
             wireframe: false,
             render_mode: acadrust::entities::ViewportRenderMode::Wireframe2D,
             visual_style: "Wireframe 2D".into(),

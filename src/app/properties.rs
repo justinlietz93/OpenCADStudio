@@ -453,6 +453,9 @@ impl OpenCADStudio {
         };
         self.tabs[i].selected_handle = new_handle;
         self.tabs[i].selected_grips = new_grips;
+        // Append the dynamic-block visibility (lookup) grip, if the lone
+        // selection is a visibility-parametric block reference.
+        self.refresh_visibility_grip(wo);
     }
 
     pub(super) fn property_target_handles(&self, i: usize) -> Vec<Handle> {

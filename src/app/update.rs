@@ -1391,6 +1391,9 @@ impl OpenCADStudio {
                     self.grip_hover = None;
                     return Task::none();
                 }
+                if self.visibility_popup.take().is_some() {
+                    return Task::none();
+                }
                 if self.grip_pending.take().is_some() {
                     self.command_line.input.clear();
                     return Task::none();
@@ -2691,6 +2694,11 @@ impl OpenCADStudio {
                     self.grip_hover = None;
                     return Task::none();
                 }
+                // Outside-click dismiss for the visibility-state dropdown
+                // (its buttons sit above this mouse_area).
+                if self.visibility_popup.take().is_some() {
+                    return Task::none();
+                }
                 // Same dismiss-on-outside-click for the right-click
                 // context menu: its panel is opaque, so a press that
                 // reaches here is outside the menu.
@@ -2805,6 +2813,14 @@ impl OpenCADStudio {
                             find_hit_grip(p, &self.tabs[i].selected_grips, vp_mat, bounds)
                         };
                         if let Some((grip_id, is_translate, world)) = grip_hit {
+                            // The visibility (lookup) grip opens a state
+                            // dropdown instead of starting a stretch drag.
+                            if grip_id == super::visibility::VIS_GRIP_ID {
+                                self.open_visibility_popup(p);
+                                self.grip_hover = None;
+                                self.grip_popup = None;
+                                return Task::none();
+                            }
                             self.tabs[i].active_grip = Some(GripEdit {
                                 handle,
                                 grip_id,
@@ -3800,6 +3816,13 @@ impl OpenCADStudio {
                     .last_move_pos
                     .unwrap_or(self.cursor_pos);
                 self.update_grip_hover(i, p);
+                Task::none()
+            }
+
+            Message::VisibilityPick(idx) => {
+                if let Some(popup) = self.visibility_popup.take() {
+                    self.apply_visibility_state(popup.insert_handle, idx);
+                }
                 Task::none()
             }
 
@@ -7359,8 +7382,11 @@ impl OpenCADStudio {
                 } else if let Some(h) = self.grip_hover.as_mut() {
                     h.screen = p;
                 }
-                // Open popup once dwell crosses the threshold.
+                // Open popup once dwell crosses the threshold. The visibility
+                // grip has its own click-to-open dropdown, so it gets no
+                // hover grip-menu.
                 if self.grip_popup.is_none()
+                    && grip_id != super::visibility::VIS_GRIP_ID
                     && self
                         .grip_hover
                         .as_ref()
