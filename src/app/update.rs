@@ -322,6 +322,10 @@ impl OpenCADStudio {
                     .layers
                     .sync_with_viewports(&doc_layers, vp_info);
                 self.sync_ribbon_layers();
+                // Load the Annotate-ribbon style dropdowns (text / dimension /
+                // multileader / table) from the opened document instead of
+                // leaving them on the hard-coded "Standard" default.
+                self.sync_ribbon_styles();
                 // Reset the Home-ribbon Color / Linetype / Lineweight chips
                 // to the newly opened document's CECOLOR / CELTYPE / CELWEIGHT
                 // defaults (or to ByLayer when the file leaves them empty).
@@ -917,6 +921,7 @@ impl OpenCADStudio {
                 self.tabs.push(new_tab);
                 self.active_tab = self.tabs.len() - 1;
                 self.sync_ribbon_layers();
+                self.sync_ribbon_styles();
                 // #21: reset ribbon Color / Linetype / Lineweight to the
                 // fresh tab's defaults (ByLayer) instead of inheriting the
                 // previous tab's last selection.
@@ -928,6 +933,7 @@ impl OpenCADStudio {
                 if idx < self.tabs.len() {
                     self.active_tab = idx;
                     self.sync_ribbon_layers();
+                    self.sync_ribbon_styles();
                     // #21: also re-seed ribbon Color / Linetype / Lineweight
                     // from the newly active tab so they reflect that doc's
                     // CECOLOR / CELTYPE / CELWEIGHT (or its current selection
@@ -963,6 +969,7 @@ impl OpenCADStudio {
                 // different existing tab; in both cases the ribbon needs
                 // to track that doc's defaults / selection. #21.
                 self.sync_ribbon_layers();
+                self.sync_ribbon_styles();
                 self.sync_ribbon_from_selection();
                 Task::none()
             }

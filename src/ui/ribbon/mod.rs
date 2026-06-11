@@ -74,15 +74,10 @@ impl Ribbon {
             ortho_mode: true,
             open_dropdown: None,
             last_cmd: HashMap::default(),
-            layer_names: vec!["0".to_string()],
-            active_layer: "0".to_string(),
-            layer_infos: vec![LayerInfo {
-                name: "0".to_string(),
-                color: Color::WHITE,
-                visible: true,
-                frozen: false,
-                locked: false,
-            }],
+            // Empty until a document is open — populated by sync_ribbon_layers.
+            layer_names: vec![],
+            active_layer: String::new(),
+            layer_infos: vec![],
             active_color: AcadColor::ByLayer,
             active_linetype: "ByLayer".to_string(),
             active_lineweight: LineWeight::ByLayer,
@@ -91,14 +86,16 @@ impl Ribbon {
                 art: String::new(),
             }],
             prop_color_palette_open: false,
-            text_style_names: vec!["Standard".to_string()],
-            active_text_style: "Standard".to_string(),
-            dim_style_names: vec!["Standard".to_string()],
-            active_dim_style: "Standard".to_string(),
-            mleader_style_names: vec!["Standard".to_string()],
-            active_mleader_style: "Standard".to_string(),
-            table_style_names: vec!["Standard".to_string()],
-            active_table_style: "Standard".to_string(),
+            // Empty until a document is open — the Annotate style dropdowns
+            // are populated from the active document by sync_ribbon_styles.
+            text_style_names: vec![],
+            active_text_style: String::new(),
+            dim_style_names: vec![],
+            active_dim_style: String::new(),
+            mleader_style_names: vec![],
+            active_mleader_style: String::new(),
+            table_style_names: vec![],
+            active_table_style: String::new(),
         }
     }
 

@@ -325,6 +325,12 @@ impl OpenCADStudio {
     /// marker to do better).
     pub(super) fn sync_ribbon_from_selection(&mut self) {
         let i = self.active_tab;
+        // The Start (welcome) tab has no document — keep the ribbon's
+        // current-layer chip empty rather than re-seeding it with a default.
+        if self.tabs[i].is_start {
+            self.ribbon.active_layer = String::new();
+            return;
+        }
         let selected = self.tabs[i].scene.selected_entities();
         if selected.is_empty() {
             // Creation defaults: prefer the file's saved CECOLOR / CELTYPE /

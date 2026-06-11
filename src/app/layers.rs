@@ -19,6 +19,14 @@ impl OpenCADStudio {
 
     pub(super) fn sync_ribbon_layers(&mut self) {
         let i = self.active_tab;
+        // The Start (welcome) tab has no document — leave the layer and
+        // linetype dropdowns empty instead of showing a placeholder "0".
+        if self.tabs[i].is_start {
+            self.ribbon.set_layers(vec![], "");
+            self.ribbon.set_available_linetypes(vec![]);
+            self.sync_ribbon_styles();
+            return;
+        }
         let active = self.tabs[i].active_layer.clone();
         let infos: Vec<crate::ui::ribbon::LayerInfo> = self.tabs[i]
             .layers
@@ -63,6 +71,13 @@ impl OpenCADStudio {
 
     pub(super) fn sync_ribbon_styles(&mut self) {
         let i = self.active_tab;
+        // The Start (welcome) tab has no real document — keep the Annotate
+        // style dropdowns empty rather than showing a placeholder style.
+        if self.tabs[i].is_start {
+            self.ribbon
+                .set_styles(vec![], "", vec![], "", vec![], "", vec![], "");
+            return;
+        }
         let doc = &self.tabs[i].scene.document;
 
         let text_names: Vec<String> = doc.text_styles.iter().map(|s| s.name.clone()).collect();
@@ -73,7 +88,7 @@ impl OpenCADStudio {
             text_names
                 .first()
                 .cloned()
-                .unwrap_or_else(|| "Standard".to_string())
+                .unwrap_or_default()
         };
 
         let dim_names: Vec<String> = doc.dim_styles.iter().map(|s| s.name.clone()).collect();
@@ -84,7 +99,7 @@ impl OpenCADStudio {
             dim_names
                 .first()
                 .cloned()
-                .unwrap_or_else(|| "Standard".to_string())
+                .unwrap_or_default()
         };
 
         let mleader_names: Vec<String> = doc
@@ -105,7 +120,7 @@ impl OpenCADStudio {
             mleader_names
                 .first()
                 .cloned()
-                .unwrap_or_else(|| "Standard".to_string())
+                .unwrap_or_default()
         };
 
         let table_names: Vec<String> = doc
@@ -126,7 +141,7 @@ impl OpenCADStudio {
             table_names
                 .first()
                 .cloned()
-                .unwrap_or_else(|| "Standard".to_string())
+                .unwrap_or_default()
         };
 
         let active_mleader2 = active_mleader.clone();
