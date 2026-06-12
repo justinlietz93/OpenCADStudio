@@ -85,6 +85,7 @@ impl OpenCADStudio {
             snap_enabled: self.snapper.snap_enabled,
             otrack: self.snapper.otrack_enabled,
             snap_modes: super::settings::UserSettings::modes_from(self.snapper.enabled.iter()),
+            default_assoc_prompted: self.default_assoc_prompted,
         }
     }
 
@@ -98,6 +99,7 @@ impl OpenCADStudio {
         self.snapper.snap_enabled = s.snap_enabled;
         self.snapper.otrack_enabled = s.otrack;
         self.snapper.enabled = s.snap_modes.iter().copied().collect();
+        self.default_assoc_prompted = s.default_assoc_prompted;
     }
 
     /// Write preferences to disk only when they differ from the last write,
@@ -108,6 +110,13 @@ impl OpenCADStudio {
             cur.save();
             self.last_saved_settings = Some(cur);
         }
+    }
+
+    /// Record that the one-time default-association prompt has been answered and
+    /// flush it to disk, so the dialog never reappears on later launches.
+    fn mark_assoc_prompted(&mut self) {
+        self.default_assoc_prompted = true;
+        self.persist_settings_if_changed();
     }
 
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
@@ -1612,6 +1621,12 @@ impl OpenCADStudio {
                 }
                 if self.update_notice_window == Some(id) {
                     self.update_notice_window = None;
+                }
+                // Closing the default-association prompt via the window chrome
+                // counts as answering it — never nag again.
+                if self.assoc_prompt_window == Some(id) {
+                    self.assoc_prompt_window = None;
+                    self.mark_assoc_prompted();
                 }
                 Task::none()
             }
@@ -5646,6 +5661,36 @@ impl OpenCADStudio {
                 } else {
                     Task::none()
                 }
+            }
+            Message::AssocPromptYes => {
+                self.mark_assoc_prompted();
+                let close = if let Some(id) = self.assoc_prompt_window.take() {
+                    window::close(id)
+                } else {
+                    Task::none()
+                };
+                let run = Task::perform(
+                    crate::io::file_association::set_default_app(),
+                    Message::AssocResult,
+                );
+                Task::batch([close, run])
+            }
+            Message::AssocPromptNo => {
+                self.mark_assoc_prompted();
+                if let Some(id) = self.assoc_prompt_window.take() {
+                    window::close(id)
+                } else {
+                    Task::none()
+                }
+            }
+            Message::AssocResult(result) => {
+                match result {
+                    Ok(msg) => self.command_line.push_info(&msg),
+                    Err(err) => self
+                        .command_line
+                        .push_error(&format!("Could not set default app: {err}")),
+                }
+                Task::none()
             }
             Message::PageSetupWidthEdit(s) => {
                 self.page_setup_w = s;

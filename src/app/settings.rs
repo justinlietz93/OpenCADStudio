@@ -70,6 +70,10 @@ pub struct UserSettings {
     pub otrack: bool,
     /// Active snap modes, in `SNAP_ORDER`.
     pub snap_modes: Vec<SnapType>,
+    /// Whether the one-time "make Open CAD Studio the default for .dwg/.dxf?"
+    /// prompt has already been shown. Set once the user answers (either way),
+    /// so we never nag again on subsequent launches.
+    pub default_assoc_prompted: bool,
 }
 
 impl Default for UserSettings {
@@ -91,6 +95,7 @@ impl Default for UserSettings {
                 SnapType::Intersection,
                 SnapType::Nearest,
             ],
+            default_assoc_prompted: false,
         }
     }
 }
@@ -124,6 +129,7 @@ impl UserSettings {
                 "grid" => s.show_grid = val == "1",
                 "osnap" => s.snap_enabled = val == "1",
                 "otrack" => s.otrack = val == "1",
+                "default_assoc_prompted" => s.default_assoc_prompted = val == "1",
                 "snap_modes" => {
                     let modes: Vec<SnapType> =
                         val.split(',').filter_map(|t| snap_from_id(t.trim())).collect();
@@ -149,7 +155,7 @@ impl UserSettings {
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(
-            "dyn={}\northo={}\npolar={}\npolar_increment_deg={}\ngrid={}\nosnap={}\notrack={}\nsnap_modes={}\n",
+            "dyn={}\northo={}\npolar={}\npolar_increment_deg={}\ngrid={}\nosnap={}\notrack={}\ndefault_assoc_prompted={}\nsnap_modes={}\n",
             b(self.dyn_input),
             b(self.ortho),
             b(self.polar),
@@ -157,6 +163,7 @@ impl UserSettings {
             b(self.show_grid),
             b(self.snap_enabled),
             b(self.otrack),
+            b(self.default_assoc_prompted),
             modes,
         );
         let _ = std::fs::write(path, body);

@@ -33,7 +33,11 @@ truck-shapeops = "0.4"
 rustc-hash = "2"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+# Win32_System_Com    — COM behind "Set as default app"
+#                       (IApplicationAssociationRegistrationUI dialog).
+# Win32_System_Registry — HKCU registration that lists the app under
+#                       "Open with" for the portable .exe.
+windows-sys = { version = "0.61", features = ["Win32_UI_Shell", "Win32_UI_WindowsAndMessaging", "Win32_System_Com", "Win32_System_Registry", "Win32_Foundation"] }
 
 [patch.crates-io]
 # Tracks HakanSeven12/acadrust main, which carries the hatch

@@ -6,7 +6,7 @@
     candle.exe -arch x64 -dVersion=<x.y.z> -dSource=target\release\OpenCADStudio.exe \
                -dIcon=packaging\windows\AppIcon.ico packaging\windows\main.wxs \
                -out packaging\windows\main.wixobj
-    light.exe  packaging\windows\main.wixobj -out OpenCADStudio.msi
+    light.exe  packaging\windows\main.wixobj -ext WixUIExtension -out OpenCADStudio.msi
 
   Provides:
     * Per-machine install under Program Files\Open CAD Studio.
@@ -14,6 +14,9 @@
     * File associations for .dwg and .dxf via a single ProgID; both
       route through `OpenCADStudio.exe "%1"` so the OS hands the file
       path to the app as argv[1] (consumed in OpenCADStudio::boot).
+    * Default Programs registration (Capabilities + RegisteredApplications)
+      so the app shows up in Settings > Default Apps and can be set as the
+      default handler for .dwg / .dxf.
     * Standard Add/Remove Programs entry with icon.
     * MajorUpgrade — installing a newer MSI replaces the old version.
 -->
@@ -98,6 +101,50 @@
             </ProgId>
           </Component>
 
+          <!--
+            Default Programs registration. The ProgId/Extension rows above
+            register the handlers, but modern Windows (8+) guards the actual
+            default via a per-user UserChoice hash an installer can't forge.
+            Publishing Capabilities + a RegisteredApplications entry is the
+            supported way in: it makes Open CAD Studio appear in Settings >
+            Default Apps and the "Open with" list, so .dwg / .dxf can be set
+            to it. The keys are HKLM-wide, so the shell picks them up on its
+            next association query without a forced refresh.
+          -->
+          <Component Id='DefaultPrograms' Guid='6f3e9b2a-1c4d-4f8a-9b7e-2d5a8c1f0e63' Win64='yes'>
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\Open CAD Studio\Capabilities'
+              Name='ApplicationName'
+              Type='string'
+              Value='Open CAD Studio'
+              KeyPath='yes' />
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\Open CAD Studio\Capabilities'
+              Name='ApplicationDescription'
+              Type='string'
+              Value='2D/3D CAD application for DWG and DXF drawings.' />
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\Open CAD Studio\Capabilities\FileAssociations'
+              Name='.dwg'
+              Type='string'
+              Value='OpenCADStudio.DWG' />
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\Open CAD Studio\Capabilities\FileAssociations'
+              Name='.dxf'
+              Type='string'
+              Value='OpenCADStudio.DXF' />
+            <RegistryValue
+              Root='HKLM'
+              Key='Software\RegisteredApplications'
+              Name='Open CAD Studio'
+              Type='string'
+              Value='Software\Open CAD Studio\Capabilities' />
+          </Component>
+
         </Directory>
       </Directory>
 
@@ -119,8 +166,12 @@
 
     <Feature Id='Complete' Title='Open CAD Studio' Level='1'>
       <ComponentRef Id='MainExecutable' />
+      <ComponentRef Id='DefaultPrograms' />
       <ComponentRef Id='ProgramMenuDirComp' />
     </Feature>
+
+    <!-- Installer UI + finish-screen launch checkbox (see ui.wxs). -->
+    <UIRef Id='OpenCADStudioUI' />
 
   </Product>
 </Wix>
