@@ -473,6 +473,9 @@ impl OpenCADStudio {
             let body = self.update_notice_body.as_deref().unwrap_or("");
             return crate::ui::update_notice::view_window(latest, body);
         }
+        if Some(window_id) == self.assoc_prompt_window {
+            return default_assoc_dialog_window();
+        }
         if Some(window_id) == self.unsaved_dialog_window {
             let tab_name = match &self.pending_close {
                 Some(super::PendingClose::Tab(idx)) => self
@@ -3449,6 +3452,109 @@ fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
                 iced::widget::Space::new().width(8),
                 btn("Cancel", Message::UnsavedDialogCancel, BTN_DISC, BTN_DHOV),
             ],
+        ]
+        .spacing(0),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .center(Fill)
+    .padding([24, 28])
+    .into()
+}
+
+/// First-launch prompt offering to register Open CAD Studio as the default
+/// handler for .dwg / .dxf. "Yes" runs the platform association call; "Not now"
+/// just dismisses. Either answer flips the persisted `default_assoc_prompted`
+/// flag so the dialog never reappears.
+fn default_assoc_dialog_window() -> Element<'static, Message> {
+    const BG: Color = Color {
+        r: 0.18,
+        g: 0.18,
+        b: 0.20,
+        a: 1.0,
+    };
+    const BORDER_COL: Color = Color {
+        r: 0.38,
+        g: 0.38,
+        b: 0.42,
+        a: 1.0,
+    };
+    const TEXT_COL: Color = Color {
+        r: 0.90,
+        g: 0.90,
+        b: 0.90,
+        a: 1.0,
+    };
+    const DIM_COL: Color = Color {
+        r: 0.62,
+        g: 0.62,
+        b: 0.66,
+        a: 1.0,
+    };
+    const BTN_YES: Color = Color {
+        r: 0.20,
+        g: 0.46,
+        b: 0.80,
+        a: 1.0,
+    };
+    const BTN_YHOV: Color = Color {
+        r: 0.26,
+        g: 0.55,
+        b: 0.92,
+        a: 1.0,
+    };
+    const BTN_NO: Color = Color {
+        r: 0.28,
+        g: 0.28,
+        b: 0.30,
+        a: 1.0,
+    };
+    const BTN_NHOV: Color = Color {
+        r: 0.36,
+        g: 0.36,
+        b: 0.40,
+        a: 1.0,
+    };
+
+    let btn = |label: &'static str, msg: Message, base: Color, hov: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hov,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border {
+                    color: BORDER_COL,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            })
+            .padding([6, 18])
+    };
+
+    container(
+        column![
+            text("Make Open CAD Studio your default CAD app?")
+                .size(15)
+                .color(TEXT_COL),
+            iced::widget::Space::new().height(10),
+            text("Open .dwg and .dxf drawings in Open CAD Studio by default. You can change this later in your system settings.")
+                .size(12)
+                .color(DIM_COL),
+            iced::widget::Space::new().height(22),
+            row![
+                iced::widget::Space::new().width(Fill),
+                btn("Not now", Message::AssocPromptNo, BTN_NO, BTN_NHOV),
+                iced::widget::Space::new().width(8),
+                btn("Yes, set as default", Message::AssocPromptYes, BTN_YES, BTN_YHOV),
+            ]
+            .align_y(iced::Center),
         ]
         .spacing(0),
     )

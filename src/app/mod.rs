@@ -292,6 +292,12 @@ pub(super) struct OpenCADStudio {
     /// New-release notification window — opened on startup when the
     /// GitHub releases API reports a newer version than this build.
     update_notice_window: Option<window::Id>,
+    /// First-launch "make Open CAD Studio the default for .dwg/.dxf?" prompt
+    /// window. Shown once, gated on `default_assoc_prompted`.
+    assoc_prompt_window: Option<window::Id>,
+    /// Whether the one-time default-association prompt has already been shown.
+    /// Persisted via [`settings::UserSettings`] so it survives restarts.
+    default_assoc_prompted: bool,
     /// Tag of the latest available release (without the leading "v"),
     /// e.g. `"0.3.0"`. `None` when up-to-date or check hasn't returned.
     update_notice_version: Option<String>,
@@ -1045,6 +1051,13 @@ pub enum Message {
     UpdateCheckResult(Option<crate::update_check::UpdateInfo>),
     /// User dismissed the update-notice window.
     UpdateNoticeClose,
+    /// First-launch default-association prompt: user accepted — register this
+    /// app as the default handler for .dwg / .dxf.
+    AssocPromptYes,
+    /// First-launch default-association prompt: user declined (or "not now").
+    AssocPromptNo,
+    /// Result of the platform default-association call.
+    AssocResult(Result<String, String>),
     /// User clicked the "Open release page" button — opens the GitHub
     /// release URL in the OS default browser and closes the notice.
     UpdateNoticeOpenRelease,
@@ -1354,6 +1367,8 @@ impl OpenCADStudio {
             shortcuts_window: None,
             about_window: None,
             update_notice_window: None,
+            assoc_prompt_window: None,
+            default_assoc_prompted: false,
             update_notice_version: None,
             update_notice_body: None,
             clipboard: Vec::new(),
@@ -1581,9 +1596,24 @@ impl OpenCADStudio {
             .filter(|p| !p.as_os_str().to_string_lossy().starts_with('-'))
             .map(|p| Task::done(Message::OpenRecent(p)))
             .unwrap_or_else(Task::none);
+        // One-time prompt offering to make Open CAD Studio the default app for
+        // .dwg / .dxf. Shown only on the first launch that hasn't answered it
+        // yet; the flag is persisted so we never ask twice.
+        let assoc_prompt: Task<Message> = if s.default_assoc_prompted {
+            Task::none()
+        } else {
+            let (id, open) = window::open(window::Settings {
+                size: iced::Size::new(440.0, 210.0),
+                resizable: false,
+                level: window::Level::AlwaysOnTop,
+                ..Default::default()
+            });
+            s.assoc_prompt_window = Some(id);
+            open.map(|_| Message::Noop)
+        };
         (
             s,
-            Task::batch([open_main, check_update, focus_cmd, cli_open]),
+            Task::batch([open_main, check_update, focus_cmd, cli_open, assoc_prompt]),
         )
     }
 }
@@ -1633,6 +1663,9 @@ pub fn run() -> iced::Result {
         }
         if Some(window_id) == state.update_notice_window {
             return "Update Available".into();
+        }
+        if Some(window_id) == state.assoc_prompt_window {
+            return "Set Default Application".into();
         }
         if Some(window_id) == state.unsaved_dialog_window {
             return "Unsaved Changes".into();
