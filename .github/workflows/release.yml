@@ -128,6 +128,8 @@ jobs:
           # filename.
           $exePath  = (Resolve-Path target\release\OpenCADStudio.exe).Path
           $iconPath = (Resolve-Path packaging\windows\AppIcon.ico).Path
+          # GPL-3 license RTF shown on the installer's EULA page.
+          $licensePath = (Resolve-Path packaging\windows\License.rtf).Path
           # main.wxs holds the package/feature; ui.wxs holds the installer UI
           # and finish-screen launch checkbox. Both compile together.
           $mainWxs  = (Resolve-Path packaging\windows\main.wxs).Path
@@ -140,6 +142,7 @@ jobs:
             "-dVersion=$version" `
             "-dSource=$exePath" `
             "-dIcon=$iconPath" `
+            "-dLicense=$licensePath" `
             $mainWxs $uiWxs `
             -out $objDir
           if ($LASTEXITCODE -ne 0) { throw "candle failed" }
