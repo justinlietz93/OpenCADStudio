@@ -4,12 +4,19 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      release_tag:
+        description: 'Upload artifacts to this existing release tag (e.g. v0.5.4). Leave empty for build-only.'
+        required: false
+        default: ''
 
 jobs:
   build-appimage:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.ref_name || inputs.release_tag }}
 
     steps:
       - name: Checkout
@@ -56,17 +63,19 @@ jobs:
           mv Open*CAD*Studio*.AppImage OpenCADStudio.AppImage
 
       - name: Upload AppImage to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mv OpenCADStudio.AppImage OpenCADStudio-${{ github.ref_name }}-linux-x86_64.AppImage
-          gh release upload ${{ github.ref_name }} OpenCADStudio-${{ github.ref_name }}-linux-x86_64.AppImage --clobber --repo ${{ github.repository }}
+          mv OpenCADStudio.AppImage OpenCADStudio-${{ env.RELEASE_TAG }}-linux-x86_64.AppImage
+          gh release upload ${{ env.RELEASE_TAG }} OpenCADStudio-${{ env.RELEASE_TAG }}-linux-x86_64.AppImage --clobber --repo ${{ github.repository }}
 
   build-windows:
     runs-on: windows-latest
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.ref_name || inputs.release_tag }}
 
     steps:
       - name: Checkout
@@ -110,7 +119,7 @@ jobs:
       - name: Build MSI installer
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}" -replace '^v', ''
+          $version = "${{ env.RELEASE_TAG }}" -replace '^v', ''
           # workflow_dispatch runs use the branch name as ref_name, which
           # is not a valid MSI ProductVersion — fall back to 0.0.0 so test
           # builds still produce an installer.
@@ -165,12 +174,12 @@ jobs:
           timestamp-digest: SHA256
 
       - name: Upload artifacts to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release_tag != ''
         shell: pwsh
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = "${{ env.RELEASE_TAG }}"
           # Ship both the bare .exe (portable, no install) and the
           # .msi (installer with Start Menu shortcut + .dwg / .dxf
           # file association). The `-portable` / `-installer` suffix
@@ -186,6 +195,8 @@ jobs:
     runs-on: macos-14    # Apple Silicon (arm64) only
     permissions:
       contents: write
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'release' && github.ref_name || inputs.release_tag }}
 
     steps:
       - name: Checkout
@@ -227,7 +238,7 @@ jobs:
           chmod +x "$APP/Contents/MacOS/OpenCADStudio"
           cp AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
           # Substitute version into Info.plist.
-          VERSION="${{ github.ref_name }}"
+          VERSION="${{ env.RELEASE_TAG }}"
           VERSION="${VERSION#v}"
           [ -z "$VERSION" ] && VERSION="0.0.0"
           sed "s/__VERSION__/$VERSION/g" packaging/Info.plist > "$APP/Contents/Info.plist"
@@ -264,23 +275,23 @@ jobs:
           test -f OpenCADStudio.dmg
 
       - name: Upload .dmg to release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          mv OpenCADStudio.dmg OpenCADStudio-${{ github.ref_name }}-macos-arm64.dmg
-          gh release upload ${{ github.ref_name }} OpenCADStudio-${{ github.ref_name }}-macos-arm64.dmg --clobber --repo ${{ github.repository }}
+          mv OpenCADStudio.dmg OpenCADStudio-${{ env.RELEASE_TAG }}-macos-arm64.dmg
+          gh release upload ${{ env.RELEASE_TAG }} OpenCADStudio-${{ env.RELEASE_TAG }}-macos-arm64.dmg --clobber --repo ${{ github.repository }}
 
       - name: Emit Homebrew cask sha256
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.release_tag != ''
         run: |
           # Print the values needed to bump the Homebrew cask
           # (packaging/homebrew/open-cad-studio.rb) for this release, so the
           # tap can be updated with a copy-paste instead of computing the
           # digest by hand.
-          VERSION="${{ github.ref_name }}"
+          VERSION="${{ env.RELEASE_TAG }}"
           VERSION="${VERSION#v}"
-          SHA=$(shasum -a 256 OpenCADStudio-${{ github.ref_name }}-macos-arm64.dmg | awk '{print $1}')
+          SHA=$(shasum -a 256 OpenCADStudio-${{ env.RELEASE_TAG }}-macos-arm64.dmg | awk '{print $1}')
           {
             echo "## Homebrew cask bump"
             echo "Update \`packaging/homebrew/open-cad-studio.rb\`:"
