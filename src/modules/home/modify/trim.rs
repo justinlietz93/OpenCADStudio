@@ -2158,6 +2158,11 @@ impl CadCommand for TrimCommand {
                 EntityType::XLine(x) => x.common.handle = h,
                 EntityType::Ellipse(e) => e.common.handle = h,
                 EntityType::Spline(s) => s.common.handle = h,
+                // A trimmed (closed or open) polyline is re-emitted as an
+                // LwPolyline; without its real handle it can't be found on a
+                // second pick, so the same polyline couldn't be trimmed twice
+                // in one TRIM command.
+                EntityType::LwPolyline(p) => p.common.handle = h,
                 _ => {}
             }
         }
