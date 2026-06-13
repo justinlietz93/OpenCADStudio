@@ -683,17 +683,25 @@ fn compute_fillet_entities(
             // Adjacent segments share a corner vertex — fillet that corner.
             let (low, high) = if *s1 < *s2 { (*s1, *s2) } else { (*s2, *s1) };
             let n = p1.vertices.len();
-            // Segments must be consecutive (high == low+1, or wrap-around on closed poly).
-            let consecutive =
-                high == low + 1 || (p1.is_closed && low == 0 && high == n.saturating_sub(1));
-            if !consecutive {
+            // The wrap-around corner of a closed polyline joins the last
+            // segment (n-1) and the first (0); their shared vertex is v0.
+            let wrap = p1.is_closed && low == 0 && high == n.saturating_sub(1);
+            // Segments must be consecutive, or the wrap-around pair above.
+            if !(high == low + 1 || wrap) {
                 return None;
             }
-            let corner_idx = high % n; // vertex shared by both segments
-            let l1 = lwpoly_seg_as_line(p1, low);
-            let l2 = lwpoly_seg_as_line(p1, high % n.max(1)); // seg after corner
-                                                              // Re-map click to whichever segment each was picked on.
-            let (c1, c2) = if *s1 == low {
+            // `before_seg` ends at the shared corner vertex, `after_seg` starts
+            // there. For the wrap corner that is seg n-1 → v0 → seg 0; for a
+            // normal corner it is seg low → v[high] → seg high.
+            let (before_seg, after_seg, corner_idx) = if wrap {
+                (high, low, 0)
+            } else {
+                (low, high, high)
+            };
+            let l1 = lwpoly_seg_as_line(p1, before_seg);
+            let l2 = lwpoly_seg_as_line(p1, after_seg);
+            // Re-map click to whichever segment each was picked on.
+            let (c1, c2) = if *s1 == before_seg {
                 (click1, click2)
             } else {
                 (click2, click1)
@@ -1511,16 +1519,22 @@ fn chamfer_lwpoly_corner(
         return None;
     }
     let (low, high) = if s1 < s2 { (s1, s2) } else { (s2, s1) };
-    let consecutive =
-        high == low + 1 || (poly.is_closed && low == 0 && high == n.saturating_sub(1));
-    if !consecutive {
+    // The wrap-around corner of a closed polyline joins the last segment
+    // (n-1) and the first (0); their shared vertex is v0.
+    let wrap = poly.is_closed && low == 0 && high == n.saturating_sub(1);
+    if !(high == low + 1 || wrap) {
         return None;
     }
-    let corner_idx = high % n;
-    let l1 = lwpoly_seg_as_line(poly, low);
-    let l2 = lwpoly_seg_as_line(poly, high % n.max(1));
+    // `before_seg` ends at the shared corner vertex, `after_seg` starts there.
+    let (before_seg, after_seg, corner_idx) = if wrap {
+        (high, low, 0)
+    } else {
+        (low, high, high)
+    };
+    let l1 = lwpoly_seg_as_line(poly, before_seg);
+    let l2 = lwpoly_seg_as_line(poly, after_seg);
     // Map each click + distance to whichever segment it was picked on.
-    let (c1, d1, c2, d2) = if s1 == low {
+    let (c1, d1, c2, d2) = if s1 == before_seg {
         (click1, dist1, click2, dist2)
     } else {
         (click2, dist2, click1, dist1)
