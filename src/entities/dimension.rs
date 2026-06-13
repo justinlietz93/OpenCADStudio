@@ -1017,6 +1017,7 @@ fn tessellate_dimension_inner(
             dimsoxd,
             dimcen,
             ticks: dimtsz_raw > 1e-9,
+            arrow_len: dimasz,
         },
         SuppressFlags {
             ext1: dimse1,
@@ -1039,13 +1040,13 @@ fn tessellate_dimension_inner(
                 }
             }
         }
-        // Text fit: DIMTIX (force text inside) is honoured in the text-placement
-        // pass (dimension_text_pos_f64), which slides centred text outside the
-        // extension lines when it doesn't fit. DIMTOFL (force the dim line
-        // inside) is already satisfied for linear/aligned, whose dim line is
-        // always drawn between the extension points. DIMATFIT's arrow-outside
-        // modes and DIMUPT (reposition-on-create) still need an arrow autofit
-        // pass — read here for round-trip until then.
+        // Fit: text that doesn't fit between the extension lines is slid outside
+        // in the text-placement pass (unless DIMTIX), and arrowheads that don't
+        // fit are flipped outside in append_linear_dimension. DIMTOFL (force the
+        // dim line inside) is already satisfied for linear/aligned, whose dim
+        // line is always drawn between the extension points. DIMATFIT's exact
+        // mode ordering (arrows-first vs text-first) and DIMUPT (reposition on
+        // create) aren't differentiated yet — read here for round-trip.
         let _ = (s.dimtofl, s.dimatfit, s.dimupt);
         // DIMTXTDIRECTION (RTL) needs per-instance text mirroring on the Text
         // entity, which the current text struct can't carry. Tracked: read
@@ -1444,6 +1445,8 @@ struct DimLineParams {
     dimsoxd: bool,
     dimcen: f32,
     ticks: bool,
+    /// Arrowhead length (DIMASZ, scaled) — used to decide arrow-outside fit.
+    arrow_len: f32,
 }
 fn dimension_geometry(
     dim: &Dimension,
@@ -1638,16 +1641,33 @@ fn append_linear_dimension(
     let dir_d1_to_d2 = normalized_or(d2 - d1, axis);
     let d1_out = d1 - dir_d1_to_d2 * dle;
     let d2_out = d2 + dir_d1_to_d2 * dle;
+
+    // DIMATFIT fit: when the arrowheads don't fit between the extension lines
+    // they're flipped to the outside (point still on the ext line, body
+    // outside) with a short stub for them to sit on. DIMSOXD suppresses those
+    // outer stubs. Ticks always fit, so this only affects arrowheads.
+    let gap = (d2 - d1).length();
+    let arrows_outside = !params.ticks && params.arrow_len > 1e-6 && gap < 2.0 * params.arrow_len;
+
     // DIMSD1/DIMSD2: when *both* set, omit the dim line entirely. AutoCAD
     // splits at text otherwise — without that pivot info, leave as-is.
-    let _ = params.dimsoxd; // DIMSOXD: only meaningful when text is auto-placed
-                            // outside the ext lines; we honour the saved
-                            // text_middle_point so this is a no-op for files.
     if !(suppress.dim1 && suppress.dim2) {
         add_segment(&mut g.dim_lines, d1_out, d2_out);
+        if arrows_outside && !params.dimsoxd {
+            let stub = params.arrow_len * 2.0;
+            add_segment(&mut g.dim_lines, d1 - dir_d1_to_d2 * stub, d1);
+            add_segment(&mut g.dim_lines, d2, d2 + dir_d1_to_d2 * stub);
+        }
     }
-    append_arrow(g, d1, normalized_or(d2 - d1, axis), arrow1);
-    append_arrow(g, d2, normalized_or(d1 - d2, -axis), arrow2);
+
+    if arrows_outside {
+        // Tip on the ext line, body pointing outward.
+        append_arrow(g, d1, normalized_or(d1 - d2, -axis), arrow1);
+        append_arrow(g, d2, normalized_or(d2 - d1, axis), arrow2);
+    } else {
+        append_arrow(g, d1, normalized_or(d2 - d1, axis), arrow1);
+        append_arrow(g, d2, normalized_or(d1 - d2, -axis), arrow2);
+    }
 }
 
 /// Draw a center mark for radius/diameter dimensions.
