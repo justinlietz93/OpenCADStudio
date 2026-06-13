@@ -190,11 +190,22 @@ impl super::OpenCADStudio {
             self.tabs[i].scene.bump_geometry();
             self.tabs[i].dirty = true;
         } else {
-            let t = Text::with_value(
+            let mut t = Text::with_value(
                 &ed.value,
                 Vector3::new(ed.pos.x as f64, ed.pos.y as f64, ed.pos.z as f64),
             )
             .with_height(ed.height);
+            // New text inherits the document's current text style (STYLE), not
+            // the entity default. See #92.
+            let cur_style = self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_text_style_name
+                .clone();
+            if !cur_style.is_empty() {
+                t.style = cur_style;
+            }
             self.push_undo_snapshot(i, "TEXT");
             self.commit_entity(EntityType::Text(t));
             self.tabs[i].dirty = true;

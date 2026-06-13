@@ -541,6 +541,23 @@ impl OpenCADStudio {
             entity.common_mut().linetype_scale = celtscale;
         }
 
+        // A new dimension inherits the document's current dimension style
+        // (DIMSTYLE) instead of staying at the entity "Standard" default. Only
+        // fill in when still at the default so an explicitly-styled dimension
+        // is preserved. See #92.
+        if let acadrust::EntityType::Dimension(ref mut d) = entity {
+            let cur = self.tabs[i]
+                .scene
+                .document
+                .header
+                .current_dimstyle_name
+                .clone();
+            let s = d.base().style_name.clone();
+            if (s.is_empty() || s.eq_ignore_ascii_case("Standard")) && !cur.is_empty() {
+                d.base_mut().style_name = cur;
+            }
+        }
+
         // Commands pick points in local space (camera coordinates with world_offset
         // already subtracted). Re-add world_offset so the entity lands at the correct
         // DXF coordinate. Skip for paper-space entities (they use sheet mm coords).

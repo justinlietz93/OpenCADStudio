@@ -364,6 +364,18 @@ impl super::OpenCADStudio {
                 }
                 _ => {}
             }
+        } else {
+            // New MText inherits the document's current text style (STYLE),
+            // not the "Standard" default. See #92.
+            let cur_style = self.tabs[self.active_tab]
+                .scene
+                .document
+                .header
+                .current_text_style_name
+                .clone();
+            if !cur_style.trim().is_empty() {
+                state.style = cur_style;
+            }
         }
         self.mtext_editor = Some(state);
         self.rebuild_mtext_preview();
