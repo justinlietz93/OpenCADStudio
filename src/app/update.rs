@@ -1228,6 +1228,12 @@ impl OpenCADStudio {
                     let text = super::expr_eval::eval_to_string(self.command_line.input.trim());
                     self.command_line.input.clear();
 
+                    // Offer the typed text to the command's option handler
+                    // first (keywords like PLINE's A/L/C, a radius, …). If it
+                    // consumes the text we're done; if it returns None the
+                    // text falls through to the Enter / coordinate handling
+                    // below, so a bare Enter still terminates and typed points
+                    // still work when dynamic input is off. See #97.
                     if self.tabs[i]
                         .active_cmd
                         .as_ref()
@@ -1241,18 +1247,6 @@ impl OpenCADStudio {
                         {
                             return self.apply_cmd_result(result);
                         }
-                        let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
-                        if let Some(p) = prompt {
-                            self.command_line.push_info(&p);
-                        }
-                        let pt = self.tabs[i].last_cursor_world;
-                        let previews = self.tabs[i]
-                            .active_cmd
-                            .as_mut()
-                            .map(|c| c.on_preview_wires(pt))
-                            .unwrap_or_default();
-                        self.tabs[i].scene.set_preview_wires(previews);
-                        return self.focus_cmd_input();
                     }
 
                     if text.is_empty() {
