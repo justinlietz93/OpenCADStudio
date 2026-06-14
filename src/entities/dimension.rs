@@ -1888,6 +1888,7 @@ fn dimension_text_entity(
     // first, then horizontal_direction override, then DIMTIH/DIMTOH.
     let dimtih = style.map(|s| s.dimtih).unwrap_or(false);
     let dimtoh = style.map(|s| s.dimtoh).unwrap_or(false);
+    let dimjust = style.map(|s| s.dimjust).unwrap_or(0);
     let rotation = if base.text_rotation.abs() > 1e-9 {
         base.text_rotation
     } else if base.horizontal_direction.abs() > 1e-9 {
@@ -1897,7 +1898,13 @@ fn dimension_text_entity(
     } else if dimtih || dimtoh {
         0.0
     } else {
-        dimension_text_natural_rotation(dim)
+        let mut r = dimension_text_natural_rotation(dim);
+        // DIMJUST 3/4: text reads along the extension lines, i.e. rotated 90°
+        // from the dimension line.
+        if dimjust == 3 || dimjust == 4 {
+            r += std::f64::consts::FRAC_PI_2;
+        }
+        r
     };
 
     // Text style resolution priority:
@@ -2128,7 +2135,7 @@ fn alternate_units_text(measurement: f64, style: Option<&DimStyle>) -> Option<St
         v = (v / s.dimaltrnd).round() * s.dimaltrnd;
     }
     let dec = s.dimaltd.max(0) as usize;
-    let raw = format_with_unit(v, s.dimaltu, dec, s.dimfrac);
+    let raw = format_with_unit(v, s.dimaltu, dec, s.dimfrac, s.dimaltz);
     let suppressed = apply_linear_zero_suppression(&raw, s.dimaltz);
     let sep_swapped = swap_decimal_sep(&suppressed, s.dimdsep);
     // Alt-unit tolerance suffix using DIMALTTD / DIMALTTZ.
@@ -2271,7 +2278,7 @@ fn format_linear_value(measurement: f64, style: Option<&DimStyle>) -> String {
         v = (v / rnd).round() * rnd;
     }
     let dec = dec.max(0) as usize;
-    let raw = format_with_unit(v, lunit, dec, frac);
+    let raw = format_with_unit(v, lunit, dec, frac, zin);
     let suppressed = apply_linear_zero_suppression(&raw, zin);
     swap_decimal_sep(&suppressed, dsep)
 }
@@ -2285,11 +2292,11 @@ fn format_linear_value(measurement: f64, style: Option<&DimStyle>) -> String {
 ///   6 = Windows desktop → falls back to Decimal
 /// `dimfrac` controls denominator power for arch/fractional output (0/1/2);
 /// rendered inline as "n/d" (stacked glyphs require MText support).
-fn format_with_unit(value: f64, unit: i16, dec: usize, dimfrac: i16) -> String {
+fn format_with_unit(value: f64, unit: i16, dec: usize, dimfrac: i16, zin: i16) -> String {
     match unit {
         1 => format!("{:.*e}", dec, value),
         3 => format_engineering(value, dec),
-        4 => format_architectural(value, dimfrac),
+        4 => format_architectural(value, dimfrac, zin),
         5 => format_fractional(value, dimfrac),
         _ => format!("{:.*}", dec, value),
     }
@@ -2303,7 +2310,7 @@ fn format_engineering(inches: f64, dec: usize) -> String {
     format!("{}{:.0}'-{:.*}\"", sign, feet, dec, rem_in)
 }
 
-fn format_architectural(inches: f64, dimfrac: i16) -> String {
+fn format_architectural(inches: f64, dimfrac: i16, zin: i16) -> String {
     let sign = if inches < 0.0 { "-" } else { "" };
     let abs = inches.abs();
     let feet = (abs / 12.0).trunc();
@@ -2311,11 +2318,39 @@ fn format_architectural(inches: f64, dimfrac: i16) -> String {
     let whole = rem_in_total.trunc();
     let frac = rem_in_total - whole;
     let frac_str = fraction_string(frac, dimfrac);
-    if frac_str.is_empty() {
-        format!("{}{:.0}'-{:.0}\"", sign, feet, whole)
+
+    // DIMZIN feet/inch suppression:
+    //   0 suppress zero feet & zero inches, 1 include both,
+    //   2 include zero feet / suppress zero inches,
+    //   3 suppress zero feet / include zero inches.
+    let suppress_zero_feet = zin == 0 || zin == 3;
+    let suppress_zero_inches = zin == 0 || zin == 2;
+    let feet_zero = feet.abs() < 0.5;
+    let inches_zero = whole.abs() < 0.5 && frac_str.is_empty();
+    let show_feet = !feet_zero || !suppress_zero_feet;
+    let show_inches = !inches_zero || !suppress_zero_inches;
+
+    let feet_part = if show_feet {
+        format!("{:.0}'", feet)
     } else {
-        format!("{}{:.0}'-{:.0} {}\"", sign, feet, whole, frac_str)
-    }
+        String::new()
+    };
+    let inch_part = if show_inches {
+        if frac_str.is_empty() {
+            format!("{:.0}\"", whole)
+        } else {
+            format!("{:.0} {}\"", whole, frac_str)
+        }
+    } else {
+        String::new()
+    };
+    let body = match (feet_part.is_empty(), inch_part.is_empty()) {
+        (false, false) => format!("{}-{}", feet_part, inch_part),
+        (false, true) => feet_part,
+        (true, false) => inch_part,
+        (true, true) => "0\"".to_string(),
+    };
+    format!("{}{}", sign, body)
 }
 
 fn format_fractional(value: f64, dimfrac: i16) -> String {
@@ -2552,7 +2587,9 @@ fn text_on_dim_line(
 fn dimension_text_pos_f64(dim: &Dimension, style: Option<&DimStyle>, text_height: f64) -> Vector3 {
     let base = dim.base();
 
-    // DIMTAD: 0=centred (on the line), 1=above. 2/3/4 fall back to "above".
+    // DIMTAD: 0=centred (on the line), 1=above, 4=below. 2 (outside, i.e. the
+    // side farthest from the defining points) and 3 (JIS) both resolve to the
+    // away-from-object side, which is the same as "above" for 2-D linear dims.
     let dimtad = style.map(|s| s.dimtad).unwrap_or(1);
     let dimgap = style.map(|s| s.dimgap).unwrap_or(0.0);
     let dimjust = style.map(|s| s.dimjust).unwrap_or(0);
