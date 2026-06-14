@@ -571,17 +571,56 @@ impl OpenCADStudio {
                     .current_mleader_style_name
                     .clone();
                 if !name.is_empty() {
-                    ml.style_handle =
-                        self.tabs[i].scene.document.objects.iter().find_map(|(h, o)| {
-                            match o {
-                                acadrust::objects::ObjectType::MultiLeaderStyle(s)
-                                    if s.name.eq_ignore_ascii_case(&name) =>
-                                {
-                                    Some(*h)
-                                }
-                                _ => None,
+                    let found =
+                        self.tabs[i].scene.document.objects.iter().find_map(|(h, o)| match o {
+                            acadrust::objects::ObjectType::MultiLeaderStyle(s)
+                                if s.name.eq_ignore_ascii_case(&name) =>
+                            {
+                                Some((*h, s.clone()))
                             }
+                            _ => None,
                         });
+                    if let Some((h, s)) = found {
+                        ml.style_handle = Some(h);
+                        // Inherit the style's settings so a new multileader
+                        // reflects the current MLeaderStyle (the renderer reads
+                        // these entity fields). See #94.
+                        // The entity and style enums are distinct types with
+                        // matching discriminants — round-trip through i16.
+                        ml.content_type = (s.content_type as i16).into();
+                        ml.path_type = (s.path_type as i16).into();
+                        ml.line_color = s.line_color;
+                        ml.line_type_handle = s.line_type_handle;
+                        ml.line_weight = s.line_weight;
+                        ml.enable_landing = s.enable_landing;
+                        ml.enable_dogleg = s.enable_dogleg;
+                        ml.dogleg_length = s.landing_distance;
+                        ml.arrowhead_handle = s.arrowhead_handle;
+                        ml.arrowhead_size = s.arrowhead_size;
+                        ml.text_style_handle = s.text_style_handle;
+                        ml.text_color = s.text_color;
+                        ml.text_frame = s.text_frame;
+                        ml.text_height = s.text_height;
+                        ml.context.text_height = s.text_height;
+                        ml.text_left_attachment = (s.text_left_attachment as i16).into();
+                        ml.text_right_attachment = (s.text_right_attachment as i16).into();
+                        ml.text_top_attachment = (s.text_top_attachment as i16).into();
+                        ml.text_bottom_attachment = (s.text_bottom_attachment as i16).into();
+                        ml.text_attachment_direction =
+                            (s.text_attachment_direction as i16).into();
+                        ml.text_alignment = (s.text_alignment as i16).into();
+                        ml.text_angle_type = (s.text_angle_type as i16).into();
+                        ml.block_content_handle = s.block_content_handle;
+                        ml.block_content_color = s.block_content_color;
+                        ml.block_connection_type = (s.block_content_connection as i16).into();
+                        ml.block_rotation = s.block_content_rotation;
+                        ml.block_scale = acadrust::types::Vector3::new(
+                            s.block_content_scale_x,
+                            s.block_content_scale_y,
+                            s.block_content_scale_z,
+                        );
+                        ml.scale_factor = s.scale_factor;
+                    }
                 }
             }
             acadrust::EntityType::Table(t) if t.table_style_handle.is_none() => {
