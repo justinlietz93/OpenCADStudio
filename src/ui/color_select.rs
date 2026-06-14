@@ -6,8 +6,11 @@
 use crate::app::Message;
 use crate::ui::properties::acad_color_display;
 use acadrust::types::Color as AcadColor;
+use iced::advanced::layout::{self, Layout};
+use iced::advanced::widget::{self, Widget};
+use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell};
 use iced::widget::{button, column, container, row, scrollable, text};
-use iced::{Background, Border, Color, Element, Length, Theme};
+use iced::{Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 /// Which "logical" entries the colour list offers besides the standard ACI
 /// colours.
@@ -192,20 +195,246 @@ pub fn color_selector<'a>(
         grid = grid.push(r);
     }
 
-    let popup = container(
-        column![list, scrollable(grid).height(120)].spacing(4),
-    )
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(PICKER_BG)),
-        border: Border {
-            color: BORDER,
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..Default::default()
-    })
-    .padding(5)
-    .width(220);
+    let popup = container(column![list, scrollable(grid).height(120)].spacing(4))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(PICKER_BG)),
+            border: Border {
+                color: BORDER,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..Default::default()
+        })
+        .padding(5)
+        .width(220);
 
-    column![head, popup].spacing(2).into()
+    // The popup is shown as a floating overlay (anchored below the button) so
+    // it doesn't push the surrounding form down.
+    Element::new(Floating {
+        base: head.into(),
+        popup: popup.into(),
+    })
+}
+
+/// A widget that renders `base` inline and `popup` as a floating overlay
+/// anchored just below it.
+struct Floating<'a> {
+    base: Element<'a, Message>,
+    popup: Element<'a, Message>,
+}
+
+impl<'a> Widget<Message, Theme, Renderer> for Floating<'a> {
+    fn children(&self) -> Vec<widget::Tree> {
+        vec![widget::Tree::new(&self.base), widget::Tree::new(&self.popup)]
+    }
+
+    fn diff(&self, tree: &mut widget::Tree) {
+        tree.diff_children(&[self.base.as_widget(), self.popup.as_widget()]);
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.base.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.base.as_widget().size_hint()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.base
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.base.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.base.as_widget().mouse_interaction(
+            &tree.children[0],
+            layout,
+            cursor,
+            viewport,
+            renderer,
+        )
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.base
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        self.base.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        _viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        let bounds = layout.bounds();
+        let anchor = Point::new(
+            bounds.x + translation.x,
+            bounds.y + bounds.height + translation.y + 2.0,
+        );
+        Some(overlay::Element::new(Box::new(FloatingOverlay {
+            popup: &mut self.popup,
+            tree: &mut tree.children[1],
+            anchor,
+        })))
+    }
+}
+
+impl<'a> From<Floating<'a>> for Element<'a, Message> {
+    fn from(f: Floating<'a>) -> Self {
+        Element::new(f)
+    }
+}
+
+struct FloatingOverlay<'a, 'b> {
+    popup: &'b mut Element<'a, Message>,
+    tree: &'b mut widget::Tree,
+    anchor: Point,
+}
+
+impl overlay::Overlay<Message, Theme, Renderer> for FloatingOverlay<'_, '_> {
+    fn layout(&mut self, renderer: &Renderer, bounds: Size) -> layout::Node {
+        let viewport = Rectangle::with_size(bounds);
+        let limits = layout::Limits::new(Size::ZERO, viewport.size());
+        let node = self
+            .popup
+            .as_widget_mut()
+            .layout(self.tree, renderer, &limits);
+        let size = node.size();
+        let mut x = self.anchor.x;
+        let mut y = self.anchor.y;
+        if x + size.width > viewport.width {
+            x = (viewport.width - size.width).max(0.0);
+        }
+        if y + size.height > viewport.height {
+            // Not enough room below — flip above the anchor.
+            y = (self.anchor.y - bounds.height.min(0.0) - size.height).max(0.0);
+        }
+        layout::Node::with_children(size, vec![node]).translate(Vector::new(x, y))
+    }
+
+    fn draw(
+        &self,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+    ) {
+        let child = layout.children().next().unwrap();
+        self.popup.as_widget().draw(
+            self.tree,
+            renderer,
+            theme,
+            style,
+            child,
+            cursor,
+            &child.bounds(),
+        );
+    }
+
+    fn update(
+        &mut self,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+    ) {
+        let child = layout.children().next().unwrap();
+        let vp = child.bounds();
+        self.popup.as_widget_mut().update(
+            self.tree, event, child, cursor, renderer, clipboard, shell, &vp,
+        );
+    }
+
+    fn operate(
+        &mut self,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        let child = layout.children().next().unwrap();
+        self.popup
+            .as_widget_mut()
+            .operate(self.tree, child, renderer, operation);
+    }
+
+    fn mouse_interaction(
+        &self,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        let child = layout.children().next().unwrap();
+        self.popup
+            .as_widget()
+            .mouse_interaction(self.tree, child, cursor, &child.bounds(), renderer)
+    }
 }

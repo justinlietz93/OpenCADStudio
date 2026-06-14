@@ -6544,6 +6544,7 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::TableStyleCellEdit { row, field, value } => {
+                self.ts_color_open = None;
                 let r = row as usize;
                 if r < 3 {
                     match field {
@@ -6950,6 +6951,7 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::MLeaderStyleEdit { field, value } => {
+                self.mls_color_open = None;
                 match field {
                     "landing_distance" => self.mls_landing_distance = value,
                     "landing_gap" => self.mls_landing_gap = value,
@@ -7304,6 +7306,7 @@ impl OpenCADStudio {
             }
             Message::DsEdit(field, val) => {
                 self.apply_ds_edit(field, val);
+                self.ds_color_open = None;
                 Task::none()
             }
             Message::DsToggle(field) => {
