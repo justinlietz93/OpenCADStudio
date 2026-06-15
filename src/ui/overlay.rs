@@ -1194,7 +1194,6 @@ fn draw_ucs_icon(frame: &mut canvas::Frame, vp: Mat4, bounds: iced::Rectangle) {
 use crate::command::{DynGuide, DynRole};
 
 const DYN_OFFSET_X: f32 = 14.0;
-const DYN_OFFSET_Y: f32 = 20.0;
 const DYN_PAD: f32 = 4.0;
 const DYN_GAP: f32 = 6.0;
 const DYN_FONT: f32 = 11.0;
@@ -1511,15 +1510,27 @@ impl DynInputCanvas {
         let total_w: f32 =
             widths.iter().sum::<f32>() + DYN_GAP * (self.boxes.len() as f32 - 1.0);
 
-        let mut bx = self.cursor_screen.x + DYN_OFFSET_X;
-        let mut by = self.cursor_screen.y + DYN_OFFSET_Y;
-        if bx + total_w > bounds.width {
-            bx = (self.cursor_screen.x - total_w - 4.0).max(0.0);
+        // Offset the block off the crosshair by the same gap horizontally and
+        // vertically; the prompt sits a gap below the horizontal axis and the
+        // value boxes a further gap below the prompt.
+        let pad = DYN_OFFSET_X;
+        let has_prompt = !self.prompt.is_empty();
+        let prompt_w = (self.prompt.len() as f32 * DYN_CHAR_W) + DYN_PAD * 2.0;
+        let block_w = total_w.max(if has_prompt { prompt_w } else { 0.0 });
+        let mut bx = self.cursor_screen.x + pad;
+        let mut py = self.cursor_screen.y + pad;
+        let mut by = if has_prompt { py + DYN_BOX_H + pad } else { py };
+        if bx + block_w > bounds.width {
+            bx = (self.cursor_screen.x - block_w - 4.0).max(0.0);
         }
         if by + DYN_BOX_H > bounds.height {
-            by = (self.cursor_screen.y - DYN_BOX_H - 4.0).max(0.0);
+            // Flip the block above the cursor, keeping the same gaps.
+            by = (self.cursor_screen.y - pad - DYN_BOX_H).max(0.0);
+            py = (by - pad - DYN_BOX_H).max(0.0);
         }
-        self.draw_prompt(frame, Point { x: bx, y: (by - DYN_BOX_H - 2.0).max(0.0) });
+        if has_prompt {
+            self.draw_prompt(frame, Point { x: bx, y: py });
+        }
 
         let mut x = bx;
         for (i, b) in self.boxes.iter().enumerate() {
@@ -1573,7 +1584,7 @@ impl canvas::Program<Message> for DynInputCanvas {
             if !self.prompt.is_empty() {
                 let pw = (self.prompt.len() as f32 * DYN_CHAR_W) + DYN_PAD * 2.0;
                 let mut px = self.cursor_screen.x + DYN_OFFSET_X;
-                let mut py = self.cursor_screen.y + DYN_OFFSET_Y;
+                let mut py = self.cursor_screen.y + DYN_OFFSET_X;
                 if px + pw > bounds.width {
                     px = (self.cursor_screen.x - pw - 4.0).max(0.0);
                 }
