@@ -736,6 +736,11 @@ impl OpenCADStudio {
                     .map(|(idx, f)| {
                         let value = match (&f.buffer, live) {
                             (Some(b), _) => b.clone(),
+                            // An angle step with a command-supplied live value
+                            // (ARC span / direction) shows it in degrees.
+                            (None, Some(lv)) if f.component == DynComponent::Angle => {
+                                format!("{lv:.1}")
+                            }
                             (None, Some(lv))
                                 if matches!(
                                     f.component,

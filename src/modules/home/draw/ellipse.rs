@@ -19,6 +19,10 @@ fn parse_f32(text: &str) -> Option<f32> {
 
 const TAU: f32 = std::f32::consts::TAU;
 
+/// Minimum swept angle before the previewed arc may flip CW/CCW — filters the
+/// per-frame cursor jitter that otherwise reverses the sweep on tiny moves.
+const DIR_TOL: f32 = 0.1745; // ~10°
+
 // ── Icons ─────────────────────────────────────────────────────────────────
 
 const ICON_CTR: IconKind = IconKind::Svg(include_bytes!(
@@ -58,7 +62,7 @@ fn ellipse_wire(
         return WireModel::solid("rubber_band".into(), vec![], WireModel::CYAN, false);
     }
     let major_dir = major / r_major;
-    let v = major_dir.cross(Vec3::Z).normalize();
+    let v = Vec3::Z.cross(major_dir).normalize();
     let segs = 64u32;
     // Unwrap t_end so the arc goes counter-clockwise.
     let t_e = if t_end <= t_start { t_end + TAU } else { t_end };
@@ -502,13 +506,11 @@ impl CadCommand for EllipseArcCommand {
                 let ratio = minor_ratio(*center, *major, pt).max(0.001);
                 Some(ellipse_wire(*center, *major, ratio, 0.0, TAU))
             }
-            ArcStep::StartAngle {
-                center,
-                major,
-                ratio,
-            } => {
-                let t = angle_from_point(*center, *major, *ratio, pt);
-                Some(ellipse_wire(*center, *major, *ratio, 0.0, t))
+            ArcStep::StartAngle { center, .. } => {
+                // Only the start angle is being chosen here — show a line from
+                // the centre to the cursor to indicate that angle, not a
+                // (misleading) full arc preview.
+                Some(line_wire(*center, pt))
             }
             ArcStep::EndAngle {
                 center,
@@ -516,16 +518,29 @@ impl CadCommand for EllipseArcCommand {
                 ratio,
                 t_start,
             } => {
-                // Detect rotation direction via cross product.
+                // Detect sweep direction from the change in PARAMETRIC angle
+                // (the visual sweep along the ellipse), not the geometric angle
+                // about the centre — on a flat ellipse a large visible move can
+                // be a tiny centre angle, which made the direction stick. A
+                // tolerance ignores jitter; the reference advances only on a
+                // clear move so slow sweeps accumulate.
                 if let Some(prev) = self.prev_pt {
-                    let p = prev - *center;
-                    let c = pt - *center;
-                    let sign = p.x * c.y - p.y * c.x;
-                    if sign.abs() > 1e-6 {
-                        self.cw = sign < 0.0;
+                    let t_prev = angle_from_point(*center, *major, *ratio, prev);
+                    let t_cur = angle_from_point(*center, *major, *ratio, pt);
+                    let mut d = t_cur - t_prev;
+                    while d > std::f32::consts::PI {
+                        d -= TAU;
                     }
+                    while d <= -std::f32::consts::PI {
+                        d += TAU;
+                    }
+                    if d.abs() > DIR_TOL {
+                        self.cw = d < 0.0;
+                        self.prev_pt = Some(pt);
+                    }
+                } else {
+                    self.prev_pt = Some(pt);
                 }
-                self.prev_pt = Some(pt);
                 let t_end = angle_from_point(*center, *major, *ratio, pt);
                 Some(if self.cw {
                     ellipse_wire(*center, *major, *ratio, t_end, *t_start)
@@ -590,7 +605,7 @@ fn angle_from_point(center: Vec3, major: Vec3, ratio: f32, pt: Vec3) -> f32 {
         return 0.0;
     }
     let major_dir = major / r_major;
-    let v = major_dir.cross(Vec3::Z).normalize();
+    let v = Vec3::Z.cross(major_dir).normalize();
     param_angle(center, major_dir, v, pt, ratio)
 }
 

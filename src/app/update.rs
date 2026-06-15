@@ -8014,7 +8014,10 @@ impl OpenCADStudio {
         let wants_text = self.tabs[i]
             .active_cmd
             .as_ref()
-            .map(|c| c.wants_text_input() && !c.point_step_accepts_keywords())
+            .map(|c| {
+                (c.wants_text_input() && !c.point_step_accepts_keywords())
+                    || c.dyn_commit_as_text()
+            })
             .unwrap_or(false);
         if wants_text {
             let text = self.tabs[i]

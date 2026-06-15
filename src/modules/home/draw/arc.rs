@@ -104,11 +104,16 @@ fn make_arc(center: Vec3, radius: f32, start_angle: f32, end_angle: f32) -> Enti
 
 /// Signed rotation from `prev` to `curr` around `center`.
 /// Positive = CCW, negative = CW.
-fn rot_sign(center: Vec3, prev: Vec3, curr: Vec3) -> f32 {
+/// Signed angle (radians) swept from `prev` to `curr` about `center`.
+fn rot_delta(center: Vec3, prev: Vec3, curr: Vec3) -> f32 {
     let p = prev - center;
     let c = curr - center;
-    p.x * c.y - p.y * c.x
+    (p.x * c.y - p.y * c.x).atan2(p.x * c.x + p.y * c.y)
 }
+
+/// Minimum swept angle before the previewed arc may flip CW/CCW. Filters the
+/// per-frame cursor jitter that otherwise reverses the sweep on tiny moves.
+const DIR_TOL: f32 = 0.1745; // ~10°
 
 fn line_wire(a: Vec3, b: Vec3) -> WireModel {
     WireModel::solid(
@@ -284,11 +289,17 @@ impl CadCommand for ArcCommand {
             1 => Some(line_wire(self.c, pt)),
             2 => {
                 if let Some(prev) = self.prev_pt {
-                    if rot_sign(self.c, prev, pt).abs() > 1e-6 {
-                        self.cw = rot_sign(self.c, prev, pt) < 0.0;
+                    // Only flip the sweep once the cursor has moved a clear
+                    // angular step; keep the reference point until then so slow
+                    // moves accumulate and jitter is ignored.
+                    let d = rot_delta(self.c, prev, pt);
+                    if d.abs() > DIR_TOL {
+                        self.cw = d < 0.0;
+                        self.prev_pt = Some(pt);
                     }
+                } else {
+                    self.prev_pt = Some(pt);
                 }
-                self.prev_pt = Some(pt);
                 let ea = angle_xy(self.c, pt);
                 Some(if self.cw {
                     arc_preview(self.c, self.r, ea, self.sa)
@@ -457,11 +468,17 @@ impl CadCommand for ArcSCECommand {
             1 => Some(line_wire(self.s, pt)),
             2 => {
                 if let Some(prev) = self.prev_pt {
-                    if rot_sign(self.c, prev, pt).abs() > 1e-6 {
-                        self.cw = rot_sign(self.c, prev, pt) < 0.0;
+                    // Only flip the sweep once the cursor has moved a clear
+                    // angular step; keep the reference point until then so slow
+                    // moves accumulate and jitter is ignored.
+                    let d = rot_delta(self.c, prev, pt);
+                    if d.abs() > DIR_TOL {
+                        self.cw = d < 0.0;
+                        self.prev_pt = Some(pt);
                     }
+                } else {
+                    self.prev_pt = Some(pt);
                 }
-                self.prev_pt = Some(pt);
                 let ea = angle_xy(self.c, pt);
                 Some(if self.cw {
                     arc_preview(self.c, self.r, ea, self.sa)
@@ -557,16 +574,40 @@ impl CadCommand for ArcSCACommand {
         }
         None
     }
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        // Included angle (span) at the centre. Typed value is the span, handled
+        // by on_text_input; the box previews the live span via dyn_live_value.
+        (self.step == 2).then(|| DynSpec {
+            anchor: DynAnchor::Point(self.c),
+            fields: vec![DynFieldSpec::new(DynRole::Angle)],
+            guide: DynGuide::Polar,
+            ref_point: None,
+        })
+    }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == 2
+    }
+    fn dyn_live_value(&self, cursor: Vec3) -> Option<f64> {
+        (self.step == 2)
+            .then(|| (angle_xy(self.c, cursor) - self.sa).to_degrees().rem_euclid(360.0) as f64)
+    }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         match self.step {
             1 => Some(line_wire(self.s, pt)),
             2 => {
                 if let Some(prev) = self.prev_pt {
-                    if rot_sign(self.c, prev, pt).abs() > 1e-6 {
-                        self.cw = rot_sign(self.c, prev, pt) < 0.0;
+                    // Only flip the sweep once the cursor has moved a clear
+                    // angular step; keep the reference point until then so slow
+                    // moves accumulate and jitter is ignored.
+                    let d = rot_delta(self.c, prev, pt);
+                    if d.abs() > DIR_TOL {
+                        self.cw = d < 0.0;
+                        self.prev_pt = Some(pt);
                     }
+                } else {
+                    self.prev_pt = Some(pt);
                 }
-                self.prev_pt = Some(pt);
                 let ea = angle_xy(self.c, pt);
                 Some(if self.cw {
                     arc_preview(self.c, self.r, ea, self.sa)
@@ -655,6 +696,22 @@ impl CadCommand for ArcSCLCommand {
             }
         }
         None
+    }
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        // Chord length from the start point (typed → on_text_input).
+        (self.step == 2).then(|| DynSpec {
+            anchor: DynAnchor::Point(self.s),
+            fields: vec![DynFieldSpec::new(DynRole::Distance)],
+            guide: DynGuide::Radius,
+            ref_point: None,
+        })
+    }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == 2
+    }
+    fn dyn_live_value(&self, cursor: Vec3) -> Option<f64> {
+        (self.step == 2).then(|| self.s.distance(cursor) as f64)
     }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         match self.step {
@@ -820,6 +877,25 @@ impl CadCommand for ArcSERCommand {
             }
         }
         None
+    }
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        // Radius value (typed → on_text_input); the preview arc is the guide.
+        (self.step == 2).then(|| DynSpec {
+            anchor: DynAnchor::Point(self.s),
+            fields: vec![DynFieldSpec::new(DynRole::Radius)],
+            guide: DynGuide::None,
+            ref_point: None,
+        })
+    }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == 2
+    }
+    fn dyn_live_value(&self, cursor: Vec3) -> Option<f64> {
+        if self.step != 2 {
+            return None;
+        }
+        arc_from_se_radius(self.s, self.e, cursor).map(|(_, r)| r as f64)
     }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         match self.step {
@@ -992,16 +1068,38 @@ impl CadCommand for ArcCSACommand {
         }
         None
     }
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        (self.step == 2).then(|| DynSpec {
+            anchor: DynAnchor::Point(self.c),
+            fields: vec![DynFieldSpec::new(DynRole::Angle)],
+            guide: DynGuide::Polar,
+            ref_point: None,
+        })
+    }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == 2
+    }
+    fn dyn_live_value(&self, cursor: Vec3) -> Option<f64> {
+        (self.step == 2)
+            .then(|| (angle_xy(self.c, cursor) - self.sa).to_degrees().rem_euclid(360.0) as f64)
+    }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         match self.step {
             1 => Some(line_wire(self.c, pt)),
             2 => {
                 if let Some(prev) = self.prev_pt {
-                    if rot_sign(self.c, prev, pt).abs() > 1e-6 {
-                        self.cw = rot_sign(self.c, prev, pt) < 0.0;
+                    // Only flip the sweep once the cursor has moved a clear
+                    // angular step; keep the reference point until then so slow
+                    // moves accumulate and jitter is ignored.
+                    let d = rot_delta(self.c, prev, pt);
+                    if d.abs() > DIR_TOL {
+                        self.cw = d < 0.0;
+                        self.prev_pt = Some(pt);
                     }
+                } else {
+                    self.prev_pt = Some(pt);
                 }
-                self.prev_pt = Some(pt);
                 let ea = angle_xy(self.c, pt);
                 Some(if self.cw {
                     arc_preview(self.c, self.r, ea, self.sa)
@@ -1089,6 +1187,22 @@ impl CadCommand for ArcCSLCommand {
             }
         }
         None
+    }
+    fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
+        use crate::command::{DynAnchor, DynFieldSpec, DynGuide, DynRole, DynSpec};
+        // Chord length from the start point (typed → on_text_input).
+        (self.step == 2).then(|| DynSpec {
+            anchor: DynAnchor::Point(self.s),
+            fields: vec![DynFieldSpec::new(DynRole::Distance)],
+            guide: DynGuide::Radius,
+            ref_point: None,
+        })
+    }
+    fn dyn_commit_as_text(&self) -> bool {
+        self.step == 2
+    }
+    fn dyn_live_value(&self, cursor: Vec3) -> Option<f64> {
+        (self.step == 2).then(|| self.s.distance(cursor) as f64)
     }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         match self.step {

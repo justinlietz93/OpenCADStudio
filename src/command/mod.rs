@@ -567,6 +567,15 @@ pub trait CadCommand: Send {
         DynField::Point
     }
 
+    /// When true, a value typed into the dynamic-input box for this step is
+    /// committed via `on_text_input` (as a string the command parses) rather
+    /// than resolved into a point. Used by steps whose typed value is a span /
+    /// included angle / length the command interprets itself (e.g. ARC angle
+    /// modes), while the box still previews a live value from the cursor.
+    fn dyn_commit_as_text(&self) -> bool {
+        false
+    }
+
     /// Explicit per-step dynamic-input description. `Some(spec)` takes full
     /// control of the boxes, guide geometry and anchor for this step; `None`
     /// (the default) falls back to the legacy `dyn_field()` behaviour so
