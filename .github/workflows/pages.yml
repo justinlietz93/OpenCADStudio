@@ -2,6 +2,7 @@
 # (issue #45). No threads are used on wasm (rayon runs sequentially), so the
 # COOP/COEP headers GitHub Pages can't set are not needed.
 name: Deploy web (GitHub Pages)
+run-name: ${{ github.event.release.tag_name || github.ref_name }} Web
 
 on:
   release:
