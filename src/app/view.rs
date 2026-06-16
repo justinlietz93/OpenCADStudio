@@ -1198,8 +1198,10 @@ impl OpenCADStudio {
                         rename_active: self.style_rename.as_deref(),
                         rename_buf: &self.style_rename_buf,
                     }),
-                    620,
-                    460,
+                    // Wider than the old 620 window: the TTF system-font panel
+                    // (Plan B / web fonts) added a column.
+                    860,
+                    480,
                 )
             }
             super::ModalKind::MlStyle => {
