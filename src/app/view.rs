@@ -1975,7 +1975,7 @@ const MTEXT_FONTS: [&str; 10] = [
     "ItalicC",
     "ScriptS",
     "GothGBT",
-    "Cursive",
+    "RomanC",
 ];
 /// (label, ACI). 256 = ByLayer.
 const MTEXT_COLORS: [(&str, u16); 8] = [

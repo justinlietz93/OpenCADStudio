@@ -2,6 +2,7 @@ use acadrust::types::aci_table::aci_to_rgb;
 use acadrust::{CadDocument, EntityType};
 
 use crate::scene::acad_to_truck::TextStroke;
+use crate::scene::font_face::Face;
 use crate::scene::lff;
 
 pub struct ResolvedTextStyle {
@@ -65,7 +66,7 @@ pub fn text_local_bounds(
         return None;
     }
 
-    let font = lff::get_font(font_name);
+    let face = Face::resolve(font_name);
     let scale = height / 9.0;
     let wf = width_factor.abs().clamp(0.01, 100.0);
     let ob = oblique_angle.tan();
@@ -77,10 +78,10 @@ pub fn text_local_bounds(
 
     for ch in text.chars() {
         if ch == ' ' {
-            cursor_x += font.word_spacing;
+            cursor_x += face.word_spacing();
             continue;
         }
-        match font.glyph(ch) {
+        match face.glyph(ch) {
             Some(glyph) => {
                 for stroke in &glyph.strokes {
                     for &[gx, gy] in stroke {
@@ -92,10 +93,10 @@ pub fn text_local_bounds(
                         max_y = max_y.max(sy);
                     }
                 }
-                cursor_x += glyph.advance + font.letter_spacing;
+                cursor_x += glyph.advance + face.letter_spacing();
             }
             None => {
-                cursor_x += 6.0 + font.letter_spacing;
+                cursor_x += 6.0 + face.letter_spacing();
             }
         }
     }
@@ -863,12 +864,12 @@ pub fn measure_word(
 ) -> f32 {
     let scale = run_scale(state, entity_h, base_wf);
     let font_name = resolve_font(state, base_font);
-    let font = lff::get_font(font_name);
+    let face = Face::resolve(font_name);
     let mut w = 0.0_f32;
     for ch in text.chars() {
-        w += match font.glyph(ch) {
-            Some(g) => (g.advance + font.letter_spacing * state.tracking) * scale,
-            None => (6.0 + font.letter_spacing * state.tracking) * scale,
+        w += match face.glyph(ch) {
+            Some(g) => (g.advance + face.letter_spacing() * state.tracking) * scale,
+            None => (6.0 + face.letter_spacing() * state.tracking) * scale,
         };
     }
     w
@@ -877,7 +878,7 @@ pub fn measure_word(
 pub fn measure_space(state: &RunState, entity_h: f32, base_wf: f32, base_font: &str) -> f32 {
     let scale = run_scale(state, entity_h, base_wf);
     let font_name = resolve_font(state, base_font);
-    lff::get_font(font_name).word_spacing * scale
+    Face::resolve(font_name).word_spacing() * scale
 }
 
 pub fn atom_width(atom: &LayoutAtom, entity_h: f32, base_wf: f32, base_font: &str) -> f32 {
@@ -1132,7 +1133,7 @@ pub struct MTextLayout {
 /// text block.
 pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
     let base_font_name = opts.style.font_name.clone();
-    let base_font = lff::get_font(&base_font_name);
+    let base_font = Face::resolve(&base_font_name);
     let base_wf_abs = opts.style.width_factor.max(0.01);
     let base_wf = if opts.style.is_backward { -base_wf_abs } else { base_wf_abs };
     let base_oblique = opts.style.oblique_angle;
@@ -1256,7 +1257,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         1.0
     };
     // DXF code 44 — multiplier on the default 5/3-em baseline-to-baseline gap.
-    let line_h = entity_h * ls_factor * (5.0 / 3.0) * base_font.line_spacing;
+    let line_h = entity_h * ls_factor * (5.0 / 3.0) * base_font.line_spacing();
     let h = entity_h;
     let v_offset = match opts.v_anchor {
         MTextVAnchor::Top => -h,
@@ -1413,14 +1414,14 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         // Per-character boxes, advancing exactly as
                         // `measure_word` does so they track the glyphs.
                         let scale = run_scale(&atom.state, entity_h, base_wf);
-                        let font = lff::get_font(font_name);
+                        let face = Face::resolve(font_name);
                         let mut cx = cursor_x;
                         for ch in text.chars() {
-                            let adv = match font.glyph(ch) {
+                            let adv = match face.glyph(ch) {
                                 Some(g) => {
-                                    (g.advance + font.letter_spacing * tracking) * scale
+                                    (g.advance + face.letter_spacing() * tracking) * scale
                                 }
-                                None => (6.0 + font.letter_spacing * tracking) * scale,
+                                None => (6.0 + face.letter_spacing() * tracking) * scale,
                             };
                             let (ax, ay) = to_world(line_base_x, line_base_y, cx, ly);
                             let (bx, by) = to_world(line_base_x, line_base_y, cx + adv, ly + run_h);

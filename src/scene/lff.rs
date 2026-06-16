@@ -24,38 +24,19 @@ use std::sync::{Mutex, OnceLock};
 /// Every LibreCAD LFF font, keyed by its file stem (lower-case). Registered
 /// under the upper-cased stem and the font's `# Name:` header.
 const FONTS_SRC: &[(&str, &str)] = &[
-    ("amiri-regular", include_str!("../../assets/fonts/amiri-regular.lff")),
-    ("azomix_i", include_str!("../../assets/fonts/azomix_i.lff")),
-    ("azomix", include_str!("../../assets/fonts/azomix.lff")),
-    ("cursive", include_str!("../../assets/fonts/cursive.lff")),
     ("cyrillic_ii", include_str!("../../assets/fonts/cyrillic_ii.lff")),
     ("gothgbt", include_str!("../../assets/fonts/gothgbt.lff")),
     ("gothgrt", include_str!("../../assets/fonts/gothgrt.lff")),
     ("gothitt", include_str!("../../assets/fonts/gothitt.lff")),
     ("greekc", include_str!("../../assets/fonts/greekc.lff")),
-    ("greekcs", include_str!("../../assets/fonts/greekcs.lff")),
-    ("greek_ol", include_str!("../../assets/fonts/greek_ol.lff")),
-    ("greekp", include_str!("../../assets/fonts/greekp.lff")),
     ("greeks", include_str!("../../assets/fonts/greeks.lff")),
-    ("iso3098_i", include_str!("../../assets/fonts/iso3098_i.lff")),
     ("iso3098", include_str!("../../assets/fonts/iso3098.lff")),
     ("iso", include_str!("../../assets/fonts/iso.lff")),
     ("italicc", include_str!("../../assets/fonts/italicc.lff")),
-    ("italiccs", include_str!("../../assets/fonts/italiccs.lff")),
     ("italict", include_str!("../../assets/fonts/italict.lff")),
-    ("kochigothic", include_str!("../../assets/fonts/kochigothic.lff")),
-    ("kochimincho", include_str!("../../assets/fonts/kochimincho.lff")),
-    ("kst32b", include_str!("../../assets/fonts/kst32b.lff")),
     ("ltypeshp", include_str!("../../assets/fonts/ltypeshp.lff")),
-    ("lc_opengost-ar", include_str!("../../assets/fonts/lc_opengost-ar.lff")),
-    ("lc_opengost-br", include_str!("../../assets/fonts/lc_opengost-br.lff")),
-    ("opengosttypea-regular", include_str!("../../assets/fonts/opengosttypea-regular.lff")),
-    ("opengosttypeb-regular", include_str!("../../assets/fonts/opengosttypeb-regular.lff")),
     ("romanc", include_str!("../../assets/fonts/romanc.lff")),
-    ("romancs", include_str!("../../assets/fonts/romancs.lff")),
     ("romand", include_str!("../../assets/fonts/romand.lff")),
-    ("romanp", include_str!("../../assets/fonts/romanp.lff")),
-    ("romansi", include_str!("../../assets/fonts/romansi.lff")),
     ("romans", include_str!("../../assets/fonts/romans.lff")),
     ("romant", include_str!("../../assets/fonts/romant.lff")),
     ("scriptc", include_str!("../../assets/fonts/scriptc.lff")),
@@ -66,8 +47,6 @@ const FONTS_SRC: &[(&str, &str)] = &[
     ("symap", include_str!("../../assets/fonts/symap.lff")),
     ("symath", include_str!("../../assets/fonts/symath.lff")),
     ("symbol", include_str!("../../assets/fonts/symbol.lff")),
-    ("symbol_misc1", include_str!("../../assets/fonts/symbol_misc1.lff")),
-    ("symbol_misc2", include_str!("../../assets/fonts/symbol_misc2.lff")),
     ("symeteo", include_str!("../../assets/fonts/symeteo.lff")),
     ("symusic", include_str!("../../assets/fonts/symusic.lff")),
     ("unicode", include_str!("../../assets/fonts/unicode.lff")),
@@ -98,9 +77,6 @@ const ALIASES: &[(&str, &str)] = &[
     ("CYRILLIC", "cyrillic_ii"),
     ("CYRILTLC", "cyrillic_ii"),
     ("GREEK", "greekc"),
-    ("GOST", "opengosttypeb-regular"),
-    ("GOSTA", "opengosttypea-regular"),
-    ("GOSTB", "opengosttypeb-regular"),
     ("BIGFONT", "unicode"),
     ("EXTFONT", "unicode"),
 ];
@@ -184,23 +160,19 @@ fn fonts_map() -> &'static HashMap<String, Font> {
     })
 }
 
-/// Broad-coverage fallback font for glyphs missing from the selected family.
-fn unicode_font() -> &'static Font {
+/// Whether `name` resolves to an actual embedded LFF font (after stripping a
+/// trailing extension) — i.e. `get_font` would return a real match rather than
+/// the `STANDARD` fallback. Lets the font dispatcher prefer a system TrueType
+/// face only for names that are *not* one of our stroke fonts.
+pub fn is_builtin(name: &str) -> bool {
     let map = fonts_map();
-    map.get("UNICODE")
-        .or_else(|| map.get("STANDARD"))
-        .or_else(|| map.values().next())
-        .expect("at least one LFF font must be embedded")
+    let key = name.trim().to_ascii_uppercase();
+    map.contains_key(&key)
+        || key
+            .rsplit_once('.')
+            .is_some_and(|(stem, _)| map.contains_key(stem))
 }
 
-/// Secondary fallback covering Latin-extended / Turkish letters (ğ Ş İ …)
-/// that `unicode` lacks.
-fn latin_ext_font() -> Option<&'static Font> {
-    fonts_map().get("ISO3098")
-}
-
-/// Return a font by name (case-insensitive). `.shx` suffix is stripped.
-/// Falls back to Standard → Unicode → any embedded font.
 pub fn get_font(name: &str) -> &'static Font {
     let map = fonts_map();
     let key = name.trim().to_ascii_uppercase();
@@ -214,6 +186,135 @@ pub fn get_font(name: &str) -> &'static Font {
         .or_else(|| map.get("UNICODE"))
         .or_else(|| map.values().next())
         .expect("at least one LFF font must be embedded")
+}
+
+// ── Run tokenizer ────────────────────────────────────────────────────────────
+
+/// Decoration line a token toggles.
+#[derive(Clone, Copy)]
+enum Deco {
+    Under,
+    Over,
+    Strike,
+}
+
+/// How a decoration token changes state. `\L`/`\O`/`\K` turn on (idempotent),
+/// `\l`/`\o`/`\k` turn off; `%%u`/`%%o` flip.
+#[derive(Clone, Copy)]
+enum Op {
+    On,
+    Off,
+    Toggle,
+}
+
+/// One unit of a text run after inline-code resolution. Shared by the stroke
+/// (LFF) and shaped (TTF) renderers so both interpret the DXF inline grammar
+/// — `\L…\l` decorations and `%%` specials — identically.
+enum Tok {
+    /// A renderable character (DXF `%%d`/`%%p`/`%%c`/`%%nnn` already resolved).
+    Glyph(char),
+    /// A literal space.
+    Space,
+    /// A `%%nnn` escape with fewer than three digits — advances like a missing
+    /// glyph without drawing anything.
+    Missing,
+    /// A decoration toggle.
+    Deco(Deco, Op),
+}
+
+/// Resolve a run's inline codes into a flat token stream. Mirrors the original
+/// inline parser in `tessellate_text_run` exactly (verified by the golden test).
+fn tokenize_run(text: &str) -> Vec<Tok> {
+    let mut toks = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch == '\\' {
+            match chars.peek().copied() {
+                Some('L') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Under, Op::On));
+                    continue;
+                }
+                Some('l') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Under, Op::Off));
+                    continue;
+                }
+                Some('O') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Over, Op::On));
+                    continue;
+                }
+                Some('o') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Over, Op::Off));
+                    continue;
+                }
+                Some('K') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Strike, Op::On));
+                    continue;
+                }
+                Some('k') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Strike, Op::Off));
+                    continue;
+                }
+                _ => {}
+            }
+        }
+
+        if ch == '%' && chars.peek() == Some(&'%') {
+            chars.next();
+            match chars.peek().map(|c| c.to_ascii_lowercase()) {
+                Some('d') => {
+                    chars.next();
+                    toks.push(Tok::Glyph('°'));
+                }
+                Some('p') => {
+                    chars.next();
+                    toks.push(Tok::Glyph('±'));
+                }
+                Some('c') => {
+                    chars.next();
+                    toks.push(Tok::Glyph('⌀'));
+                }
+                Some('%') => {
+                    chars.next();
+                    toks.push(Tok::Glyph('%'));
+                }
+                Some('u') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Under, Op::Toggle));
+                }
+                Some('o') => {
+                    chars.next();
+                    toks.push(Tok::Deco(Deco::Over, Op::Toggle));
+                }
+                Some(d) if d.is_ascii_digit() => {
+                    let mut digits = String::with_capacity(3);
+                    for _ in 0..3 {
+                        match chars.peek() {
+                            Some(&c) if c.is_ascii_digit() => digits.push(chars.next().unwrap()),
+                            _ => break,
+                        }
+                    }
+                    if digits.len() == 3 {
+                        if let Some(c) = digits.parse::<u32>().ok().and_then(char::from_u32) {
+                            toks.push(Tok::Glyph(c));
+                        }
+                    } else {
+                        toks.push(Tok::Missing);
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        toks.push(if ch == ' ' { Tok::Space } else { Tok::Glyph(ch) });
+    }
+    toks
 }
 
 // ── Text tessellation ───────────────────────────────────────────────────────
@@ -256,7 +357,7 @@ pub fn tessellate_text_run(
         return vec![];
     }
 
-    let font = get_font(font_name);
+    let face = crate::scene::font_face::Face::resolve(font_name);
     let scale = height / 9.0;
     let wf = if width_factor < 0.0 {
         width_factor.clamp(-100.0, -0.01)
@@ -284,153 +385,109 @@ pub fn tessellate_text_run(
     const OVER_Y: f32 = 10.5;
     const STRIKE_Y: f32 = 4.5;
 
-    let mut chars = text.chars().peekable();
-    while let Some(ch) = chars.next() {
-        if ch == '\\' {
-            match chars.peek().copied() {
-                Some('L') => {
-                    chars.next();
-                    if underline.is_none() {
-                        underline = Some(cursor_x);
-                    }
-                    continue;
-                }
-                Some('l') => {
-                    chars.next();
-                    if let Some(s) = underline.take() {
-                        out.push(vec![xform(s, UNDER_Y, 0.0), xform(cursor_x, UNDER_Y, 0.0)]);
-                    }
-                    continue;
-                }
-                Some('O') => {
-                    chars.next();
-                    if overline.is_none() {
-                        overline = Some(cursor_x);
-                    }
-                    continue;
-                }
-                Some('o') => {
-                    chars.next();
-                    if let Some(s) = overline.take() {
-                        out.push(vec![xform(s, OVER_Y, 0.0), xform(cursor_x, OVER_Y, 0.0)]);
-                    }
-                    continue;
-                }
-                Some('K') => {
-                    chars.next();
-                    if strikethrough.is_none() {
-                        strikethrough = Some(cursor_x);
-                    }
-                    continue;
-                }
-                Some('k') => {
-                    chars.next();
-                    if let Some(s) = strikethrough.take() {
-                        out.push(vec![
-                            xform(s, STRIKE_Y, 0.0),
-                            xform(cursor_x, STRIKE_Y, 0.0),
-                        ]);
-                    }
-                    continue;
-                }
-                _ => {}
-            }
-        }
+    let toks = tokenize_run(text);
+    let ttf_family = face.ttf_family();
 
-        // DXF %%x special-character sequences.
-        let render_ch: char = if ch == '%' && chars.peek() == Some(&'%') {
-            chars.next();
-            match chars.peek().map(|c| c.to_ascii_lowercase()) {
-                Some('d') => {
-                    chars.next();
-                    '°'
-                }
-                Some('p') => {
-                    chars.next();
-                    '±'
-                }
-                Some('c') => {
-                    chars.next();
-                    '⌀'
-                }
-                Some('%') => {
-                    chars.next();
-                    '%'
-                }
-                Some('u') => {
-                    chars.next();
-                    underline = match underline.take() {
-                        Some(start) => {
-                            out.push(vec![
-                                xform(start, UNDER_Y, 0.0),
-                                xform(cursor_x, UNDER_Y, 0.0),
-                            ]);
-                            None
-                        }
-                        None => Some(cursor_x),
-                    };
-                    continue;
-                }
-                Some('o') => {
-                    chars.next();
-                    overline = match overline.take() {
-                        Some(start) => {
-                            out.push(vec![xform(start, OVER_Y, 0.0), xform(cursor_x, OVER_Y, 0.0)]);
-                            None
-                        }
-                        None => Some(cursor_x),
-                    };
-                    continue;
-                }
-                Some(d) if d.is_ascii_digit() => {
-                    let mut digits = String::with_capacity(3);
-                    for _ in 0..3 {
-                        match chars.peek() {
-                            Some(&c) if c.is_ascii_digit() => digits.push(chars.next().unwrap()),
-                            _ => break,
-                        }
-                    }
-                    if digits.len() == 3 {
-                        match digits.parse::<u32>().ok().and_then(char::from_u32) {
-                            Some(c) => c,
-                            None => continue,
-                        }
-                    } else {
-                        cursor_x += (6.0 + font.letter_spacing * tracking) * wf;
-                        continue;
-                    }
-                }
-                _ => continue,
+    // Render a stroke directly (LFF glyph) or per shaped contour (TTF), applying
+    // the run transform at the current pen position.
+    let emit_glyph = |out: &mut Vec<Vec<[f32; 2]>>, strokes: &[Vec<[f32; 2]>], cx: f32| {
+        for stroke in strokes {
+            if stroke.len() < 2 {
+                continue;
             }
+            out.push(stroke.iter().map(|&[gx, gy]| xform(gx, gy, cx)).collect());
+        }
+    };
+
+    // Flush a buffered TTF segment: shape it, emit the positioned glyph
+    // contours, and advance the pen by the shaped run width. Falls back to
+    // per-glyph outlines if shaping is unavailable.
+    let flush_ttf = |seg: &mut String, cursor_x: &mut f32, out: &mut Vec<Vec<[f32; 2]>>| {
+        if seg.is_empty() {
+            return;
+        }
+        let family = ttf_family.unwrap_or("");
+        if let Some(run) = crate::scene::ttf_glyph::shape_run(family, seg) {
+            for g in &run.glyphs {
+                emit_glyph(out, &g.strokes, *cursor_x);
+            }
+            *cursor_x += run.advance * wf;
         } else {
-            ch
-        };
-
-        if render_ch == ' ' {
-            cursor_x += font.word_spacing;
-            continue;
-        }
-        // Selected family first, then the broad Unicode fallback, then
-        // iso3098 for Latin-extended/Turkish letters Unicode omits.
-        let glyph = font
-            .glyph(render_ch)
-            .or_else(|| unicode_font().glyph(render_ch))
-            .or_else(|| latin_ext_font().and_then(|f| f.glyph(render_ch)));
-        match glyph {
-            Some(glyph) => {
-                for stroke in &glyph.strokes {
-                    if stroke.len() < 2 {
-                        continue;
+            for ch in seg.chars() {
+                match face.glyph(ch) {
+                    Some(glyph) => {
+                        emit_glyph(out, &glyph.strokes, *cursor_x);
+                        *cursor_x += (glyph.advance + face.letter_spacing() * tracking) * wf;
                     }
-                    out.push(stroke.iter().map(|&[gx, gy]| xform(gx, gy, cursor_x)).collect());
+                    None => {
+                        warn_missing_glyph(font_name, ch);
+                        *cursor_x += (6.0 + face.letter_spacing() * tracking) * wf;
+                    }
                 }
-                cursor_x += (glyph.advance + font.letter_spacing * tracking) * wf;
-            }
-            None => {
-                warn_missing_glyph(font_name, render_ch);
-                cursor_x += (6.0 + font.letter_spacing * tracking) * wf;
             }
         }
+        seg.clear();
+    };
+
+    let mut seg = String::new();
+    for tok in &toks {
+        // TTF shaping batches consecutive glyphs; any break (space, missing,
+        // decoration toggle, end of run) flushes the buffer first so pen
+        // positions stay correct for decorations.
+        if ttf_family.is_some() && !matches!(tok, Tok::Glyph(_)) {
+            flush_ttf(&mut seg, &mut cursor_x, &mut out);
+        }
+        match tok {
+            Tok::Glyph(c) => {
+                if ttf_family.is_some() {
+                    seg.push(*c);
+                } else {
+                    match face.glyph(*c) {
+                        Some(glyph) => {
+                            emit_glyph(&mut out, &glyph.strokes, cursor_x);
+                            cursor_x += (glyph.advance + face.letter_spacing() * tracking) * wf;
+                        }
+                        None => {
+                            warn_missing_glyph(font_name, *c);
+                            cursor_x += (6.0 + face.letter_spacing() * tracking) * wf;
+                        }
+                    }
+                }
+            }
+            Tok::Space => cursor_x += face.word_spacing(),
+            Tok::Missing => cursor_x += (6.0 + face.letter_spacing() * tracking) * wf,
+            Tok::Deco(deco, op) => {
+                let (slot, y) = match deco {
+                    Deco::Under => (&mut underline, UNDER_Y),
+                    Deco::Over => (&mut overline, OVER_Y),
+                    Deco::Strike => (&mut strikethrough, STRIKE_Y),
+                };
+                match op {
+                    Op::On => {
+                        if slot.is_none() {
+                            *slot = Some(cursor_x);
+                        }
+                    }
+                    Op::Off => {
+                        if let Some(s) = slot.take() {
+                            out.push(vec![xform(s, y, 0.0), xform(cursor_x, y, 0.0)]);
+                        }
+                    }
+                    Op::Toggle => {
+                        *slot = match slot.take() {
+                            Some(s) => {
+                                out.push(vec![xform(s, y, 0.0), xform(cursor_x, y, 0.0)]);
+                                None
+                            }
+                            None => Some(cursor_x),
+                        };
+                    }
+                }
+            }
+        }
+    }
+    if ttf_family.is_some() {
+        flush_ttf(&mut seg, &mut cursor_x, &mut out);
     }
 
     if let Some(start) = underline {
@@ -666,6 +723,34 @@ fn bulge_to_points(p0: [f32; 2], p1: [f32; 2], bulge: f32) -> Vec<[f32; 2]> {
 
 #[cfg(test)]
 mod tests {
+    /// Locks the LFF `tessellate_text_run` output (segment count, vertex count,
+    /// coordinate checksum) so the shared-tokenizer refactor that adds the TTF
+    /// shaping path cannot silently change stroke-font rendering.
+    #[test]
+    fn lff_tessellation_golden() {
+        let cases: &[(&str, usize, usize, f64)] = &[
+            ("ABC 123", 8, 80, 2853.5141),
+            ("A\\LB\\lC", 6, 43, 825.5505),
+            ("10%%d Ö", 6, 60, 1479.1397),
+            ("Hello, World!", 15, 113, 5078.5248),
+        ];
+        for &(t, segs, verts, sum_ref) in cases {
+            let st = tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, "txt", t);
+            let nv: usize = st.iter().map(|s| s.len()).sum();
+            let sum: f64 = st
+                .iter()
+                .flatten()
+                .map(|p| p[0] as f64 + p[1] as f64)
+                .sum();
+            assert_eq!(st.len(), segs, "segment count drift for {t:?}");
+            assert_eq!(nv, verts, "vertex count drift for {t:?}");
+            assert!(
+                (sum - sum_ref).abs() < 0.01,
+                "coordinate checksum drift for {t:?}: {sum:.4} vs {sum_ref:.4}"
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -679,6 +764,21 @@ mod tests {
         // Alias + fallback resolve to a real font.
         assert!(get_font("txt").glyph('A').is_some());
         assert!(get_font("RomanS").glyph('B').is_some());
+        // After curation, every embedded stem and AutoCAD SHX alias must still
+        // resolve to a glyph-bearing font (no alias points at a deleted file).
+        for name in [
+            "MONOTXT", "ISOCP", "ISOCP3", "ISOCT", "ISOCT3", "COMPLEX", "ITALIC", "GOTHICE",
+            "GOTHICG", "GOTHICI", "CYRILLIC", "GREEK", "BIGFONT", "Simplex", "ScriptC", "Symbol",
+        ] {
+            assert!(
+                get_font(name).glyph('A').is_some() || is_builtin(name),
+                "alias/stem {name} failed to resolve"
+            );
+        }
+        // A name from a deleted LibreCAD-only font is no longer a builtin and
+        // falls back to Standard rather than panicking.
+        assert!(!is_builtin("amiri-regular"));
+        assert!(get_font("kochigothic").glyph('A').is_some());
         // Unicode fallback covers a non-ASCII letter via the renderer path.
         let strokes = tessellate_text_run([0.0, 0.0], 2.5, 0.0, 1.0, 0.0, 1.0, "Standard", "Aб");
         assert!(!strokes.is_empty());

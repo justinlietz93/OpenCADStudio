@@ -18,7 +18,9 @@ version = "0.5.7"
 dependencies = [
  "acadrust",
  "bytemuck",
+ "cosmic-text",
  "flate2",
+ "fontdb",
  "glam 0.33.0",
  "iced",
  "image",
@@ -34,6 +36,7 @@ dependencies = [
  "truck-modeling",
  "truck-polymesh",
  "truck-shapeops",
+ "ttf-parser",
  "ureq",
  "windows-sys 0.61.2",
  "winresource",

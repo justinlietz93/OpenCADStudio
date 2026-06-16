@@ -42,6 +42,18 @@ truck-shapeops = "0.4"
 # Fast non-cryptographic hasher. Handle/u64 keys dominate the hot block,
 # hatch, draw-depth and wire caches; the default SipHash is overkill there.
 rustc-hash = "2"
+# TrueType/OpenType support: fontdb enumerates the user's installed system
+# fonts; ttf-parser extracts glyph outlines we flatten into CAD wire strokes.
+# Both are already in the tree transitively via iced's cosmic-text, so pinning
+# them here adds no new downloads.
+fontdb = "0.23"
+ttf-parser = "0.25"
+# Full text-layout engine: shaping (ligatures, Arabic joining, kerning), bidi
+# reordering, and — crucially — automatic font fallback (a glyph missing from
+# the chosen family is shaped from another installed font). We use it only to
+# obtain positioned (font, glyph-id) runs; outlines come from ttf-parser and
+# render through our own wire pipeline.
+cosmic-text = "0.15"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # Win32_System_Com    — COM behind "Set as default app"

@@ -71,7 +71,7 @@ const LIST: Color = Color {
 
 const BUILTIN_FONTS: &[&str] = &[
     "Standard", "ISO", "Simplex", "RomanS", "RomanD", "RomanC", "RomanT", "ItalicC", "ItalicT",
-    "ScriptS", "ScriptC", "GothGBT", "GothGRT", "GothITT", "Cursive", "GreekC", "Symbol", "ISO",
+    "ScriptS", "ScriptC", "GothGBT", "GothGRT", "GothITT", "GreekC", "Symbol",
     "ISO3098", "Unicode",
 ];
 
@@ -255,7 +255,56 @@ pub fn view_window<'a>(v: TextStyleView<'a>) -> Element<'a, Message> {
         left: 8.0,
     });
 
-    let editor = row![font_panel, vsep(), props_panel].height(Fill);
+    // ── System TrueType fonts (read from the user's machine via fontdb) ──
+    let ttf_items: Vec<Element<'_, Message>> = crate::scene::sysfont::families()
+        .iter()
+        .map(|fam| {
+            let is_sel = ttf_buf.eq_ignore_ascii_case(fam);
+            button(text(fam).size(10))
+                .on_press(Message::TextStyleEdit {
+                    field: "ttf",
+                    value: fam.clone(),
+                })
+                .style(list_item(is_sel))
+                .padding([3, 8])
+                .width(Fill)
+                .into()
+        })
+        .collect();
+
+    let ttf_panel = container(
+        column![
+            text("TrueType (system)").size(10).color(DIM),
+            container(scrollable(column(ttf_items).spacing(1)).height(Fill))
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(LIST)),
+                    border: Border {
+                        color: BORDER,
+                        width: 1.0,
+                        radius: 3.0.into()
+                    },
+                    ..Default::default()
+                })
+                .width(Fill)
+                .height(Fill)
+                .padding(2),
+            text_input("TrueType font…", ttf_buf)
+                .on_input(|v| Message::TextStyleEdit {
+                    field: "ttf",
+                    value: v
+                })
+                .style(field_style)
+                .size(11)
+                .width(Fill),
+        ]
+        .spacing(6)
+        .height(Fill),
+    )
+    .width(190)
+    .height(Fill)
+    .padding([12, 8]);
+
+    let editor = row![font_panel, vsep(), ttf_panel, vsep(), props_panel].height(Fill);
 
     crate::ui::style_manager::view(crate::ui::style_manager::Scaffold {
         kind: StyleKind::Text,
