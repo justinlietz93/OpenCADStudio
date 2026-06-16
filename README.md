@@ -2,7 +2,7 @@
 
 A CAD application for 2D drafting and 3D modeling, built with Rust. Reads and writes DWG and DXF files natively.
 
-## Try it in the browser: https://hakanseven12.github.io/OpenCADStudio/
+## Try OCS Web in the browser: https://hakanseven12.github.io/OpenCADStudio/
 
 <img width="1920" height="940" alt="resim" src="https://github.com/user-attachments/assets/10635ad0-454b-4c87-935f-1a3a46f24ccb" />
 <img width="1920" height="940" alt="resim2" src="https://github.com/user-attachments/assets/2a037a09-e8e8-498c-8ed3-58ecb8ae958d" />
