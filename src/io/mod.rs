@@ -86,6 +86,31 @@ pub async fn open_path_with_phase(
     Ok((name, path, doc, caches))
 }
 
+/// Web file open: show the browser picker, read the chosen file's bytes, parse
+/// it, and build the derived caches — producing the same payload as the native
+/// `open_path_with_phase` so it can feed the existing `Message::FileOpened`
+/// handler. There is no filesystem path on the web, so a name-only `PathBuf`
+/// stands in for the document path.
+#[cfg(target_arch = "wasm32")]
+pub async fn pick_and_load_web(
+) -> Result<(String, PathBuf, CadDocument, DerivedCaches), String> {
+    let handle = rfd::AsyncFileDialog::new()
+        .set_title("Open CAD file")
+        .add_filter("CAD Files", &["dwg", "dxf", "DWG", "DXF"])
+        .add_filter("All Files", &["*"])
+        .pick_file()
+        .await
+        .ok_or_else(|| "Cancelled".to_string())?;
+    let name = handle.file_name();
+    let bytes = handle.read().await;
+    let mut doc = load_bytes(&name, bytes)?;
+    let dropped = purge_corrupt_entities(&mut doc);
+    let mut caches = crate::scene::build_derived_caches(&doc);
+    caches.corrupt_dropped = dropped;
+    let path = PathBuf::from(&name);
+    Ok((name, path, doc, caches))
+}
+
 /// Parse a CAD document from in-memory bytes, choosing the format from
 /// `name`'s extension. Used by the web build, where files arrive as bytes from
 /// a browser file picker (no filesystem path). Shares the post-load fixups with

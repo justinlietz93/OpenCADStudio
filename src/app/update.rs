@@ -148,7 +148,29 @@ impl OpenCADStudio {
             }
 
             Message::OpenFile => {
-                Task::perform(crate::io::pick_open_path(), Message::OpenPathPicked)
+                // Native: pick a path, then load on a worker thread. Web: the
+                // browser hands back bytes, so pick + parse in one step and feed
+                // the shared `FileOpened` handler directly.
+                #[cfg(not(target_arch = "wasm32"))]
+                {
+                    Task::perform(crate::io::pick_open_path(), Message::OpenPathPicked)
+                }
+                #[cfg(target_arch = "wasm32")]
+                {
+                    // `FileOpened` only installs the result when an open is in
+                    // progress, so mark one. The browser picker + parse happen
+                    // inside `pick_and_load_web`; the real name is unknown until
+                    // then, so show a generic label meanwhile.
+                    self.opening = Some(super::OpenProgress {
+                        name: "Opening…".into(),
+                        size_bytes: 0,
+                        phase: std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+                            super::OPEN_PHASE_READING,
+                        )),
+                        started: Instant::now(),
+                    });
+                    Task::perform(crate::io::pick_and_load_web(), Message::FileOpened)
+                }
             }
 
             Message::OpenPathPicked(None) => Task::none(),

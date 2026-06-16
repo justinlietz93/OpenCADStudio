@@ -209,6 +209,11 @@ const SHAPE_FS: f32 = 1000.0;
 
 /// Shared cosmic-text layout engine, loaded once with the system fonts. Held
 /// behind a mutex because `set_text`/`shape` need `&mut FontSystem`.
+///
+/// Native only: on the web there are no system fonts, so cosmic-text would
+/// panic with "no default font found" — the shaping / fallback paths are
+/// disabled there instead (LFF stroke fonts still render).
+#[cfg(not(target_arch = "wasm32"))]
 fn font_system() -> &'static Mutex<cosmic_text::FontSystem> {
     static FS: OnceLock<Mutex<cosmic_text::FontSystem>> = OnceLock::new();
     FS.get_or_init(|| Mutex::new(cosmic_text::FontSystem::new()))
@@ -258,6 +263,14 @@ pub fn fallback_glyph(ch: char) -> Option<Arc<Glyph>> {
     built
 }
 
+/// Web: no system fonts → no cosmic-text fallback (LFF-missing glyphs simply
+/// do not render).
+#[cfg(target_arch = "wasm32")]
+fn build_fallback(_ch: char) -> Option<Arc<Glyph>> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
     use cosmic_text::{Attrs, Buffer, Metrics, Shaping};
     let mut fs = font_system().lock().unwrap();
@@ -292,6 +305,14 @@ fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
     None
 }
 
+/// Web: no system fonts → no shaping (TTF faces don't occur on the web anyway,
+/// since system-font discovery is empty).
+#[cfg(target_arch = "wasm32")]
+fn build_shaped(_family: &str, _text: &str) -> Option<ShapedRun> {
+    None
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 fn build_shaped(family: &str, text: &str) -> Option<ShapedRun> {
     use cosmic_text::{Attrs, Buffer, Family, Metrics, Shaping};
 
