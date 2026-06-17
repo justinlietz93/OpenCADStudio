@@ -141,6 +141,7 @@ Status of every standard CAD command in Open CAD Studio:
 | `FIELD` | — | Auto-updating text field | ❌ |
 | `SPELL` | SP | Spell check | ❌ |
 | `ARCTEXT` | — | Text along an arc | ❌ |
+| `TORIENT` | — | Orient text for readability | ✅ |
 
 ---
 

@@ -20,3 +20,4 @@ pub mod splinedit;
 pub mod stretch;
 pub mod translate;
 pub mod trim;
+pub mod torient;
