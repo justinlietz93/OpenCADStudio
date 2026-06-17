@@ -19,6 +19,10 @@
 pub mod manifest;
 pub mod ribbon;
 
+/// Runtime host surface — only built with the `host` feature (pulls `acadrust`).
+#[cfg(feature = "host")]
+pub mod host;
+
 pub use manifest::{ApiVersion, PluginManifest, API_VERSION};
 pub use ribbon::{
     CadModule, IconKind, ModuleEvent, RibbonGroup, RibbonItem, StyleKey, ToolDef,

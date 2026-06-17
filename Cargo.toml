@@ -24,7 +24,7 @@ solid3d = ["dep:truck-meshalgo", "dep:truck-shapeops", "dep:lzma-sys"]
 [dependencies]
 # Stable, dependency-free add-on contract (manifest + ribbon/CadModule types).
 # Plugin authors target this crate's semver, not OpenCADStudio internals.
-ocs_plugin_api = { path = "crates/ocs_plugin_api" }
+ocs_plugin_api = { path = "crates/ocs_plugin_api", features = ["host"] }
 # vtkio (pulled in transitively via truck-meshalgo) depends on xz2 → lzma-sys,
 # which by default links the system liblzma dynamically. On macOS that bakes a
 # Homebrew dylib path (/opt/homebrew/.../liblzma.5.dylib) into the binary, so

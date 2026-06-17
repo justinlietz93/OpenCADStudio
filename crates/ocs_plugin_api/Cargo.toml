@@ -6,3 +6,12 @@ description = "Stable, dependency-free contract for Open CAD Studio add-on packa
 license = "GPL-3.0-only"
 
 [dependencies]
+# Pulled in only by the `host` feature, which adds the `acadrust`-typed
+# `HostApi` runtime surface. The default crate stays dependency-free so engine
+# crates and external tooling can depend on the manifest/ribbon contract cheaply.
+acadrust = { version = "0.3.4", optional = true }
+
+[features]
+# Enables the runtime host surface (`HostApi` trait). The OpenCADStudio binary
+# turns this on; pure-data consumers leave it off.
+host = ["dep:acadrust"]

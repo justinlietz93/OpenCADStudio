@@ -5,6 +5,7 @@ use std::any::{Any, TypeId};
 use acadrust::tables::AppId;
 use acadrust::xdata::ExtendedDataRecord;
 use acadrust::{CadDocument, EntityType, Handle};
+use ocs_plugin_api::host::HostApi;
 
 use super::OpenCADStudio;
 use crate::command::CadCommand;
@@ -167,6 +168,79 @@ impl<'a> HostSession<'a> {
     }
 }
 
+/// The stable contract a plugin's `dispatch` sees. Each method forwards to the
+/// inherent `HostSession` method of the same name (inherent methods take
+/// resolution priority, so this is plain delegation, not recursion). The
+/// per-tab plugin-state accessors expose the raw `Any` box; the typed
+/// `ocs_plugin_api::host::plugin_state*` helpers wrap them.
+impl HostApi for HostSession<'_> {
+    fn tab_index(&self) -> usize {
+        self.tab_index()
+    }
+    fn document(&self) -> &CadDocument {
+        self.document()
+    }
+    fn document_mut(&mut self) -> &mut CadDocument {
+        self.document_mut()
+    }
+    fn add_entity(&mut self, entity: EntityType) -> Handle {
+        self.add_entity(entity)
+    }
+    fn bump_geometry(&mut self) {
+        self.bump_geometry()
+    }
+    fn read_record(&self, handle: Handle, app_name: &str) -> Option<&ExtendedDataRecord> {
+        self.read_record(handle, app_name)
+    }
+    fn write_record(&mut self, handle: Handle, record: ExtendedDataRecord) -> bool {
+        self.write_record(handle, record)
+    }
+    fn remove_record(&mut self, handle: Handle, app_name: &str) -> bool {
+        self.remove_record(handle, app_name)
+    }
+    fn push_undo(&mut self, label: &str) {
+        self.push_undo(label)
+    }
+    fn set_dirty(&mut self) {
+        self.set_dirty()
+    }
+    fn push_info(&mut self, msg: &str) {
+        self.push_info(msg)
+    }
+    fn push_output(&mut self, msg: &str) {
+        self.push_output(msg)
+    }
+    fn push_error(&mut self, msg: &str) {
+        self.push_error(msg)
+    }
+    fn plugin_state_any(&self, plugin_id: &str) -> Option<&(dyn Any + Send + Sync)> {
+        self.app.tabs[self.tab]
+            .plugin_state
+            .get(plugin_id)
+            .map(|b| b.as_ref())
+    }
+    fn plugin_state_any_mut(
+        &mut self,
+        plugin_id: &str,
+    ) -> Option<&mut (dyn Any + Send + Sync)> {
+        self.app.tabs[self.tab]
+            .plugin_state
+            .get_mut(plugin_id)
+            .map(|b| b.as_mut())
+    }
+    fn ensure_plugin_state_any(
+        &mut self,
+        plugin_id: &'static str,
+        init: &mut dyn FnMut() -> Box<dyn Any + Send + Sync>,
+    ) -> &mut (dyn Any + Send + Sync) {
+        self.app.tabs[self.tab]
+            .plugin_state
+            .entry(plugin_id)
+            .or_insert_with(|| init())
+            .as_mut()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -201,5 +275,21 @@ mod tests {
         assert!(host.remove_record(h, "DEMO_SURVEY"));
         assert!(host.read_record(h, "DEMO_SURVEY").is_none());
         assert!(!host.remove_record(h, "DEMO_SURVEY"));
+    }
+
+    #[test]
+    fn plugin_state_round_trips_through_hostapi_trait() {
+        use ocs_plugin_api::host::{self, HostApi};
+        let mut app = OpenCADStudio::new_for_test();
+        let mut session = HostSession::new(&mut app, 0);
+        let host: &mut dyn HostApi = &mut session;
+
+        // Absent before first use.
+        assert!(host::plugin_state::<u32>(&*host, "opencad.demo").is_none());
+        // Insert via ensure, then mutate.
+        *host::ensure_plugin_state(host, "opencad.demo", || 7u32) += 1;
+        assert_eq!(*host::plugin_state::<u32>(&*host, "opencad.demo").unwrap(), 8);
+        *host::plugin_state_mut::<u32>(host, "opencad.demo").unwrap() = 100;
+        assert_eq!(*host::plugin_state::<u32>(&*host, "opencad.demo").unwrap(), 100);
     }
 }

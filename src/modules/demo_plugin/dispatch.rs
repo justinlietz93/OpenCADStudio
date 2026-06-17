@@ -1,6 +1,6 @@
-use crate::plugin::host::HostSession;
+use crate::plugin::host::HostApi;
 
-pub fn handle(host: &mut HostSession<'_>, cmd: &str) -> bool {
+pub fn handle(host: &mut dyn HostApi, cmd: &str) -> bool {
     // "DP_IMPORT <path>" arrives from ModuleEvent::PluginFileDialog with the
     // path in its original case (the command line is bypassed).
     if let Some(path) = cmd.strip_prefix("DP_IMPORT ") {

@@ -1,4 +1,4 @@
-use crate::plugin::host::{BuiltinPlugin, HostSession};
+use crate::plugin::host::{BuiltinPlugin, HostApi};
 use crate::plugin::manifest::PluginManifest;
 
 use super::dispatch;
@@ -15,7 +15,7 @@ impl BuiltinPlugin for DemoPlugin {
         Box::new(super::DemoPluginModule)
     }
 
-    fn dispatch(&self, host: &mut HostSession<'_>, cmd: &str) -> bool {
+    fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool {
         dispatch::handle(host, cmd)
     }
 }

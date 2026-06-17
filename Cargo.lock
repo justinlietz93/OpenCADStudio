@@ -3626,6 +3626,9 @@ dependencies = [
 [[package]]
 name = "ocs_plugin_api"
 version = "0.1.0"
+dependencies = [
+ "acadrust",
+]
 
 [[package]]
 name = "once_cell"

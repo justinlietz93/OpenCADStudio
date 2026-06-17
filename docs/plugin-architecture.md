@@ -150,7 +150,7 @@ pub struct PluginManifest {
 pub trait BuiltinPlugin: Send + Sync {
     fn manifest(&self) -> &'static PluginManifest;
     fn ribbon(&self) -> Box<dyn CadModule>;
-    fn dispatch(&self, host: &mut HostSession<'_>, cmd: &str) -> bool;
+    fn dispatch(&self, host: &mut dyn HostApi, cmd: &str) -> bool;
 }
 ```
 
@@ -183,14 +183,20 @@ Plugins use `HostSession`, not `OpenCADStudio`:
 | Command line | `push_info`, `push_output`, `push_error`, `set_active_command` |
 | Undo / dirty | `push_undo`, `set_dirty` |
 
-**Status:** The dependency-free half of the contract — `PluginManifest` /
-`ApiVersion` (manifest) and `CadModule` + the ribbon types (`ToolDef`,
-`RibbonGroup`, …) — now lives in the standalone, semver-versioned
-[`crates/ocs_plugin_api`](../crates/ocs_plugin_api) crate. The host re-exports it
-(`crate::plugin::manifest`, `crate::modules`) so in-tree paths are unchanged.
-The `acadrust`-typed runtime surface in the table above (`document_mut`,
-`add_entity`, `set_active_command`, …) stays in the host binary for now; lifting
-it behind a `HostApi` trait in the same crate is the remaining phase-1b step.
+**Status:** The whole contract now lives in the standalone, semver-versioned
+[`crates/ocs_plugin_api`](../crates/ocs_plugin_api) crate:
+- **Dependency-free core** — `PluginManifest` / `ApiVersion` (manifest) and
+  `CadModule` + ribbon types (`ToolDef`, `RibbonGroup`, …). Engine crates and
+  external tooling depend on this cheaply.
+- **`host` feature** — the `acadrust`-typed `HostApi` trait (the runtime surface
+  in the table above). `HostSession` in the binary implements it; a plugin's
+  `dispatch` receives `&mut dyn HostApi`, so an out-of-tree add-on compiles
+  against this crate alone. Per-tab plugin state is reached through the
+  object-safe `plugin_state*` helpers. `set_active_command` (interactive
+  acquisition) stays host-side for now — see Command routing.
+
+The host re-exports both (`crate::plugin::manifest`, `crate::modules`,
+`crate::plugin::host::HostApi`) so in-tree paths are unchanged.
 
 ### Command routing
 
@@ -255,7 +261,7 @@ This mirrors QGIS: the application ships core menus; plugins add tabs/tools with
 - [x] Per-tab `plugin_state`
 - [x] Storm Sewer off `commands.rs` monolith
 - [x] Single registration (`plugin.toml` + `BuiltinPlugin::ribbon`)
-- [~] Extract `ocs_plugin_api` crate — manifest + ribbon/`CadModule` done; `acadrust`-typed host surface pending
+- [x] Extract `ocs_plugin_api` crate — dependency-free manifest + ribbon/`CadModule`, plus the `acadrust`-typed `HostApi` trait behind the optional `host` feature; `dispatch` takes `&mut dyn HostApi`
 - [x] Plugin manager UI (list installed, versions) — `PLUGINS` / `PLUGINMANAGER` command, or the Start-page "Plugins" button
 - [x] Enable/disable plugins from the manager — a disabled plugin drops its ribbon tab and command dispatch; persisted in `settings.txt` (`disabled_plugins=`)
 - [x] `ModuleEvent::PluginFileDialog` — a plugin tool requests a native file picker; the host opens it and dispatches `"<command> <path>"` back to the plugin with original case preserved (bypasses the command-line upper-casing)
