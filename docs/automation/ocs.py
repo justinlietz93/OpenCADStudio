@@ -79,6 +79,14 @@ class Ocs:
         """List entities (handle, type, layer, geometry), optionally filtered."""
         return self._send(op="query", type=type, layer=layer, limit=limit)
 
+    def layers(self) -> dict[str, Any]:
+        """List layers (name, color, on/off, frozen, locked) and the current one."""
+        return self._send(op="layers")
+
+    def header(self) -> dict[str, Any]:
+        """Read drawing header variables (units, PDMODE/PDSIZE, LTSCALE, …)."""
+        return self._send(op="header")
+
     def select(
         self,
         handles: Optional[list[str]] = None,

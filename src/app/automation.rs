@@ -86,6 +86,31 @@ fn entity_json(e: &acadrust::EntityType) -> Value {
         E::Point(p) => {
             map.insert("location".into(), v3(p.location));
         }
+        E::Ellipse(el) => {
+            map.insert("center".into(), v3(el.center));
+            map.insert("major_axis".into(), v3(el.major_axis));
+        }
+        E::Text(t) => {
+            map.insert("value".into(), json!(t.value));
+            map.insert("position".into(), v3(t.insertion_point));
+            map.insert("height".into(), json!(t.height));
+        }
+        E::MText(t) => {
+            map.insert("value".into(), json!(t.value));
+            map.insert("position".into(), v3(t.insertion_point));
+            map.insert("height".into(), json!(t.height));
+        }
+        E::LwPolyline(pl) => {
+            let pts: Vec<Value> = pl
+                .vertices
+                .iter()
+                .map(|v| json!([v.location.x, v.location.y]))
+                .collect();
+            map.insert("vertices".into(), json!(pts));
+        }
+        E::Insert(ins) => {
+            map.insert("block".into(), json!(ins.block_name));
+        }
         _ => {}
     }
     obj
@@ -151,6 +176,50 @@ impl OpenCADStudio {
             }
             "entities" => self.entity_summary(),
             "query" => self.entity_query(&req),
+            "layers" => {
+                let i = self.active_tab;
+                let layers: Vec<Value> = self
+                    .tabs[i]
+                    .scene
+                    .document
+                    .layers
+                    .iter()
+                    .map(|l| {
+                        let mut o = json!({
+                            "name": l.name,
+                            "off": l.is_off(),
+                            "frozen": l.is_frozen(),
+                            "locked": l.is_locked(),
+                        });
+                        let m = o.as_object_mut().expect("json object");
+                        if let Some(aci) = l.color.index() {
+                            m.insert("color".into(), json!(aci));
+                        }
+                        if let Some((r, g, b)) = l.color.rgb() {
+                            m.insert("rgb".into(), json!([r, g, b]));
+                        }
+                        o
+                    })
+                    .collect();
+                json!({
+                    "ok": true,
+                    "current": self.tabs[i].scene.document.header.current_layer_name,
+                    "layers": layers,
+                })
+            }
+            "header" => {
+                let h = &self.tabs[self.active_tab].scene.document.header;
+                json!({
+                    "ok": true,
+                    "current_layer": h.current_layer_name,
+                    "current_text_style": h.current_text_style_name,
+                    "insertion_units": h.insertion_units,
+                    "pdmode": h.point_display_mode,
+                    "pdsize": h.point_display_size,
+                    "ltscale": h.linetype_scale,
+                    "annotation_scale_value": h.annotation_scale_value,
+                })
+            }
             "undo" => {
                 let _ = self.update(super::Message::Undo);
                 self.entity_summary()

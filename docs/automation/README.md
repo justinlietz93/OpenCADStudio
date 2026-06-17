@@ -19,7 +19,9 @@ can act → observe → act.
 | `{"op":"open","path":"plan.dwg"}` | entity summary |
 | `{"op":"run","cmd":"LAYER Walls"}` | `{"ok":true,"cmd":...,"entities":N,"added":D}` |
 | `{"op":"entities"}` | `{"ok":true,"total":N,"by_type":{"Line":42,...}}` |
-| `{"op":"query","type":"Line","layer":"Walls"}` | per-entity `{handle,type,layer,…geometry}` (filters + `limit` optional) |
+| `{"op":"query","type":"Line","layer":"Walls"}` | per-entity `{handle,type,layer,…geometry}` (Line/Circle/Arc/Point/Ellipse/Text/MText/Polyline/Insert; filters + `limit` optional) |
+| `{"op":"layers"}` | layers `{name,color,off,frozen,locked}` + the current layer |
+| `{"op":"header"}` | drawing variables (units, PDMODE/PDSIZE, LTSCALE, …) |
 | `{"op":"select","handles":["2B"]}` | set the selection (by `handles`, `type`, or `layer`; `clear` to deselect) → `{"ok":true,"selected":N}` |
 | `{"op":"undo"}` / `{"op":"redo"}` | step the document history → entity summary |
 | `{"op":"save","path":"out.dwg"}` | `{"ok":true,"saved":"out.dwg"}` (path optional once opened/saved) |
