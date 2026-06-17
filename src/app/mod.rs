@@ -1,3 +1,7 @@
+#[cfg(not(target_arch = "wasm32"))]
+mod automation;
+#[cfg(not(target_arch = "wasm32"))]
+pub use automation::serve;
 mod cmd_result;
 mod commands;
 mod document;

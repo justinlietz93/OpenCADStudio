@@ -39,6 +39,13 @@ fn main() -> iced::Result {
     }
     #[cfg(not(target_arch = "wasm32"))]
     {
+        // Headless automation server — drive the app over JSON on stdin/stdout
+        // with no GUI (issue #29). `--serve` is the opt-in; everything else
+        // launches the editor.
+        if std::env::args().skip(1).any(|a| a == "--serve") {
+            app::serve();
+            return Ok(());
+        }
         app::run()
     }
 }
