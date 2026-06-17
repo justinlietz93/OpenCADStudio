@@ -20,7 +20,17 @@ can act → observe → act.
 | `{"op":"run","cmd":"LAYER Walls"}` | `{"ok":true,"cmd":...,"entities":N,"added":D}` |
 | `{"op":"entities"}` | `{"ok":true,"total":N,"by_type":{"Line":42,...}}` |
 | `{"op":"query","type":"Line","layer":"Walls"}` | per-entity `{handle,type,layer,…geometry}` (filters + `limit` optional) |
+| `{"op":"select","handles":["2B"]}` | set the selection (by `handles`, `type`, or `layer`; `clear` to deselect) → `{"ok":true,"selected":N}` |
 | `{"op":"save","path":"out.dwg"}` | `{"ok":true,"saved":"out.dwg"}` (path optional once opened/saved) |
+
+Selection drives modify commands — `select` the targets (e.g. the handles a
+`query` returned), then `run("ERASE")`:
+
+```python
+ocs.select(type="Line"); ocs.run("ERASE")   # erase every line
+ids = [e["handle"] for e in ocs.query(layer="Walls")["entities"]]
+ocs.select(handles=ids); ocs.run("ERASE")
+```
 
 Every response has `"ok"`; failures carry `"error"`. `run` drives Open CAD
 Studio's **own** command system — no separate bindings to maintain — so its

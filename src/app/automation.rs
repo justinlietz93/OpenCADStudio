@@ -151,6 +151,41 @@ impl OpenCADStudio {
             }
             "entities" => self.entity_summary(),
             "query" => self.entity_query(&req),
+            "select" => {
+                let i = self.active_tab;
+                self.tabs[i].scene.deselect_all();
+                if req["clear"].as_bool() != Some(true) {
+                    // By explicit handles (hex, as returned by `query`).
+                    if let Some(arr) = req["handles"].as_array() {
+                        for h in arr.iter().filter_map(|h| h.as_str()) {
+                            if let Ok(v) = u64::from_str_radix(h.trim_start_matches("0x"), 16) {
+                                self.tabs[i].scene.select_entity(acadrust::Handle::new(v), false);
+                            }
+                        }
+                    }
+                    // Or by type / layer.
+                    let type_filter = req["type"].as_str();
+                    let layer_filter = req["layer"].as_str();
+                    if type_filter.is_some() || layer_filter.is_some() {
+                        let handles: Vec<acadrust::Handle> = self.tabs[i]
+                            .scene
+                            .document
+                            .entities()
+                            .filter(|e| {
+                                type_filter.is_none_or(|t| {
+                                    crate::entities::names::ui_name(e).eq_ignore_ascii_case(t)
+                                })
+                            })
+                            .filter(|e| layer_filter.is_none_or(|l| e.common().layer == l))
+                            .map(|e| e.common().handle)
+                            .collect();
+                        for h in handles {
+                            self.tabs[i].scene.select_entity(h, false);
+                        }
+                    }
+                }
+                json!({ "ok": true, "selected": self.tabs[i].scene.selected_entities().len() })
+            }
             "save" => {
                 let i = self.active_tab;
                 let path = req["path"]
@@ -313,6 +348,13 @@ mod tests {
         assert_eq!(r["count"], 1);
         assert_eq!(r["entities"][0]["type"], "Circle");
         assert_eq!(r["entities"][0]["radius"], 3.0);
+
+        // select by type, then a selection command acts on it.
+        let r = app.automation_op(r#"{"op":"select","type":"Line"}"#);
+        assert_eq!(r["selected"], 2);
+        app.automation_op(r#"{"op":"run","cmd":"ERASE"}"#);
+        let r = app.automation_op(r#"{"op":"entities"}"#);
+        assert_eq!(r["total"], 1); // only the Circle remains
 
         // Errors are reported, never panics.
         assert_eq!(app.automation_op(r#"{"op":"bogus"}"#)["ok"], false);

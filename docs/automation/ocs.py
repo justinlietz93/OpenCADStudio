@@ -79,6 +79,19 @@ class Ocs:
         """List entities (handle, type, layer, geometry), optionally filtered."""
         return self._send(op="query", type=type, layer=layer, limit=limit)
 
+    def select(
+        self,
+        handles: Optional[list[str]] = None,
+        type: Optional[str] = None,
+        layer: Optional[str] = None,
+        clear: bool = False,
+    ) -> dict[str, Any]:
+        """Set the selection by handle, type, or layer (a following selection
+        command like ``run("ERASE")`` then acts on it). `clear=True` deselects."""
+        return self._send(
+            op="select", handles=handles, type=type, layer=layer, clear=clear
+        )
+
     def save(self, path: Optional[str] = None) -> dict[str, Any]:
         """Write the document (defaults to the opened/last-saved path)."""
         return self._send(op="save", path=path)
