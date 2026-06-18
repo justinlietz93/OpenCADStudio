@@ -15,6 +15,11 @@ pub fn general_section(entity: &EntityType) -> PropSection {
         title: "General".into(),
         props: vec![
             Property {
+                label: "Handle".into(),
+                field: "handle",
+                value: PropValue::ReadOnly(common.handle.value().to_string()),
+            },
+            Property {
                 label: "Layer".into(),
                 field: "layer",
                 value: PropValue::LayerChoice(common.layer.clone()),
