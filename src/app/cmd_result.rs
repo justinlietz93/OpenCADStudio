@@ -1618,12 +1618,7 @@ impl OpenCADStudio {
                 return self.begin_text_edit(handle);
             }
             CmdResult::SuspendForTextEdit { handle } => {
-                let is_editable = self.tabs[i]
-                    .scene
-                    .document
-                    .get_entity(handle)
-                    .map(|e| crate::app::text_inline::read_text_field(e).is_some())
-                    .unwrap_or(false);
+                let is_editable = crate::app::text_inline::can_edit_text(handle, &self.tabs[i].scene.document);
                 if !is_editable {
                     self.command_line.push_error("TEXTEDIT: selected entity is not text.");
                     let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());

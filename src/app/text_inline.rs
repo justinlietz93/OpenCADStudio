@@ -98,6 +98,25 @@ pub struct TextInlineState {
     /// Canvas-space anchor where the field is drawn (the insertion-point click).
     pub screen_anchor: iced::Point,
 }
+pub(super) fn can_edit_text(mut handle: Handle, document: &acadrust::CadDocument) -> bool {
+    for _ in 0..8 {
+        match document.get_entity(handle) {
+            Some(acadrust::EntityType::Leader(l)) => {
+                let ann = l.annotation_handle;
+                if ann.is_null() || ann == handle {
+                    return false;
+                }
+                handle = ann;
+            }
+            _ => break,
+        }
+    }
+    if let Some(entity) = document.get_entity(handle) {
+        read_text_field(entity).is_some()
+    } else {
+        false
+    }
+}
 
 impl super::OpenCADStudio {
     /// Open the right in-place editor for `handle`: the plain box for single-
