@@ -342,6 +342,19 @@ impl OpenCADStudio {
         self.persist_settings_if_changed();
     }
 
+    /// Mirror the current grid/snap toggles onto tab `i`'s `*Active` VPort
+    /// entries so a save writes the real display state rather than VPort
+    /// defaults (#121). Cheap; safe to call every frame.
+    fn sync_vport_display(&mut self, i: usize) {
+        let grid_on = self.show_grid;
+        let snap_on =
+            self.snapper.snap_enabled && self.snapper.is_on(crate::snap::SnapType::Grid);
+        let grid_spacing = self.snapper.grid_spacing as f64;
+        self.tabs[i]
+            .scene
+            .set_active_vport_display(grid_on, snap_on, grid_spacing);
+    }
+
     fn update_inner(&mut self, msg: Message) -> Task<Message> {
         match msg {
             Message::Tick(t) => {
@@ -924,6 +937,10 @@ impl OpenCADStudio {
 
             Message::SaveFile => {
                 let i = self.active_tab;
+                // Stamp the live grid/snap toggles onto the VPort so the file
+                // reflects them even if they came from settings with no
+                // in-session toggle (#121).
+                self.sync_vport_display(i);
                 // Native: save straight to the known path. Web has no path
                 // (downloads instead), so always go through the Save dialog.
                 #[cfg(not(target_arch = "wasm32"))]
@@ -4295,14 +4312,17 @@ impl OpenCADStudio {
             // ── Snap / mode toggles ───────────────────────────────────────
             Message::ToggleSnapEnabled => {
                 self.snapper.toggle_global();
+                self.sync_vport_display(self.active_tab);
                 Task::none()
             }
             Message::ToggleGridSnap => {
                 self.snapper.toggle(crate::snap::SnapType::Grid);
+                self.sync_vport_display(self.active_tab);
                 Task::none()
             }
             Message::ToggleGrid => {
                 self.show_grid ^= true;
+                self.sync_vport_display(self.active_tab);
                 Task::none()
             }
             Message::ToggleOrtho => {

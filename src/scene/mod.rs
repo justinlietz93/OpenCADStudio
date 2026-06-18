@@ -5573,6 +5573,15 @@ impl Scene {
         }
 
         let table_handle = self.document.vports.handle();
+        // Carry the grid/snap display state from the existing `*Active` entry
+        // across the rebuild — these flags track the in-app toggles and must
+        // not reset to VPort defaults each camera sync. (#121)
+        let display = self
+            .document
+            .vports
+            .iter()
+            .find(|v| v.name == "*Active")
+            .map(|v| (v.grid_on, v.snap_on, v.grid_spacing, v.snap_spacing, v.snap_base));
         let preserved_vps: Vec<acadrust::tables::VPort> = self
             .document
             .vports
@@ -5604,8 +5613,29 @@ impl Scene {
             let (ll, ur) = Self::tile_rect_to_vport(tile.rect);
             let mut entry = self.vport_from_camera("*Active", &tile.camera, ll, ur);
             entry.render_mode = tile.render_mode;
+            if let Some((grid_on, snap_on, grid_spacing, snap_spacing, snap_base)) = display {
+                entry.grid_on = grid_on;
+                entry.snap_on = snap_on;
+                entry.grid_spacing = grid_spacing;
+                entry.snap_spacing = snap_spacing;
+                entry.snap_base = snap_base;
+            }
             entry.handle = self.document.allocate_handle();
             self.document.vports.add_allow_duplicate(entry);
+        }
+    }
+
+    /// Stamp the grid/snap display state onto every `*Active` VPort entry so a
+    /// saved file reflects the in-app grid/snap toggles (otherwise other CAD
+    /// apps read VPort defaults). `grid_spacing` is applied to both axes and
+    /// mirrored to the snap spacing. (#121)
+    pub fn set_active_vport_display(&mut self, grid_on: bool, snap_on: bool, grid_spacing: f64) {
+        let spacing = acadrust::types::Vector2 { x: grid_spacing, y: grid_spacing };
+        for vp in self.document.vports.iter_mut().filter(|v| v.name == "*Active") {
+            vp.grid_on = grid_on;
+            vp.snap_on = snap_on;
+            vp.grid_spacing = spacing;
+            vp.snap_spacing = spacing;
         }
     }
 
