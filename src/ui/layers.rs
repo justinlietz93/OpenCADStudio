@@ -22,6 +22,20 @@ pub struct VpCol {
     pub label: String,
 }
 
+/// Sortable column in the Layer Manager table. Clicking a header sorts by
+/// that column; clicking the active header again flips the direction (#133).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum LayerSortCol {
+    Name,
+    On,
+    Freeze,
+    Lock,
+    Color,
+    Linetype,
+    Lineweight,
+    Transparency,
+}
+
 // ── Row-height-derived constants ─────────────────────────────────────────
 /// SVG icon size inside a layer-table cell.
 const ICON_SZ: f32 = ROW_H * 0.62; // ≈16 px at ROW_H=26
@@ -80,6 +94,10 @@ pub struct LayerPanel {
     pub lw_combo: combo_box::State<LwItem>,
     /// Per-viewport columns (only populated when in a paper layout with viewports).
     pub vp_cols: Vec<VpCol>,
+    /// Active sort column, or `None` for document order.
+    pub sort_col: Option<LayerSortCol>,
+    /// Sort direction; `true` = ascending.
+    pub sort_asc: bool,
 }
 
 impl Default for LayerPanel {
@@ -103,6 +121,8 @@ impl Default for LayerPanel {
             }]),
             lw_combo: combo_box::State::new(lw_options()),
             vp_cols: vec![],
+            sort_col: None,
+            sort_asc: true,
         }
     }
 }
@@ -148,6 +168,63 @@ impl LayerPanel {
                 }
             })
             .collect();
+
+        self.apply_sort();
+    }
+
+    /// Set/flip the sort column from a header click, then re-sort.
+    pub fn sort_by(&mut self, col: LayerSortCol) {
+        if self.sort_col == Some(col) {
+            self.sort_asc = !self.sort_asc;
+        } else {
+            self.sort_col = Some(col);
+            self.sort_asc = true;
+        }
+        self.apply_sort();
+    }
+
+    /// Reorder `self.layers` by the active sort column, preserving the current
+    /// selection by name. No-op in document order (`sort_col == None`).
+    fn apply_sort(&mut self) {
+        let Some(col) = self.sort_col else {
+            return;
+        };
+        let asc = self.sort_asc;
+        let sel_name = self
+            .selected
+            .and_then(|i| self.layers.get(i))
+            .map(|l| l.name.clone());
+
+        use std::cmp::Ordering;
+        self.layers.sort_by(|a, b| {
+            let ord = match col {
+                LayerSortCol::Name => a.name.to_lowercase().cmp(&b.name.to_lowercase()),
+                LayerSortCol::On => a.visible.cmp(&b.visible),
+                LayerSortCol::Freeze => a.frozen.cmp(&b.frozen),
+                LayerSortCol::Lock => a.locked.cmp(&b.locked),
+                LayerSortCol::Color => color_sort_key(a.color).cmp(&color_sort_key(b.color)),
+                LayerSortCol::Linetype => {
+                    a.linetype.to_lowercase().cmp(&b.linetype.to_lowercase())
+                }
+                LayerSortCol::Lineweight => a.lineweight.value().cmp(&b.lineweight.value()),
+                LayerSortCol::Transparency => a.transparency.cmp(&b.transparency),
+            };
+            // Stable tie-break by name so equal keys keep a predictable order.
+            let ord = ord.then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+            if asc {
+                ord
+            } else {
+                match ord {
+                    Ordering::Less => Ordering::Greater,
+                    Ordering::Greater => Ordering::Less,
+                    Ordering::Equal => Ordering::Equal,
+                }
+            }
+        });
+
+        if let Some(n) = sel_name {
+            self.selected = self.layers.iter().position(|l| l.name == n);
+        }
     }
 
     pub fn sync_linetypes(&mut self, items: Vec<LinetypeItem>) {
@@ -194,40 +271,24 @@ impl LayerPanel {
         .padding([4, 8]);
 
         // ── Column header ─────────────────────────────────────────────────
+        let sc = self.sort_col;
+        let sa = self.sort_asc;
         let mut header_row = row![
             text("Status").size(10).color(DIM).width(50),
-            text("Name")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_NAME)),
-            text("On")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_ICON)),
-            text("Freeze")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_ICON)),
-            text("Lock")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_ICON)),
-            text("Color")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_COLOR)),
-            text("Linetype")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_LT)),
-            text("Lineweight")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_LW)),
-            text("Transparency")
-                .size(10)
-                .color(DIM)
-                .width(Length::Fixed(COL_TRANS)),
+            sortable_header("Name", LayerSortCol::Name, COL_NAME, sc, sa),
+            sortable_header("On", LayerSortCol::On, COL_ICON, sc, sa),
+            sortable_header("Freeze", LayerSortCol::Freeze, COL_ICON, sc, sa),
+            sortable_header("Lock", LayerSortCol::Lock, COL_ICON, sc, sa),
+            sortable_header("Color", LayerSortCol::Color, COL_COLOR, sc, sa),
+            sortable_header("Linetype", LayerSortCol::Linetype, COL_LT, sc, sa),
+            sortable_header("Lineweight", LayerSortCol::Lineweight, COL_LW, sc, sa),
+            sortable_header(
+                "Transparency",
+                LayerSortCol::Transparency,
+                COL_TRANS,
+                sc,
+                sa
+            ),
         ]
         .spacing(4)
         .align_y(iced::Center);
@@ -295,6 +356,57 @@ impl LayerPanel {
             .height(Fill)
             .into()
     }
+}
+
+// ── Sorting helpers ─────────────────────────────────────────────────────────
+
+/// Packed RGB key for ordering colours deterministically by hue-ish bytes.
+fn color_sort_key(c: Color) -> u32 {
+    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u32;
+    (q(c.r) << 16) | (q(c.g) << 8) | q(c.b)
+}
+
+/// A clickable column header that sorts the table by `col`. Shows an up/down
+/// SVG arrow when it is the active sort column (#133).
+fn sortable_header<'a>(
+    label: &'a str,
+    col: LayerSortCol,
+    width: f32,
+    active: Option<LayerSortCol>,
+    asc: bool,
+) -> Element<'a, Message> {
+    let mut content = row![text(label).size(10).color(DIM)]
+        .spacing(3)
+        .align_y(iced::Center);
+    if active == Some(col) {
+        content = content.push(if asc {
+            crate::ui::icons::arrow_up(8.0, DIM)
+        } else {
+            crate::ui::icons::arrow_down(8.0, DIM)
+        });
+    }
+    button(content)
+        .on_press(Message::LayerSort(col))
+        .style(|_: &Theme, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered | button::Status::Pressed => Color {
+                    r: 0.30,
+                    g: 0.30,
+                    b: 0.30,
+                    a: 1.0,
+                },
+                _ => Color::TRANSPARENT,
+            })),
+            ..Default::default()
+        })
+        .padding(Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: 2.0,
+            right: 2.0,
+        })
+        .width(Length::Fixed(width))
+        .into()
 }
 
 // ── Toolbar buttons ───────────────────────────────────────────────────────

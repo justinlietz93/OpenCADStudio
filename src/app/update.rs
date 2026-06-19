@@ -1894,7 +1894,17 @@ impl OpenCADStudio {
                         name,
                         if on { "on" } else { "off" }
                     ));
+                    self.sync_ribbon_layers();
                 }
+                Task::none()
+            }
+
+            Message::LayerSort(col) => {
+                let i = self.active_tab;
+                self.tabs[i].layers.sort_by(col);
+                // Keep the ribbon dropdown's order (and its toggle indices) in
+                // step with the re-sorted manager table.
+                self.sync_ribbon_layers();
                 Task::none()
             }
 
@@ -1912,6 +1922,7 @@ impl OpenCADStudio {
                         name,
                         if locked { "locked" } else { "unlocked" }
                     ));
+                    self.sync_ribbon_layers();
                 }
                 Task::none()
             }
@@ -1933,6 +1944,7 @@ impl OpenCADStudio {
                     }
                     self.tabs[i].scene.bump_geometry();
                     self.tabs[i].dirty = true;
+                    self.sync_ribbon_layers();
                 }
                 Task::none()
             }

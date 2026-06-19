@@ -677,10 +677,27 @@ impl Ribbon {
     }
 
     fn layer_combo_overlay(&self) -> Option<Element<'_, Message>> {
+        // A toggle icon (visible / freeze / lock) is its own button so a click
+        // on it flips that state instead of bubbling up to the row's
+        // make-active handler (#133).
+        let icon_btn = |bytes: &'static [u8], msg: Message| -> Element<'_, Message> {
+            button(crate::ui::icons::raw(bytes, 14.0))
+                .on_press(msg)
+                .style(|_: &Theme, status| button::Style {
+                    background: Some(Background::Color(match status {
+                        button::Status::Hovered | button::Status::Pressed => ROW_HOVER,
+                        _ => Color::TRANSPARENT,
+                    })),
+                    ..Default::default()
+                })
+                .padding([2, 4])
+                .into()
+        };
         let rows: Vec<Element<Message>> = self
             .layer_infos
             .iter()
-            .map(|info| {
+            .enumerate()
+            .map(|(index, info)| {
                 let is_active = info.name == self.active_layer;
                 let lc = info.color;
                 let lv = info.visible;
@@ -706,9 +723,18 @@ impl Ribbon {
                     .width(12)
                     .height(12);
 
-                let vis = crate::ui::icons::raw(crate::ui::icons::layer_visible(lv), 14.0);
-                let freeze = crate::ui::icons::raw(crate::ui::icons::layer_freeze(lf), 14.0);
-                let lock = crate::ui::icons::raw(crate::ui::icons::layer_lock(ll), 14.0);
+                let vis = icon_btn(
+                    crate::ui::icons::layer_visible(lv),
+                    Message::LayerToggleVisible(index),
+                );
+                let freeze = icon_btn(
+                    crate::ui::icons::layer_freeze(lf),
+                    Message::LayerToggleFreeze(index),
+                );
+                let lock = icon_btn(
+                    crate::ui::icons::layer_lock(ll),
+                    Message::LayerToggleLock(index),
+                );
                 let checkmark: Element<'_, Message> = container(if is_active {
                     crate::ui::icons::tinted(crate::ui::icons::CHECK, 11.0, CHECK_COLOR)
                 } else {
@@ -721,21 +747,26 @@ impl Ribbon {
                         .size(11)
                         .color(if is_active { LABEL_ON } else { LABEL_OFF });
 
-                button(
-                    row![checkmark, vis, freeze, lock, swatch, label]
+                // The swatch + label area selects the layer as active; the
+                // icon buttons above handle their own toggles.
+                let select = button(row![swatch, label].spacing(5).align_y(iced::Center))
+                    .on_press(Message::RibbonLayerChanged(name))
+                    .style(|_: &Theme, status| button::Style {
+                        background: Some(Background::Color(match status {
+                            button::Status::Hovered | button::Status::Pressed => ROW_HOVER,
+                            _ => Color::TRANSPARENT,
+                        })),
+                        ..Default::default()
+                    })
+                    .width(Fill)
+                    .padding([4, 4]);
+
+                container(
+                    row![checkmark, vis, freeze, lock, select]
                         .spacing(5)
                         .align_y(iced::Center),
                 )
-                .on_press(Message::RibbonLayerChanged(name))
-                .style(|_: &Theme, status| button::Style {
-                    background: Some(Background::Color(match status {
-                        button::Status::Hovered | button::Status::Pressed => ROW_HOVER,
-                        _ => Color::TRANSPARENT,
-                    })),
-                    ..Default::default()
-                })
-                .width(Fill)
-                .padding([4, 8])
+                .padding([0, 4])
                 .into()
             })
             .collect();
