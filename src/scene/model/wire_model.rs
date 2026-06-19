@@ -79,6 +79,8 @@ impl WireModel {
     pub const WHITE: [f32; 4] = [1.00, 1.00, 1.00, 1.0];
     pub const CYAN: [f32; 4] = [0.25, 0.85, 1.00, 1.0];
     pub const SELECTED: [f32; 4] = [0.15, 0.55, 1.00, 1.0];
+    /// Rollover (hover) highlight — orange, distinct from the blue selection.
+    pub const HOVER: [f32; 4] = [0.95, 0.55, 0.10, 1.0];
     /// Sentinel AABB that never rejects any snap query.
     pub const UNBOUNDED_AABB: [f32; 4] = [
         f32::NEG_INFINITY,

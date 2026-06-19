@@ -2639,8 +2639,28 @@ impl OpenCADStudio {
                     };
                     let view_proj = self.tabs[i].scene.camera.borrow().view_proj(bounds);
                     let all_wires = self.tabs[i].scene.hit_test_wires();
+                    // Mirror the click-selection pick order so the rollover
+                    // highlights every selectable object: wire → hatch →
+                    // block-internal hatch → shaded 3D solid body.
                     let hovered = scene::pick::hit_test::click_hit(p, &all_wires[..], view_proj, bounds)
-                        .and_then(|s| Scene::handle_from_wire_name(s));
+                        .and_then(|s| Scene::handle_from_wire_name(s))
+                        .or_else(|| {
+                            scene::pick::hit_test::click_hit_hatch(
+                                p,
+                                &self.tabs[i].scene.visible_hatches_for_click(),
+                                view_proj,
+                                bounds,
+                            )
+                        })
+                        .or_else(|| {
+                            scene::pick::hit_test::click_hit_insert_hatch(
+                                p,
+                                &self.tabs[i].scene.insert_hatches_for_click(),
+                                view_proj,
+                                bounds,
+                            )
+                        })
+                        .or_else(|| self.tabs[i].scene.mesh_click_hit(p, view_proj, bounds));
                     self.tabs[i].scene.set_hover_highlight(hovered);
                 } else {
                     // Suppress the rollover during a command or a drag.

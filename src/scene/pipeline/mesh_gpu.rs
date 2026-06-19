@@ -69,14 +69,35 @@ pub struct MeshLodGpu {
     pub world_aabb: [f32; 4],
 }
 
+/// How a solid mesh is highlighted this frame.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub enum Highlight {
+    None,
+    /// Hovered — light orange wash.
+    Hover,
+    /// Selected — stronger blue wash.
+    Selected,
+}
+
+impl Highlight {
+    /// Blend colour and mix factor, or `None` when the mesh keeps its colour.
+    fn tint(self) -> Option<([f32; 4], f32)> {
+        match self {
+            Highlight::None => None,
+            Highlight::Hover => Some(([0.95, 0.55, 0.10, 1.0], 0.35)),
+            Highlight::Selected => Some(([0.15, 0.55, 1.0, 1.0], 0.60)),
+        }
+    }
+}
+
 impl MeshLodGpu {
-    pub fn new(device: &wgpu::Device, set: &MeshLodSet) -> Self {
+    pub fn new(device: &wgpu::Device, set: &MeshLodSet, highlight: Highlight) -> Self {
         Self {
             lods: set
                 .lods
                 .iter()
                 .filter(|m| !m.indices.is_empty())
-                .map(|m| MeshGpu::new(device, m))
+                .map(|m| MeshGpu::new(device, m, highlight))
                 .collect(),
             world_aabb: set.world_aabb,
         }
@@ -84,8 +105,20 @@ impl MeshLodGpu {
 }
 
 impl MeshGpu {
-    pub fn new(device: &wgpu::Device, mesh: &MeshModel) -> Self {
+    pub fn new(device: &wgpu::Device, mesh: &MeshModel, highlight: Highlight) -> Self {
         let has_normals = mesh.normals.len() == mesh.verts.len();
+        // Blend the base colour toward the highlight so a selected / hovered
+        // solid reads clearly while keeping some shape shading.
+        let color = match highlight.tint() {
+            Some((hl, t)) => {
+                let mut c = [0.0f32; 4];
+                for k in 0..4 {
+                    c[k] = mesh.color[k] * (1.0 - t) + hl[k] * t;
+                }
+                c
+            }
+            None => mesh.color,
+        };
         let vertices: Vec<MeshVertex> = mesh
             .verts
             .iter()
@@ -99,7 +132,7 @@ impl MeshGpu {
                 MeshVertex {
                     position: pos,
                     normal,
-                    color: mesh.color,
+                    color,
                 }
             })
             .collect();

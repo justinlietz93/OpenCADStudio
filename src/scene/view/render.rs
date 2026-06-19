@@ -85,10 +85,10 @@ pub struct ViewportData {
     /// world-space wire buffer when only the camera moved. Non-tile and
     /// preview/interim frames carry a fresh id each time → always re-upload.
     pub(in crate::scene) wire_content_id: u64,
-    /// `selected ∪ hover` handles for the GPU xray overlay. The highlight is no
-    /// longer baked into the wire tessellation, so `prepare` rebuilds the
-    /// selected-wire batch by filtering `wires` against this set.
-    pub(in crate::scene) highlight_handles: Arc<rustc_hash::FxHashSet<acadrust::Handle>>,
+    /// Selected handles only (no hover) — solid meshes tint these blue.
+    pub(in crate::scene) selected_handles: Arc<rustc_hash::FxHashSet<acadrust::Handle>>,
+    /// Currently hovered handle — solid meshes tint it orange.
+    pub(in crate::scene) hover_handle: Option<acadrust::Handle>,
     /// Bumped on selection / hover change. Paired with `wire_content_id` to
     /// decide when the xray overlay batch needs rebuilding.
     pub(in crate::scene) selection_generation: u64,
@@ -252,7 +252,6 @@ impl shader::Primitive for Primitive {
                 }
                 if geo_changed {
                     inner.upload_images(device, queue, &vp.images[..]);
-                    inner.upload_meshes(device, &vp.meshes[..]);
                 }
                 inner.upload_face3d(
                     device,
@@ -283,10 +282,24 @@ impl shader::Primitive for Primitive {
                 inner.upload_selected_wires(
                     device,
                     &vp.wires[..],
-                    &vp.highlight_handles,
+                    &vp.selected_handles,
+                    vp.hover_handle,
                     &vp.draw_depths,
                 );
                 inner.cached_selection = sel_key;
+            }
+            // Solid meshes carry their selection/hover tint baked into the
+            // vertex colours, so re-upload them when the geometry OR the
+            // highlight set changes.
+            let mesh_key = (vp.geometry_epoch, vp.selection_generation);
+            if mesh_key != inner.cached_mesh_key {
+                inner.upload_meshes(
+                    device,
+                    &vp.meshes[..],
+                    &vp.selected_handles,
+                    vp.hover_handle,
+                );
+                inner.cached_mesh_key = mesh_key;
             }
             // Live overlay (command preview / interim / grip drag) — small and
             // refreshed every frame it's present, so a drag never re-uploads
@@ -793,7 +806,8 @@ impl Scene {
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,
             wire_content_id,
-            highlight_handles: self.highlight_handles(),
+            selected_handles: Arc::new(self.selected.iter().copied().collect()),
+            hover_handle: self.hover_highlight,
             selection_generation: self.selection_generation,
             selected_sig: self.selected_set_sig(),
             screen_rect,

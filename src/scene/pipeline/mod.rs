@@ -135,6 +135,10 @@ pub struct Pipeline {
     /// a pick bumps only `selection_generation`, refreshing the overlay without
     /// touching the main wire buffers.
     pub cached_selection: (u64, u64),
+    /// `(geometry_epoch, selection_generation)` the resident mesh buffers were
+    /// uploaded for. Bumps on a selection/hover change so highlighted solids
+    /// re-upload with their tint.
+    pub cached_mesh_key: (u64, u64),
     /// Handle → indices into the resident wire set, built once per wire upload
     /// (when `cached_wire_id` changes). Lets the selection/hover xray overlay
     /// gather just the highlighted entity's wires (`O(highlighted)`) instead of
@@ -923,6 +927,7 @@ impl Pipeline {
             cached_epoch: (u64::MAX, u64::MAX, u64::MAX),
             cached_wire_id: u64::MAX,
             cached_selection: (u64::MAX, u64::MAX),
+            cached_mesh_key: (u64::MAX, u64::MAX),
             wire_handle_index: rustc_hash::FxHashMap::default(),
         }
     }
@@ -983,37 +988,39 @@ impl Pipeline {
         &mut self,
         device: &wgpu::Device,
         wires: &[WireModel],
-        highlight: &rustc_hash::FxHashSet<acadrust::Handle>,
+        selected: &rustc_hash::FxHashSet<acadrust::Handle>,
+        hover: Option<acadrust::Handle>,
         depth_map: &rustc_hash::FxHashMap<u64, f32>,
     ) {
-        if highlight.is_empty() {
+        let hover = hover.filter(|h| !selected.contains(h));
+        if selected.is_empty() && hover.is_none() {
             self.gpu_selected_wires = vec![];
             return;
         }
-        // Gather only the highlighted entities' wires via the prebuilt index —
-        // O(highlighted), no per-wire string parse / full-set scan. Indices are
-        // collected then sorted so the xray run keeps the original draw order.
-        let mut slots: Vec<u32> = Vec::new();
-        for h in highlight {
-            if let Some(idxs) = self.wire_handle_index.get(&h.value()) {
-                slots.extend_from_slice(idxs);
+        // Gather the highlighted entities' wires via the prebuilt index —
+        // O(highlighted), no per-wire string parse. Selection recolours blue,
+        // hover orange. Drawn on top (depth-compare Always) over the base pass.
+        let mut out: Vec<WireModel> = Vec::new();
+        let mut push = |handle_val: u64, color: [f32; 4], wires: &[WireModel], out: &mut Vec<WireModel>| {
+            if let Some(idxs) = self.wire_handle_index.get(&handle_val) {
+                let mut slots = idxs.clone();
+                slots.sort_unstable();
+                for &i in &slots {
+                    if let Some(w) = wires.get(i as usize) {
+                        let mut c = w.clone();
+                        c.color = color;
+                        out.push(c);
+                    }
+                }
             }
+        };
+        for h in selected {
+            push(h.value(), WireModel::SELECTED, wires, &mut out);
         }
-        slots.sort_unstable();
-        // Recolor to the selection highlight: the xray pass uses the normal
-        // wire shader (no forced colour), so the highlight now lives here
-        // instead of being baked into the tessellation. Drawn on top with
-        // depth-compare Always, so it overrides the base-coloured main pass.
-        let selected: Vec<WireModel> = slots
-            .iter()
-            .filter_map(|&i| wires.get(i as usize))
-            .map(|w| {
-                let mut c = w.clone();
-                c.color = WireModel::SELECTED;
-                c
-            })
-            .collect();
-        self.gpu_selected_wires = WireGpu::from_run(device, &selected, depth_map, None, false);
+        if let Some(h) = hover {
+            push(h.value(), WireModel::HOVER, wires, &mut out);
+        }
+        self.gpu_selected_wires = WireGpu::from_run(device, &out, depth_map, None, false);
     }
 
     /// Upload the live overlay (command preview / interim / grip-drag) wires.
@@ -1136,11 +1143,31 @@ impl Pipeline {
         }
     }
 
-    pub fn upload_meshes(&mut self, device: &wgpu::Device, meshes: &[MeshLodSet]) {
+    pub fn upload_meshes(
+        &mut self,
+        device: &wgpu::Device,
+        meshes: &[MeshLodSet],
+        selected: &rustc_hash::FxHashSet<acadrust::Handle>,
+        hover: Option<acadrust::Handle>,
+    ) {
         self.gpu_meshes = meshes
             .iter()
             .filter(|s| s.lods.iter().any(|m| !m.indices.is_empty()))
-            .map(|s| MeshLodGpu::new(device, s))
+            .map(|s| {
+                // A mesh's name is its source entity handle (decimal). Selection
+                // wins over hover when both apply to the same solid.
+                let h = s
+                    .lods
+                    .first()
+                    .and_then(|m| m.name.parse::<u64>().ok())
+                    .map(acadrust::Handle::new);
+                let mode = match h {
+                    Some(h) if selected.contains(&h) => mesh_gpu::Highlight::Selected,
+                    Some(h) if Some(h) == hover => mesh_gpu::Highlight::Hover,
+                    _ => mesh_gpu::Highlight::None,
+                };
+                MeshLodGpu::new(device, s, mode)
+            })
             .collect();
     }
 

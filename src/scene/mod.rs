@@ -849,7 +849,6 @@ pub struct Scene {
     /// Cached `selected ∪ hover` handle set for the GPU xray overlay, keyed by
     /// `selection_generation`. Rebuilt only when the selection changes so
     /// `build_primitive` doesn't clone the set every frame.
-    highlight_set_cache: RefCell<Option<(u64, Arc<HashSet<Handle>>)>>,
     /// Per-entity tessellation memo for the culled Model render path (Phase
     /// 2.2). Maps a top-level handle to its already-tessellated wires so a
     /// single-entity edit re-tessellates only the changed entity and reuses the
@@ -928,7 +927,6 @@ impl Scene {
             last_model_wire_gen: std::cell::Cell::new(0),
             wire_force_nonce: std::cell::Cell::new(0),
             split_cache: RefCell::new(None),
-            highlight_set_cache: RefCell::new(None),
             tess_memo: RefCell::new(HashMap::default()),
             tess_memo_guard: std::cell::Cell::new(0),
         }
@@ -1072,26 +1070,6 @@ impl Scene {
         self.selection_generation = self.selection_generation.wrapping_add(1);
     }
 
-    /// `selected ∪ hover` handles, cached per `selection_generation`. Drives the
-    /// GPU xray overlay that highlights the current selection without baking it
-    /// into the wire tessellation.
-    pub(super) fn highlight_handles(&self) -> Arc<HashSet<Handle>> {
-        {
-            let c = self.highlight_set_cache.borrow();
-            if let Some((gen, arc)) = &*c {
-                if *gen == self.selection_generation {
-                    return Arc::clone(arc);
-                }
-            }
-        }
-        let mut hl = self.selected.clone();
-        if let Some(h) = self.hover_highlight {
-            hl.insert(h);
-        }
-        let arc = Arc::new(hl);
-        *self.highlight_set_cache.borrow_mut() = Some((self.selection_generation, Arc::clone(&arc)));
-        arc
-    }
 
     /// Re-evaluate every cached mesh's color through `render_style` so a
     /// Register a Model-tab solid: cache its truck B-rep (for boolean ops) and
