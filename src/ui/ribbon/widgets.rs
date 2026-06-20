@@ -5,6 +5,8 @@ use rustc_hash::FxHashMap as HashMap;
 use std::time::Duration;
 
 use acadrust::types::{Color as AcadColor, LineWeight};
+// Ribbon tooltips anchor to the right of their button so the cursor — which
+// rests on the button itself — never covers the tip text. (#143)
 use iced::widget::tooltip::Position as TipPos;
 use iced::widget::{button, column, container, row, scrollable, svg, text, tooltip};
 use iced::{Background, Border, Color, Element, Fill, Length, Padding, Theme};
@@ -305,7 +307,7 @@ pub(super) fn render_small<'a>(
                 .width(Length::Fixed(SMALL_W))
                 .height(ROW_H)
                 .padding([4, 4]);
-            tooltip(btn, make_tip(tip_text), TipPos::Bottom)
+            tooltip(btn, make_tip(tip_text), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style)
@@ -385,11 +387,11 @@ pub(super) fn render_small<'a>(
             .height(ROW_H)
             .padding(0);
 
-            let icon_with_tip = tooltip(icon_btn, make_tip(tip_text), TipPos::Bottom)
+            let icon_with_tip = tooltip(icon_btn, make_tip(tip_text), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
-            let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Bottom)
+            let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
@@ -445,7 +447,7 @@ pub(super) fn render_large<'a>(
                 bottom: 4.0,
                 left: 4.0,
             });
-            tooltip(btn, make_tip(tip_text), TipPos::Bottom)
+            tooltip(btn, make_tip(tip_text), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style)
@@ -537,11 +539,11 @@ pub(super) fn render_large<'a>(
             .height(LARGE_ARR)
             .padding(0);
 
-            let top_with_tip = tooltip(top_btn, make_tip(tip_text), TipPos::Bottom)
+            let top_with_tip = tooltip(top_btn, make_tip(tip_text), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
-            let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Bottom)
+            let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
@@ -669,7 +671,7 @@ pub(super) fn render_large<'a>(
                                 .style(move |_: &Theme, status| tool_btn_style(is_active, status))
                                 .padding([2, 5]),
                             make_tip(tip.to_string()),
-                            TipPos::Bottom,
+                            TipPos::Right,
                         )
                         .gap(4.0)
                         .delay(Duration::from_millis(400))
@@ -726,7 +728,7 @@ pub(super) fn render_large<'a>(
                 bottom: 4.0,
                 left: 4.0,
             });
-            let mp_el = tooltip(mp_btn, make_tip(mp_tip), TipPos::Bottom)
+            let mp_el = tooltip(mp_btn, make_tip(mp_tip), TipPos::Right)
                 .gap(6.0)
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
@@ -1083,7 +1085,7 @@ pub(super) fn render_large<'a>(
                                 .style(move |_: &Theme, status| tool_btn_style(is_active, status))
                                 .padding([2, 5]),
                             make_tip(tip.to_string()),
-                            TipPos::Bottom,
+                            TipPos::Right,
                         )
                         .gap(4.0)
                         .delay(Duration::from_millis(400))
@@ -1292,7 +1294,7 @@ pub(super) fn render_history_control<'a>(
         tooltip(
             btn,
             make_tip(format!("{label}\n{count} steps available")),
-            TipPos::Bottom,
+            TipPos::Right,
         )
         .gap(6.0)
         .delay(Duration::from_millis(400))
@@ -1322,7 +1324,7 @@ pub(super) fn render_history_control<'a>(
         tooltip(
             btn,
             make_tip(format!("Choose {label} history")),
-            TipPos::Bottom,
+            TipPos::Right,
         )
         .gap(6.0)
         .delay(Duration::from_millis(400))
