@@ -623,6 +623,9 @@ impl OpenCADStudio {
                     // render instead of staying invisible. (#135)
                     self.tabs[i].scene.populate_meshes_from_document();
                     self.tabs[i].dirty = true;
+                    // Surface any layers the paste brought in (cross-drawing)
+                    // in the layer manager and the layer dropdown.
+                    self.refresh_layer_panel();
                     self.refresh_properties();
                     self.command_line
                         .push_info(&format!("{count} object(s) pasted."));

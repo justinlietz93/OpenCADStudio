@@ -684,7 +684,12 @@ impl ClipboardDeps {
                 || n.eq_ignore_ascii_case("ByLayer")
                 || n.eq_ignore_ascii_case("ByBlock")
         };
-        for e in entities {
+        // Scan the copied entities AND the entities inside every captured
+        // block definition, so a block-internal object's layer / linetype /
+        // style is recreated too — not just the top-level selection's.
+        let blocks = Self::capture_blocks(doc, entities);
+        let block_entities = blocks.iter().flat_map(|d| d.entities.iter());
+        for e in entities.iter().chain(block_entities) {
             let c = e.common();
             if !c.layer.is_empty() {
                 layers.insert(c.layer.clone());
@@ -719,7 +724,7 @@ impl ClipboardDeps {
             linetypes: ltypes.iter().filter_map(|n| doc.line_types.get(n).cloned()).collect(),
             text_styles: tstyles.iter().filter_map(|n| doc.text_styles.get(n).cloned()).collect(),
             dim_styles: dstyles.iter().filter_map(|n| doc.dim_styles.get(n).cloned()).collect(),
-            blocks: Self::capture_blocks(doc, entities),
+            blocks,
         }
     }
 
