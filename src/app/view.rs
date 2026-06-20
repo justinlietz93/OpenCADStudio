@@ -1623,6 +1623,14 @@ impl OpenCADStudio {
         } else {
             Subscription::none()
         };
+        // While a rollover pick is queued, drive ticks so it fires the
+        // moment the cursor has been still for the dwell window — without
+        // this `ViewportMove` alone never re-fires once the user stops.
+        let hover_dwell = if self.hover_dwell.is_some() {
+            window::frames().map(|_| Message::HoverDwellTick)
+        } else {
+            Subscription::none()
+        };
         // Blink the MText preview caret while the editor is open.
         let caret_blink = if self.mtext_editor.is_some() {
             iced::time::every(std::time::Duration::from_millis(530))
@@ -1642,6 +1650,7 @@ impl OpenCADStudio {
             frames,
             history_tick,
             grip_dwell,
+            hover_dwell,
             caret_blink,
             web_fonts,
             event::listen_with(|ev, status, win_id| {

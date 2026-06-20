@@ -2709,45 +2709,25 @@ impl OpenCADStudio {
                     self.tabs[i].last_cursor_world = world;
                 }
 
-                // Rollover highlight: when idle (no active command, no drag),
-                // highlight the entity under the cursor. Decoupling selection
-                // from tessellation makes this cheap — it only refreshes the GPU
-                // xray overlay via `bump_selection`, never re-tessellates.
+                // Rollover highlight: when idle (no active command, no
+                // drag), defer the pick until the cursor stops. The full
+                // pick (wires + hatches + block hatches + shaded meshes) is
+                // O(N) per frame and stalls the cursor on large drawings,
+                // so each move clears the current highlight and resets the
+                // dwell timer — `HoverDwellTick` runs the hit-test only
+                // once the cursor has been still for `HOVER_DWELL_MS`.
                 if !dragging && self.tabs[i].active_cmd.is_none() {
-                    let bounds = iced::Rectangle {
-                        x: 0.0,
-                        y: 0.0,
-                        width: vp_size.0,
-                        height: vp_size.1,
-                    };
-                    let view_proj = self.tabs[i].scene.camera.borrow().view_proj(bounds);
-                    let all_wires = self.tabs[i].scene.hit_test_wires();
-                    // Mirror the click-selection pick order so the rollover
-                    // highlights every selectable object: wire → hatch →
-                    // block-internal hatch → shaded 3D solid body.
-                    let hovered = scene::pick::hit_test::click_hit(p, &all_wires[..], view_proj, bounds)
-                        .and_then(|s| Scene::handle_from_wire_name(s))
-                        .or_else(|| {
-                            scene::pick::hit_test::click_hit_hatch(
-                                p,
-                                &self.tabs[i].scene.visible_hatches_for_click(),
-                                view_proj,
-                                bounds,
-                            )
-                        })
-                        .or_else(|| {
-                            scene::pick::hit_test::click_hit_insert_hatch(
-                                p,
-                                &self.tabs[i].scene.insert_hatches_for_click(),
-                                view_proj,
-                                bounds,
-                            )
-                        })
-                        .or_else(|| self.tabs[i].scene.mesh_click_hit(p, view_proj, bounds));
-                    self.tabs[i].scene.set_hover_highlight(hovered);
+                    self.tabs[i].scene.set_hover_highlight(None);
+                    self.hover_dwell = Some(super::HoverDwell {
+                        last_move_at: Instant::now(),
+                        point: p,
+                        tile_size: vp_size,
+                        tab: i,
+                    });
                 } else {
                     // Suppress the rollover during a command or a drag.
                     self.tabs[i].scene.set_hover_highlight(None);
+                    self.hover_dwell = None;
                 }
 
                 if self.tabs[i].active_cmd.is_some() {
@@ -4327,6 +4307,60 @@ impl OpenCADStudio {
                     .last_move_pos
                     .unwrap_or(self.cursor_pos);
                 self.update_grip_hover(i, p);
+                Task::none()
+            }
+
+            Message::HoverDwellTick => {
+                let Some(dwell) = self.hover_dwell.clone() else {
+                    return Task::none();
+                };
+                if Instant::now()
+                    .duration_since(dwell.last_move_at)
+                    .as_millis()
+                    < super::HOVER_DWELL_MS
+                {
+                    return Task::none();
+                }
+                let i = dwell.tab;
+                // Re-check the gate — drag / command may have started
+                // between the move that armed the dwell and this tick.
+                if i >= self.tabs.len() || self.tabs[i].active_cmd.is_some() {
+                    self.hover_dwell = None;
+                    return Task::none();
+                }
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: dwell.tile_size.0,
+                    height: dwell.tile_size.1,
+                };
+                let p = dwell.point;
+                let view_proj = self.tabs[i].scene.camera.borrow().view_proj(bounds);
+                let all_wires = self.tabs[i].scene.hit_test_wires();
+                // Mirror the click-selection pick order so the rollover
+                // highlights every selectable object: wire → hatch →
+                // block-internal hatch → shaded 3D solid body.
+                let hovered = scene::pick::hit_test::click_hit(p, &all_wires[..], view_proj, bounds)
+                    .and_then(|s| Scene::handle_from_wire_name(s))
+                    .or_else(|| {
+                        scene::pick::hit_test::click_hit_hatch(
+                            p,
+                            &self.tabs[i].scene.visible_hatches_for_click(),
+                            view_proj,
+                            bounds,
+                        )
+                    })
+                    .or_else(|| {
+                        scene::pick::hit_test::click_hit_insert_hatch(
+                            p,
+                            &self.tabs[i].scene.insert_hatches_for_click(),
+                            view_proj,
+                            bounds,
+                        )
+                    })
+                    .or_else(|| self.tabs[i].scene.mesh_click_hit(p, view_proj, bounds));
+                self.tabs[i].scene.set_hover_highlight(hovered);
+                self.hover_dwell = None;
                 Task::none()
             }
 

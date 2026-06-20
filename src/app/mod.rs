@@ -48,6 +48,23 @@ pub struct GripHover {
     pub started: iced::time::Instant,
 }
 
+/// Cursor dwell awaiting a rollover hit-test. Refreshed on every idle
+/// move; `HoverDwellTick` runs the pick once `last_move_at.elapsed()`
+/// crosses `HOVER_DWELL_MS`. `point` and `tile_size` are tile-local so
+/// the deferred pick uses the same projection the move handler would
+/// have — picking with the full canvas bounds in a tiled layout matches
+/// the wrong entity under the cursor.
+#[derive(Clone, Debug)]
+pub struct HoverDwell {
+    pub last_move_at: iced::time::Instant,
+    pub point: iced::Point,
+    pub tile_size: (f32, f32),
+    pub tab: usize,
+}
+
+/// How long the cursor must sit still before the idle rollover pick runs.
+pub const HOVER_DWELL_MS: u128 = 120;
+
 /// Open multi-functional-grip popup state.
 #[derive(Clone, Debug)]
 pub struct GripPopup {
@@ -259,6 +276,12 @@ pub(super) struct OpenCADStudio {
     /// updates only the overlay rather than re-tessellating the whole model.
     /// Committed (un-hidden + one re-tess) when the drag ends. `None` = idle.
     grip_preview_handle: Option<acadrust::Handle>,
+    /// Pending rollover hit-test. Each idle cursor move stashes
+    /// `(last_move_at, point, tab)` here and clears the live highlight;
+    /// `HoverDwellTick` runs the pick once the cursor has been still for
+    /// `HOVER_DWELL_MS`. Skipping the pick mid-stroke avoids the per-frame
+    /// O(N) wire+hatch+mesh sweep that froze the cursor on large drawings.
+    hover_dwell: Option<HoverDwell>,
     /// Snapshot of the edited entity taken at the start of a grip drag, used to
     /// restore it if the user presses Esc to cancel the drag. The drag mutates
     /// the document live (so grips / properties track), so cancel reverts from
@@ -943,6 +966,9 @@ pub enum Message {
     /// Timer pulse while the cursor is dwelling on a grip; drives the
     /// dwell-to-popup transition without requiring further mouse motion.
     GripDwellTick,
+    /// Timer pulse while a rollover hit-test is queued; fires when the
+    /// cursor has been still long enough to safely run the pick.
+    HoverDwellTick,
     WindowResized(f32, f32),
     /// Enter pressed globally — finalises the active command (no text-input involvement).
     CommandFinalize,
@@ -1584,6 +1610,7 @@ impl OpenCADStudio {
             visibility_popup: None,
             grip_add_provisional: None,
             grip_preview_handle: None,
+            hover_dwell: None,
             grip_original: None,
             qselect: None,
             show_ucs_icon: true,
