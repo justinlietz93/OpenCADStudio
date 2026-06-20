@@ -958,7 +958,7 @@ impl OpenCADStudio {
                         self.tabs[i].scene.clear_preview_wire();
                         self.restore_pre_cmd_tangent();
                         self.command_line.push_error(
-                            "JOIN: objects are not collinear/co-circular or have gaps.",
+                            "JOIN: objects don't form a single connected chain, or contain an unsupported type / tilted arc.",
                         );
                     }
                 }

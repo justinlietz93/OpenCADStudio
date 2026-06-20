@@ -1,15 +1,17 @@
-// JOIN command — merge collinear Lines or co-circular Arcs into one entity.
+// JOIN command — stitch Lines and Arcs that touch end-to-end into one
+// entity. Segments join wherever their endpoints meet; the angle between
+// them is irrelevant (a broken polyline rejoins fine).
 //
-// Supports:
-//   Line + Line  → merged Line (if collinear and end-to-end)
-//   Arc  + Arc   → merged Arc  (if same center/radius and contiguous)
-//   Arc  + Arc   → Circle      (if the merged arc spans 360°)
+// Result:
+//   collinear straight run → single Line
+//   planar chain           → LwPolyline (arcs carried as bulges)
+//   chain with varying Z   → Polyline3D (straight segments only)
 //
 // Workflow: select objects then press Enter to join.
 
-use acadrust::types::Vector3;
+use acadrust::types::{Vector2, Vector3};
 use acadrust::{EntityType, Handle};
-use glam::Vec3;
+use glam::{DVec3, Vec3};
 
 use crate::command::{CadCommand, CmdResult};
 
@@ -65,177 +67,199 @@ impl CadCommand for JoinCommand {
 
 // ── Geometry ───────────────────────────────────────────────────────────────
 
-/// Try to join all `entities` in the slice into a minimal set.
-/// Returns `(kept, removed)` handle lists and the merged entity vec.
+/// Endpoint-match tolerance (model units). Segments split from a shared
+/// vertex meet exactly, so this only absorbs float noise.
+const JOIN_EPS: f64 = 1e-6;
+
+/// One directed segment of the join chain. `bulge` is the LwPolyline bulge
+/// for the arc from `a` to `b` (0 for a straight line); it is only
+/// meaningful when the whole chain turns out planar in XY.
+#[derive(Clone)]
+struct Seg {
+    a: DVec3,
+    b: DVec3,
+    bulge: f64,
+}
+
+impl Seg {
+    fn flip(&mut self) {
+        std::mem::swap(&mut self.a, &mut self.b);
+        self.bulge = -self.bulge;
+    }
+}
+
+fn v3(p: DVec3) -> Vector3 {
+    Vector3::new(p.x, p.y, p.z)
+}
+
+/// Build the chain segment for one entity, or `None` for an entity type
+/// JOIN can't carry (which aborts the whole join).
+fn seg_of(e: &EntityType) -> Option<Seg> {
+    match e {
+        EntityType::Line(l) => Some(Seg {
+            a: DVec3::new(l.start.x, l.start.y, l.start.z),
+            b: DVec3::new(l.end.x, l.end.y, l.end.z),
+            bulge: 0.0,
+        }),
+        EntityType::Arc(arc) => {
+            // The bulge below assumes the arc lies in a +Z plane; a tilted
+            // or flipped normal would invert the CCW sweep, so reject it.
+            if arc.normal.x.abs() > 1e-6 || arc.normal.y.abs() > 1e-6 || arc.normal.z <= 0.0 {
+                return None;
+            }
+            let (cx, cy, cz) = (arc.center.x, arc.center.y, arc.center.z);
+            let r = arc.radius;
+            let (sa, ea) = (arc.start_angle, arc.end_angle);
+            let swept = (ea - sa).rem_euclid(std::f64::consts::TAU);
+            Some(Seg {
+                a: DVec3::new(cx + r * sa.cos(), cy + r * sa.sin(), cz),
+                b: DVec3::new(cx + r * ea.cos(), cy + r * ea.sin(), cz),
+                bulge: (swept / 4.0).tan(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Join all `entities` end-to-end into a single entity. Segments join
+/// wherever their endpoints touch — the angle between them is irrelevant.
+/// A collinear straight run collapses to one `Line`; a planar chain
+/// becomes an `LwPolyline` (arcs kept as bulges); a chain with varying Z
+/// becomes a `Polyline3D` (straight segments only). Returns
+/// `(removed_handles, new_entities)`, or `None` when the selection isn't a
+/// single connected chain or holds an unsupported entity.
 pub fn join_entities(entities: &[(Handle, &EntityType)]) -> Option<(Vec<Handle>, Vec<EntityType>)> {
     if entities.len() < 2 {
         return None;
     }
 
-    // Split into lines and arcs
-    let lines: Vec<_> = entities
-        .iter()
-        .filter(|(_, e)| matches!(e, EntityType::Line(_)))
-        .collect();
-    let arcs: Vec<_> = entities
-        .iter()
-        .filter(|(_, e)| matches!(e, EntityType::Arc(_)))
-        .collect();
-
-    if !lines.is_empty() && arcs.is_empty() {
-        return try_join_lines(&lines);
+    let mut segs = Vec::with_capacity(entities.len());
+    for (_, e) in entities {
+        segs.push(seg_of(e)?);
     }
-    if !arcs.is_empty() && lines.is_empty() {
-        return try_join_arcs(&arcs);
+    let handles: Vec<Handle> = entities.iter().map(|(h, _)| *h).collect();
+    let common = entities[0].1.common().clone();
+
+    let (chain, closed) = stitch(segs)?;
+
+    // Ordered vertices, each tagged with the bulge of the segment that
+    // starts there. A closed chain reuses the first vertex as the wrap
+    // point, so it gets exactly one vertex per segment.
+    let mut verts: Vec<(DVec3, f64)> = chain.iter().map(|s| (s.a, s.bulge)).collect();
+    if !closed {
+        verts.push((chain.last().unwrap().b, 0.0));
     }
-    None
-}
 
-fn try_join_lines(lines: &[&(Handle, &EntityType)]) -> Option<(Vec<Handle>, Vec<EntityType>)> {
-    // Collect endpoints in the world XY plane
-    let segs: Vec<_> = lines
-        .iter()
-        .map(|(h, e)| {
-            if let EntityType::Line(l) = e {
-                let s = Vec3::new(l.start.x as f32, l.start.y as f32, 0.0);
-                let e2 = Vec3::new(l.end.x as f32, l.end.y as f32, 0.0);
-                (*h, l, s, e2)
-            } else {
-                unreachable!()
-            }
-        })
-        .collect();
+    let has_arc = chain.iter().any(|s| s.bulge.abs() > 1e-12);
+    let z0 = verts[0].0.z;
+    let planar = verts.iter().all(|(p, _)| (p.z - z0).abs() <= JOIN_EPS);
 
-    // Check collinearity: all lines must be parallel and on the same infinite line.
-    let (_, first_line, s0, e0) = segs[0];
-    let dir0 = (e0 - s0).normalize_or_zero();
-    if dir0.length_squared() < 1e-12 {
+    // An open run of collinear straight segments collapses back to one Line.
+    if !closed && !has_arc && is_collinear(&verts) {
+        let mut line = acadrust::entities::Line::new();
+        line.common = common;
+        line.common.handle = Handle::NULL;
+        line.start = v3(verts.first().unwrap().0);
+        line.end = v3(verts.last().unwrap().0);
+        return Some((handles, vec![EntityType::Line(line)]));
+    }
+
+    if planar {
+        let lw_verts: Vec<acadrust::entities::LwVertex> = verts
+            .iter()
+            .map(|(p, bulge)| {
+                let mut v = acadrust::entities::LwVertex::new(Vector2::new(p.x, p.y));
+                v.bulge = *bulge;
+                v
+            })
+            .collect();
+        let mut pl = acadrust::entities::LwPolyline::new();
+        pl.common = common;
+        pl.common.handle = Handle::NULL;
+        pl.vertices = lw_verts;
+        pl.is_closed = closed;
+        pl.elevation = z0;
+        return Some((handles, vec![EntityType::LwPolyline(pl)]));
+    }
+
+    // Non-planar: a 3D polyline carries no bulge, so a curved segment can't
+    // be represented — refuse rather than silently flatten it.
+    if has_arc {
         return None;
     }
-
-    for (_, _, si, ei) in &segs[1..] {
-        // Check parallel
-        let diri = (*ei - *si).normalize_or_zero();
-        let cross = (dir0.x * diri.y - dir0.y * diri.x).abs();
-        if cross > 1e-4 {
-            return None;
-        }
-        // Check co-linear (point on same line)
-        let off = *si - s0;
-        let perp = (off - dir0 * off.dot(dir0)).length();
-        if perp > 1e-3 {
-            return None;
-        }
-    }
-
-    // Project all endpoints onto the direction axis
-    let params: Vec<f32> = segs
+    let mut pl = acadrust::entities::Polyline3D::new();
+    pl.common = common;
+    pl.common.handle = Handle::NULL;
+    pl.vertices = verts
         .iter()
-        .flat_map(|(_, _, si, ei)| [si.dot(dir0), ei.dot(dir0)])
+        .map(|(p, _)| acadrust::entities::Vertex3DPolyline::new(v3(*p)))
         .collect();
-    let t_min = params.iter().cloned().fold(f32::INFINITY, f32::min);
-    let t_max = params.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
-
-    // Check connectivity: no gaps larger than tolerance
-    let mut sorted: Vec<[f32; 2]> = segs
-        .iter()
-        .map(|(_, _, si, ei)| {
-            let ta = si.dot(dir0);
-            let tb = ei.dot(dir0);
-            [ta.min(tb), ta.max(tb)]
-        })
-        .collect();
-    sorted.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-    for w in sorted.windows(2) {
-        if w[1][0] > w[0][1] + 1e-3 {
-            return None;
-        } // gap
+    if closed {
+        pl.close();
     }
-
-    let new_start = s0 + dir0 * t_min;
-    let new_end = s0 + dir0 * t_max;
-
-    let mut merged = first_line.clone();
-    merged.common.handle = Handle::NULL;
-    merged.start = vec3_xz_to_v3(new_start, first_line.start.z);
-    merged.end = vec3_xz_to_v3(new_end, first_line.start.z);
-
-    let handles: Vec<Handle> = lines.iter().map(|(h, _)| *h).collect();
-    Some((handles, vec![EntityType::Line(merged)]))
+    Some((handles, vec![EntityType::Polyline3D(pl)]))
 }
 
-fn try_join_arcs(arcs: &[&(Handle, &EntityType)]) -> Option<(Vec<Handle>, Vec<EntityType>)> {
-    let segs: Vec<_> = arcs
-        .iter()
-        .map(|(h, e)| {
-            if let EntityType::Arc(a) = e {
-                (*h, a)
-            } else {
-                unreachable!()
-            }
-        })
-        .collect();
+/// Stitch directed segments into a single chain by matching endpoints,
+/// flipping each segment so the chain runs head-to-tail. Returns the
+/// ordered chain and whether it closes on itself, or `None` when the
+/// segments don't form one connected path (a gap or a branch).
+fn stitch(mut segs: Vec<Seg>) -> Option<(Vec<Seg>, bool)> {
+    let mut chain = vec![segs.remove(0)];
 
-    // All arcs must share the same center and radius
-    let (_, first) = segs[0];
-    let cx = first.center.x;
-    let cy = first.center.y;
-    let r = first.radius;
-
-    for (_, a) in &segs[1..] {
-        if (a.center.x - cx).abs() > 1e-3 || (a.center.y - cy).abs() > 1e-3 {
-            return None;
+    // Grow off the tail.
+    loop {
+        let end = chain.last().unwrap().b;
+        let Some(idx) = segs
+            .iter()
+            .position(|s| s.a.distance(end) <= JOIN_EPS || s.b.distance(end) <= JOIN_EPS)
+        else {
+            break;
+        };
+        let mut s = segs.remove(idx);
+        if s.a.distance(end) > JOIN_EPS {
+            s.flip();
         }
-        if (a.radius - r).abs() > 1e-3 {
-            return None;
+        chain.push(s);
+    }
+
+    // Grow off the head.
+    loop {
+        let start = chain.first().unwrap().a;
+        let Some(idx) = segs
+            .iter()
+            .position(|s| s.a.distance(start) <= JOIN_EPS || s.b.distance(start) <= JOIN_EPS)
+        else {
+            break;
+        };
+        let mut s = segs.remove(idx);
+        if s.b.distance(start) > JOIN_EPS {
+            s.flip();
         }
+        chain.insert(0, s);
     }
 
-    // Collect (start_angle, end_angle) in radians.
-    let mut intervals: Vec<[f32; 2]> = segs
-        .iter()
-        .map(|(_, a)| [a.start_angle as f32, a.end_angle as f32])
-        .collect();
-
-    // Sort by start angle
-    intervals.sort_by(|a, b| a[0].partial_cmp(&b[0]).unwrap());
-
-    // Try to merge into one contiguous arc
-    let merged_start = intervals[0][0];
-    let mut merged_end = intervals[0][1];
-    for &[s, e] in &intervals[1..] {
-        let span = (e - merged_end).rem_euclid(std::f32::consts::TAU);
-        let gap = (s - merged_end).rem_euclid(std::f32::consts::TAU);
-        let _ = span;
-        if gap > 1e-3 {
-            return None;
-        } // discontinuous
-        merged_end = e;
+    if !segs.is_empty() {
+        return None; // disconnected or branched selection
     }
-
-    let span = merged_end - merged_start;
-    let handles: Vec<Handle> = arcs.iter().map(|(h, _)| *h).collect();
-
-    if (span - std::f32::consts::TAU).abs() < 0.01 {
-        // Full circle
-        let mut circle = acadrust::entities::Circle::new();
-        circle.common = first.common.clone();
-        circle.common.handle = Handle::NULL;
-        circle.center = first.center.clone();
-        circle.radius = r;
-        circle.normal = first.normal.clone();
-        return Some((handles, vec![EntityType::Circle(circle)]));
-    }
-
-    let mut merged_arc = first.clone();
-    merged_arc.common.handle = Handle::NULL;
-    merged_arc.start_angle = merged_start as f64;
-    merged_arc.end_angle = merged_end as f64;
-    Some((handles, vec![EntityType::Arc(merged_arc)]))
+    let closed = chain.len() >= 2
+        && chain.first().unwrap().a.distance(chain.last().unwrap().b) <= JOIN_EPS;
+    Some((chain, closed))
 }
 
-fn vec3_xz_to_v3(v: Vec3, z: f64) -> Vector3 {
-    Vector3::new(v.x as f64, v.y as f64, z)
+/// True when every vertex lies on one straight line (within tolerance).
+fn is_collinear(verts: &[(DVec3, f64)]) -> bool {
+    if verts.len() < 3 {
+        return true;
+    }
+    let dir = verts[1].0 - verts[0].0;
+    if dir.length() < JOIN_EPS {
+        return false;
+    }
+    let dir = dir.normalize();
+    verts
+        .windows(2)
+        .all(|w| (w[1].0 - w[0].0).cross(dir).length() <= 1e-6)
 }
 
 
