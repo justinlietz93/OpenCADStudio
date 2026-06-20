@@ -2599,15 +2599,20 @@ fn text_on_dim_line(
     dimtix: bool,
     below: bool,
 ) -> Vector3 {
-    let px = -ay;
-    let py = ax;
-    // Side of the measured points the dimension line sits on (the "above"
-    // side). DIMTAD=4 (below) flips the text to the other side.
-    let off = (defpt.x - first.x) * px + (defpt.y - first.y) * py;
-    let mut perp_sign = if off >= 0.0 { 1.0 } else { -1.0 };
-    if below {
-        perp_sign = -perp_sign;
+    // "Above" (DIMTAD 1) places the text on the side its top points to — the
+    // perpendicular of the dimension line normalised so the text reads
+    // left-to-right (or bottom-to-top when vertical), NOT the side away from
+    // the measured object. Keying the side off the object flipped "above" into
+    // "below" whenever the dimension ran the opposite way. (#144)
+    let (mut nx, mut ny) = (ax, ay);
+    if nx < 0.0 || (nx == 0.0 && ny < 0.0) {
+        nx = -nx;
+        ny = -ny;
     }
+    let px = -ny;
+    let py = nx;
+    // +perp is "above"; DIMTAD=4 (below) flips to the other side.
+    let perp_sign = if below { -1.0 } else { 1.0 };
     // Along-axis positions of the extension points relative to the dim line.
     let t1 = (first.x - defpt.x) * ax + (first.y - defpt.y) * ay;
     let t2 = (second.x - defpt.x) * ax + (second.y - defpt.y) * ay;
@@ -2746,4 +2751,31 @@ fn dimension_text_pos_f64(
 
 fn perp_sign_default() -> f64 {
     1.0
+}
+
+#[cfg(test)]
+mod dimtad_tests {
+    use super::text_on_dim_line;
+    use acadrust::types::Vector3;
+
+    fn v(x: f64, y: f64) -> Vector3 {
+        Vector3::new(x, y, 0.0)
+    }
+
+    // DIMTAD=Above must place text on the geometric "up" side of a horizontal
+    // dimension whichever way the dimension runs; DIMTAD=Below flips it. (#144)
+    #[test]
+    fn above_is_up_regardless_of_direction() {
+        let (first, second, defpt) = (v(0.0, 10.0), v(20.0, 10.0), v(0.0, 0.0));
+        let perp = 5.0;
+        let fwd =
+            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, false);
+        let rev =
+            text_on_dim_line(first, second, defpt, -1.0, 0.0, 0, perp, 0.0, 1.0, false, false);
+        assert!(fwd.y > 0.0, "above must be +Y, got {}", fwd.y);
+        assert!(rev.y > 0.0, "above must be +Y even reversed, got {}", rev.y);
+        let below =
+            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, true);
+        assert!(below.y < 0.0, "below must be -Y, got {}", below.y);
+    }
 }
