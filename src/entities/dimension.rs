@@ -2597,13 +2597,11 @@ fn text_on_dim_line(
     text_w: f64,
     arrow: f64,
     dimtix: bool,
-    below: bool,
+    tad: i16,
 ) -> Vector3 {
-    // "Above" (DIMTAD 1) places the text on the side its top points to — the
-    // perpendicular of the dimension line normalised so the text reads
-    // left-to-right (or bottom-to-top when vertical), NOT the side away from
-    // the measured object. Keying the side off the object flipped "above" into
-    // "below" whenever the dimension ran the opposite way. (#144)
+    // The perpendicular "up" side: the perpendicular of the dimension line
+    // normalised so the text reads left-to-right (or bottom-to-top when
+    // vertical). DIMTAD "above" (1) and JIS (3) sit on this side.
     let (mut nx, mut ny) = (ax, ay);
     if nx < 0.0 || (nx == 0.0 && ny < 0.0) {
         nx = -nx;
@@ -2611,8 +2609,24 @@ fn text_on_dim_line(
     }
     let px = -ny;
     let py = nx;
-    // +perp is "above"; DIMTAD=4 (below) flips to the other side.
-    let perp_sign = if below { -1.0 } else { 1.0 };
+    // DIMTAD side:
+    //   1 (above) / 3 (JIS) / 0 (centred) → the text-up side, independent of the
+    //     object — keying it off the object flipped "above" to "below" whenever
+    //     the dimension ran the opposite way (#144);
+    //   4 (below)   → the opposite side;
+    //   2 (outside) → the side farthest from the defining points (the object).
+    let perp_sign = match tad {
+        4 => -1.0,
+        2 => {
+            let off = (defpt.x - first.x) * px + (defpt.y - first.y) * py;
+            if off >= 0.0 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        _ => 1.0,
+    };
     // Along-axis positions of the extension points relative to the dim line.
     let t1 = (first.x - defpt.x) * ax + (first.y - defpt.y) * ay;
     let t2 = (second.x - defpt.x) * ax + (second.y - defpt.y) * ay;
@@ -2667,7 +2681,6 @@ fn dimension_text_pos_f64(
     } else {
         text_height * 0.5 + dimgap
     };
-    let tad_below = dimtad == 4;
     // Rough text width + arrow allowance, used to decide text-outside fit.
     let text_w = dimension_text_value(dim, style)
         .map(|t| t.chars().count() as f64 * text_height * 0.6 + 2.0 * dimgap)
@@ -2699,7 +2712,7 @@ fn dimension_text_pos_f64(
                 text_w,
                 arrow,
                 dimtix,
-                tad_below,
+                dimtad,
             )
         }
         Dimension::Aligned(d) => {
@@ -2717,7 +2730,7 @@ fn dimension_text_pos_f64(
                 text_w,
                 arrow,
                 dimtix,
-                tad_below,
+                dimtad,
             )
         }
         _ => {
@@ -2769,13 +2782,30 @@ mod dimtad_tests {
         let (first, second, defpt) = (v(0.0, 10.0), v(20.0, 10.0), v(0.0, 0.0));
         let perp = 5.0;
         let fwd =
-            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, false);
+            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 1);
         let rev =
-            text_on_dim_line(first, second, defpt, -1.0, 0.0, 0, perp, 0.0, 1.0, false, false);
+            text_on_dim_line(first, second, defpt, -1.0, 0.0, 0, perp, 0.0, 1.0, false, 1);
         assert!(fwd.y > 0.0, "above must be +Y, got {}", fwd.y);
         assert!(rev.y > 0.0, "above must be +Y even reversed, got {}", rev.y);
         let below =
-            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, true);
+            text_on_dim_line(first, second, defpt, 1.0, 0.0, 0, perp, 0.0, 1.0, false, 4);
         assert!(below.y < 0.0, "below must be -Y, got {}", below.y);
+    }
+
+    // DIMTAD=Outside (2) stays on the side farthest from the measured points,
+    // whichever side of the geometry the dimension line is on.
+    #[test]
+    fn outside_is_away_from_object() {
+        let perp = 5.0;
+        // Object at y=0, dim line above it (y=10): away → further above.
+        let above = text_on_dim_line(
+            v(0.0, 0.0), v(20.0, 0.0), v(0.0, 10.0), 1.0, 0.0, 0, perp, 0.0, 1.0, false, 2,
+        );
+        assert!(above.y > 10.0, "outside must clear the object side, got {}", above.y);
+        // Object at y=0, dim line below it (y=-10): away → further below.
+        let below = text_on_dim_line(
+            v(0.0, 0.0), v(20.0, 0.0), v(0.0, -10.0), 1.0, 0.0, 0, perp, 0.0, 1.0, false, 2,
+        );
+        assert!(below.y < -10.0, "outside must clear the object side, got {}", below.y);
     }
 }
