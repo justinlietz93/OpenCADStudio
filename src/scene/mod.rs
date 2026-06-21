@@ -2310,6 +2310,49 @@ impl Scene {
         pick::hit_test::mesh_poly_hit(poly, crossing, iter, view_proj, bounds)
     }
 
+    /// Front-most solid under the cursor across BOTH top-level solid meshes
+    /// (keyed by their own handle) and block-internal solid instances (keyed
+    /// by the parent INSERT). Combining them in one depth-sorted test means a
+    /// block in front of a stray solid wins, instead of the solid always
+    /// taking priority by virtue of being tried first.
+    pub fn solid_click_hit(
+        &self,
+        cursor: iced::Point,
+        view_proj: glam::Mat4,
+        bounds: iced::Rectangle,
+    ) -> Option<Handle> {
+        // Block-internal instances must be owned (transformed copies); keep
+        // them in a Vec and chain references alongside the top-level meshes so
+        // neither set is cloned wholesale.
+        let mut block_owned: Vec<(Handle, crate::scene::model::mesh_model::MeshModel)> = Vec::new();
+        if !self.block_meshes.is_empty() {
+            let layout_block = self.current_layout_block_handle();
+            let woff = self.world_offset;
+            for e in self.document.entities() {
+                if e.common().owner_handle != layout_block {
+                    continue;
+                }
+                let EntityType::Insert(ins) = e else { continue };
+                if !self.mesh_entity_visible(ins.common.handle) {
+                    continue;
+                }
+                let mut sets = Vec::new();
+                self.expand_block_meshes(&ins.block_name, &ins.get_transform(), 0, woff, &mut sets);
+                for set in sets {
+                    if let Some(m) = set.lods.into_iter().next() {
+                        block_owned.push((ins.common.handle, m));
+                    }
+                }
+            }
+        }
+        let top = self
+            .meshes
+            .iter()
+            .filter_map(|(h, set)| set.lods.first().map(|m| (*h, m)));
+        let blk = block_owned.iter().map(|(h, m)| (*h, m));
+        pick::hit_test::mesh_click_hit(cursor, top.chain(blk), view_proj, bounds)
+    }
+
     /// Parent INSERT handles whose block-internal solid meshes fall in a
     /// rectangular selection box. A block whose visible body is a solid has
     /// no wires to catch, so box/lasso selection must test its instanced

@@ -3880,8 +3880,10 @@ impl OpenCADStudio {
                                         })
                                         .or_else(|| {
                                             // 3D solids: click anywhere on the shaded
-                                            // body, not just the thin projected edges.
-                                            self.tabs[i].scene.mesh_click_hit(p, vp_mat, bounds)
+                                            // body — top-level solids and block-internal
+                                            // ones together, front-most wins (a block in
+                                            // front of a solid resolves to the block).
+                                            self.tabs[i].scene.solid_click_hit(p, vp_mat, bounds)
                                         });
                                 // Selection filter: drop a pick whose type is excluded.
                                 let hit =
@@ -4376,7 +4378,7 @@ impl OpenCADStudio {
                             bounds,
                         )
                     })
-                    .or_else(|| self.tabs[i].scene.mesh_click_hit(p, view_proj, bounds));
+                    .or_else(|| self.tabs[i].scene.solid_click_hit(p, view_proj, bounds));
                 self.tabs[i].scene.set_hover_highlight(hovered);
                 self.hover_dwell = None;
                 Task::none()
