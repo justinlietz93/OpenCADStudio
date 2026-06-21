@@ -195,6 +195,7 @@ impl OpenCADStudio {
                 v
             },
             plugin_repos: self.plugin_repos.clone(),
+            texteditmode: self.texteditmode,
         }
     }
 
@@ -210,7 +211,21 @@ impl OpenCADStudio {
         self.default_assoc_prompted = s.default_assoc_prompted;
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
         self.plugin_repos = s.plugin_repos.clone();
+        self.texteditmode = s.texteditmode;
         self.rebuild_ribbon_modules();
+    }
+
+    /// Check if a suspended command exists on the active tab and resume it
+    /// with the outcome of the text editor.
+    pub(super) fn post_editor_closed(&mut self, committed: bool) -> Task<Message> {
+        let i = self.active_tab;
+        if let Some(mut cmd) = self.tabs[i].suspended_cmd.take() {
+            let res = cmd.on_editor_closed(committed);
+            self.tabs[i].active_cmd = Some(cmd);
+            self.apply_cmd_result(res)
+        } else {
+            Task::none()
+        }
     }
 
     /// Rebuild the ribbon's tab list from the registry, dropping the tabs of any
@@ -1806,12 +1821,12 @@ impl OpenCADStudio {
                 // Open MText editor swallows Escape (cancel without committing).
                 if self.mtext_editor.is_some() {
                     self.mtext_cancel();
-                    return Task::none();
+                    return self.post_editor_closed(false);
                 }
                 // The in-place TEXT editor likewise cancels on Escape.
                 if self.text_inline.is_some() {
                     self.text_inline_cancel();
-                    return Task::none();
+                    return self.post_editor_closed(false);
                 }
                 // Grip popup intercepts Escape — dismisses the menu
                 // without doing anything else.
@@ -4905,12 +4920,12 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::MTextOk => {
-                self.mtext_commit();
-                Task::none()
+                let committed = self.mtext_commit();
+                self.post_editor_closed(committed)
             }
             Message::MTextCancel => {
                 self.mtext_cancel();
-                Task::none()
+                self.post_editor_closed(false)
             }
 
             Message::TextInlineInput(s) => {
@@ -4971,8 +4986,8 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::TextInlineOk => {
-                self.text_inline_commit();
-                Task::none()
+                let committed = self.text_inline_commit();
+                self.post_editor_closed(committed)
             }
 
             Message::DrawOrderSubmenuToggle => {

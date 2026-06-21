@@ -628,15 +628,15 @@ impl super::OpenCADStudio {
     }
 
     /// Commit the editor — create a new MText or update the edited one.
-    pub(super) fn mtext_commit(&mut self) {
+    pub(super) fn mtext_commit(&mut self) -> bool {
         let i = self.active_tab;
-        let Some(ed) = self.mtext_editor.take() else { return };
+        let Some(ed) = self.mtext_editor.take() else { return false };
         let body_empty = ed.content.text().trim().is_empty();
         let mt = ed.build_mtext();
         if body_empty {
             // Empty content: drop a new entity; leave an edited one untouched.
             self.refresh_properties();
-            return;
+            return false;
         }
         if let Some(h) = ed.editing {
             self.push_undo_snapshot(i, "MTEXT");
@@ -666,6 +666,7 @@ impl super::OpenCADStudio {
             self.tabs[i].dirty = true;
         }
         self.refresh_properties();
+        true
     }
 
     /// Discard the editor without changing the drawing.

@@ -98,6 +98,25 @@ pub struct TextInlineState {
     /// Canvas-space anchor where the field is drawn (the insertion-point click).
     pub screen_anchor: iced::Point,
 }
+pub(super) fn can_edit_text(mut handle: Handle, document: &acadrust::CadDocument) -> bool {
+    for _ in 0..8 {
+        match document.get_entity(handle) {
+            Some(acadrust::EntityType::Leader(l)) => {
+                let ann = l.annotation_handle;
+                if ann.is_null() || ann == handle {
+                    return false;
+                }
+                handle = ann;
+            }
+            _ => break,
+        }
+    }
+    if let Some(entity) = document.get_entity(handle) {
+        read_text_field(entity).is_some()
+    } else {
+        false
+    }
+}
 
 impl super::OpenCADStudio {
     /// Open the right in-place editor for `handle`: the plain box for single-
@@ -175,12 +194,12 @@ impl super::OpenCADStudio {
 
     /// Commit the editor: create a new TEXT entity or update the edited slot.
     /// Empty content drops a new entity and leaves an edited one untouched.
-    pub(super) fn text_inline_commit(&mut self) {
+    pub(super) fn text_inline_commit(&mut self) -> bool {
         let i = self.active_tab;
-        let Some(ed) = self.text_inline.take() else { return };
+        let Some(ed) = self.text_inline.take() else { return false };
         if ed.value.trim().is_empty() && ed.editing.is_none() {
             self.refresh_properties();
-            return;
+            return false;
         }
         if let Some(h) = ed.editing {
             self.push_undo_snapshot(i, "TEXT");
@@ -211,6 +230,7 @@ impl super::OpenCADStudio {
             self.tabs[i].dirty = true;
         }
         self.refresh_properties();
+        true
     }
 
     /// Discard the editor without changing the drawing.

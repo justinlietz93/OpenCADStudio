@@ -240,6 +240,12 @@ pub enum CmdResult {
         entity: EntityType,
         finish: bool,
     },
+    /// Suspends command execution, moves it to suspended_cmd, and opens the text editor for the given handle.
+    SuspendForTextEdit { handle: Handle },
+    /// Requests a standard document-level undo while keeping the command active.
+    UndoDocument,
+    /// Sets the TEXTEDITMODE system variable and ends the command.
+    SetTexteditMode(bool),
 }
 
 /// What kind of value the active command is currently asking for. Drives
@@ -425,6 +431,11 @@ pub trait CadCommand: Send {
     /// Returns `true` when the command needs entity picking (hit-test) instead of point picking.
     fn needs_entity_pick(&self) -> bool {
         false
+    }
+
+    /// Called when the text editor closes, either because the user committed or cancelled the edit.
+    fn on_editor_closed(&mut self, _committed: bool) -> CmdResult {
+        CmdResult::Cancel
     }
 
     /// Called when the user clicks and `needs_entity_pick()` is true.

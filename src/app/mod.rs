@@ -242,6 +242,8 @@ pub(super) struct OpenCADStudio {
     show_grid: bool,
     /// Dynamic input overlay (F12): show coordinate tooltip near cursor.
     dyn_input: bool,
+    /// Controls whether the TEXTEDIT command repeats automatically (0 = Multiple, 1 = Single).
+    pub texteditmode: bool,
     /// `true` after a bare `VPORTS` in model space — the next command-line
     /// entry is treated as the tiled-config option (SIngle/2H/2V/4).
     awaiting_vports: bool,
@@ -1686,6 +1688,7 @@ impl OpenCADStudio {
             polar_increment_deg: 45.0,
             show_grid: false,
             dyn_input: true,
+            texteditmode: false,
             awaiting_vports: false,
             tile_drag: None,
             dyn_user_reshaped: false,

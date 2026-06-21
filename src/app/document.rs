@@ -160,6 +160,7 @@ pub(super) struct DocumentTab {
     pub(super) is_start: bool,
     /// Per-plugin document state (`plugin::BuiltinPlugin` manifest id → state).
     pub(super) plugin_state: HashMap<&'static str, Box<dyn Any + Send + Sync>>,
+    pub(super) suspended_cmd: Option<Box<dyn CadCommand>>,
 }
 
 impl DocumentTab {
@@ -213,6 +214,7 @@ impl DocumentTab {
             last_synced_camera_gen: 0,
             is_start: false,
             plugin_state: HashMap::new(),
+            suspended_cmd: None,
         }
     }
 

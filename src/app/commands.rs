@@ -1444,6 +1444,22 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
+            "TEXTEDIT" | "TEDIT" => {
+                use crate::modules::annotate::textedit::TexteditCommand;
+                let mode_str = if self.texteditmode { "Single" } else { "Multiple" };
+                self.command_line.push_output(&format!("Current settings: Edit mode = {}", mode_str));
+                let new_cmd = TexteditCommand::new(self.texteditmode);
+                self.command_line.push_info(&new_cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+            }
+
+            "TEXTEDITMODE" => {
+                use crate::modules::annotate::textedit::TexteditmodeCommand;
+                let cmd = TexteditmodeCommand::new(self.texteditmode);
+                self.command_line.push_info(&cmd.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(cmd));
+            }
+
             "DIMALIGNED" | "DAL" => {
                 use crate::modules::annotate::aligned_dim::AlignedDimensionCommand;
                 let cmd = AlignedDimensionCommand::new();
@@ -4940,6 +4956,23 @@ impl OpenCADStudio {
                     self.command_line.push_error(
                         "Usage: PDMODE [value]  (0=dot 1=none 2=+ 3=x 4=tick; +32 circle, +64 square)",
                     );
+                }
+            }
+            cmd if cmd.starts_with("TEXTEDITMODE ") => {
+                let val_str = cmd.trim_start_matches("TEXTEDITMODE").trim().to_lowercase();
+                if val_str.is_empty() {
+                    let v = if self.texteditmode { 1 } else { 0 };
+                    self.command_line.push_output(&format!("TEXTEDITMODE = {v}"));
+                } else if let Some(v) =
+                    crate::modules::annotate::textedit::parse_texteditmode(&val_str)
+                {
+                    self.texteditmode = v;
+                    let n = if v { 1 } else { 0 };
+                    self.command_line
+                        .push_output(&format!("TEXTEDITMODE set to {n}"));
+                } else {
+                    self.command_line
+                        .push_error("Requires 0 OR 1 OR MULTIPLE OR SINGLE");
                 }
             }
             cmd if cmd == "PDSIZE" || cmd.starts_with("PDSIZE ") => {
