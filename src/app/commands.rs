@@ -5943,3 +5943,32 @@ fn csv_escape(s: &str) -> String {
         s.to_string()
     }
 }
+
+// ── Autocomplete registry — one-shot commands ──────────────────────────────
+// These commands dispatch a single action (file ops, view, layer/style
+// managers, undo/redo, …) rather than installing an interactive `CadCommand`,
+// so they have no module of their own to register from. They are surfaced for
+// command-line autocomplete here. Internal dispatch tokens that the user never
+// types (REFEDIT_BEGIN, REFCLOSE_SAVE, REFCLOSE_DISCARD) are intentionally
+// excluded.
+inventory::submit!(crate::command::CommandRegistration {
+    names: &[
+        "3DORBIT", "3O", "ABOUT", "ATTDISP", "ATTEXT", "BACKGROUND", "CDIMSTY", "CELTSCALE",
+        "CHANGELOG", "CHPROP", "CLAYER", "CLEAR", "CLR", "COLORSCHEME", "COUNT", "DATAEXTRACTION",
+        "DE", "DESELALL", "DESELECT", "DIMSTYLE", "DONATE", "DRAWORDER", "DWGPROP", "DWGPROPS",
+        "EATTEXT", "EXIT", "EXPORT", "EXPORTSTEP", "EXPORTSTL", "FILETAB", "FIND", "FLATTEN",
+        "HELP", "HIDEOBJECTS", "IM", "IMAGE", "IMAGEATTACH", "IMPORTOBJ", "ISOLATEOBJECTS", "LA",
+        "LAYER", "LAYERS", "LAYISO", "LAYON", "LAYOUTMANAGER", "LAYOUTPANEL", "LAYOUTTAB", "LAYTHW",
+        "LAYUNISO", "LI", "LINETYPE", "LIST", "LTSCALE", "LWDISPLAY", "MASSPROP", "MLEADERSTYLE",
+        "MLSTYLE", "MS", "MSPACE", "NAVVCUBE", "NEW", "OBJIMPORT", "OPEN", "ORTHO",
+        "PAGESETUP", "PERF", "PERSP", "PLOT", "PLOTSTYLE", "PLOTSTYLEEDITOR", "PLOTSTYLEPANEL", "PR",
+        "PRINT", "PROPERTIES", "PROPS", "PSPACE", "PURGE", "QS", "QSAVE", "QSELECT",
+        "QUIT", "REDO", "REDRAW", "REDRWALL", "REGEN", "REGENALL", "RENAME", "REPORT",
+        "SA", "SAVE", "SAVEAS", "SCALETEXT", "SELECTALL", "SELECTSIMILAR", "SELSIM", "SHEETSET",
+        "SHORTCUTS", "SOLID", "SSM", "STEPOUT", "STLOUT", "STPOUT", "STYLE", "STYLESMANAGER",
+        "TABLESTYLE", "TOOLPALETTES", "TP", "TS", "U", "UCS", "UCSICON", "UNDERLAY",
+        "UNDO", "UNISOLATEOBJECTS", "USERI", "USERR", "VIEW", "VPORTS", "VS", "VW",
+        "WB", "WBLOCK", "WEBVERSION", "WIREFRAME", "XA", "XATTACH", "XDATA", "XR",
+        "XREF", "XRELOAD", "ZOOM", "ZS",
+    ]
+});
