@@ -17,7 +17,32 @@ use acadrust::{EntityType, LwPolyline};
 use crate::command::{CadCommand, CmdResult};
 use crate::modules::IconKind;
 use crate::scene::model::wire_model::WireModel;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
+
+/// Build the four corners of an axis-aligned box between opposite corners `a`
+/// and `b`, axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity =
+/// world). The two given corners stay put; the other two are placed square to
+/// the UCS axes instead of the world axes.
+fn ucs_box_corners(a: Vec3, b: Vec3, ucs: Mat4) -> [Vec3; 4] {
+    let inv = ucs.inverse();
+    let au = inv.transform_point3(a);
+    let bu = inv.transform_point3(b);
+    [
+        ucs.transform_point3(Vec3::new(au.x, au.y, au.z)),
+        ucs.transform_point3(Vec3::new(bu.x, au.y, au.z)),
+        ucs.transform_point3(Vec3::new(bu.x, bu.y, au.z)),
+        ucs.transform_point3(Vec3::new(au.x, bu.y, au.z)),
+    ]
+}
+
+/// Four corners of a box centred at `c` with half-extents taken from `corner`,
+/// axis-aligned in the active UCS (`ucs` = UCS→wire affine, identity = world).
+fn ucs_box_around_center(c: Vec3, corner: Vec3, ucs: Mat4) -> [Vec3; 4] {
+    let d = ucs.inverse().transform_vector3(corner - c);
+    let rx = ucs.transform_vector3(Vec3::new(d.x.abs(), 0.0, 0.0));
+    let ry = ucs.transform_vector3(Vec3::new(0.0, d.y.abs(), 0.0));
+    [c - rx - ry, c + rx - ry, c + rx + ry, c - rx + ry]
+}
 
 const TAU: f32 = std::f32::consts::TAU;
 const PI: f32 = std::f32::consts::PI;
@@ -120,17 +145,21 @@ fn angle_xy(from: Vec3, to: Vec3) -> f32 {
 
 pub struct RectCommand {
     a: Option<Vec3>,
+    ucs: Mat4,
 }
 
 impl RectCommand {
     pub fn new() -> Self {
-        Self { a: None }
+        Self { a: None, ucs: Mat4::IDENTITY }
     }
 }
 
 impl CadCommand for RectCommand {
     fn name(&self) -> &'static str {
         "RECT"
+    }
+    fn set_ucs(&mut self, ucs: Mat4) {
+        self.ucs = ucs;
     }
     fn prompt(&self) -> String {
         if self.a.is_none() {
@@ -145,12 +174,15 @@ impl CadCommand for RectCommand {
                 self.a = Some(pt);
                 CmdResult::NeedPoint
             }
-            Some(a) => CmdResult::CommitAndExit(make_pline(&[
-                [a.x as f64, a.y as f64],
-                [pt.x as f64, a.y as f64],
-                [pt.x as f64, pt.y as f64],
-                [a.x as f64, pt.y as f64],
-            ])),
+            Some(a) => {
+                let c = ucs_box_corners(a, pt, self.ucs);
+                CmdResult::CommitAndExit(make_pline(&[
+                    [c[0].x as f64, c[0].y as f64],
+                    [c[1].x as f64, c[1].y as f64],
+                    [c[2].x as f64, c[2].y as f64],
+                    [c[3].x as f64, c[3].y as f64],
+                ]))
+            }
         }
     }
     fn on_enter(&mut self) -> CmdResult {
@@ -161,11 +193,12 @@ impl CadCommand for RectCommand {
     }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         let a = self.a?;
+        let c = ucs_box_corners(a, pt, self.ucs);
         Some(wire_loop(vec![
-            [a.x, a.y, a.z],
-            [pt.x, a.y, a.z],
-            [pt.x, pt.y, a.z],
-            [a.x, pt.y, a.z],
+            [c[0].x, c[0].y, c[0].z],
+            [c[1].x, c[1].y, c[1].z],
+            [c[2].x, c[2].y, c[2].z],
+            [c[3].x, c[3].y, c[3].z],
         ]))
     }
     fn dyn_spec(&self) -> Option<crate::command::DynSpec> {
@@ -302,17 +335,21 @@ impl CadCommand for RectRotCommand {
 
 pub struct RectCenCommand {
     center: Option<Vec3>,
+    ucs: Mat4,
 }
 
 impl RectCenCommand {
     pub fn new() -> Self {
-        Self { center: None }
+        Self { center: None, ucs: Mat4::IDENTITY }
     }
 }
 
 impl CadCommand for RectCenCommand {
     fn name(&self) -> &'static str {
         "RECT_CEN"
+    }
+    fn set_ucs(&mut self, ucs: Mat4) {
+        self.ucs = ucs;
     }
     fn prompt(&self) -> String {
         if self.center.is_none() {
@@ -328,15 +365,12 @@ impl CadCommand for RectCenCommand {
                 CmdResult::NeedPoint
             }
             Some(c) => {
-                let hw = (pt.x - c.x).abs() as f64;
-                let hh = (pt.y - c.y).abs() as f64;
-                let cx = c.x as f64;
-                let cy = c.y as f64;
+                let q = ucs_box_around_center(c, pt, self.ucs);
                 CmdResult::CommitAndExit(make_pline(&[
-                    [cx - hw, cy - hh],
-                    [cx + hw, cy - hh],
-                    [cx + hw, cy + hh],
-                    [cx - hw, cy + hh],
+                    [q[0].x as f64, q[0].y as f64],
+                    [q[1].x as f64, q[1].y as f64],
+                    [q[2].x as f64, q[2].y as f64],
+                    [q[3].x as f64, q[3].y as f64],
                 ]))
             }
         }
@@ -349,13 +383,12 @@ impl CadCommand for RectCenCommand {
     }
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         let c = self.center?;
-        let hw = (pt.x - c.x).abs();
-        let hh = (pt.y - c.y).abs();
+        let q = ucs_box_around_center(c, pt, self.ucs);
         Some(wire_loop(vec![
-            [c.x - hw, c.y - hh, c.z],
-            [c.x + hw, c.y - hh, c.z],
-            [c.x + hw, c.y + hh, c.z],
-            [c.x - hw, c.y + hh, c.z],
+            [q[0].x, q[0].y, q[0].z],
+            [q[1].x, q[1].y, q[1].z],
+            [q[2].x, q[2].y, q[2].z],
+            [q[3].x, q[3].y, q[3].z],
         ]))
     }
     fn dyn_spec(&self) -> Option<crate::command::DynSpec> {

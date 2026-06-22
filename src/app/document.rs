@@ -195,6 +195,28 @@ impl DocumentTab {
         self.scene.viewcube_ucs = self.ucs_xform().rotation_mat();
     }
 
+    /// UCS→render(wire)-space affine for commands that build axis-aligned
+    /// geometry. Columns are the UCS axes; translation is the UCS origin in wire
+    /// space. Identity outside model space (no UCS there).
+    pub(super) fn ucs_wire_affine(&self) -> glam::Mat4 {
+        if self.scene.current_layout != "Model" {
+            return glam::Mat4::IDENTITY;
+        }
+        let (o, x, y, z) = self.ucs_xform().axes();
+        let wo = self.scene.world_offset;
+        let origin = glam::Vec3::new(
+            o.x - wo[0] as f32,
+            o.y - wo[1] as f32,
+            o.z - wo[2] as f32,
+        );
+        glam::Mat4::from_cols(
+            x.extend(0.0),
+            y.extend(0.0),
+            z.extend(0.0),
+            origin.extend(1.0),
+        )
+    }
+
     /// Grid origin (render/wire space) and UCS→world rotation for grid snap and
     /// the grid overlay. Identity / origin-at-zero outside model space.
     pub(super) fn ucs_grid_basis(&self) -> (glam::Vec3, glam::Mat4) {

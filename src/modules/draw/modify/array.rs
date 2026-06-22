@@ -14,7 +14,7 @@
 //   1. Center point → 2. Item count (text) → 3. Total angle in degrees (text)
 
 use acadrust::Handle;
-use glam::Vec3;
+use glam::{Mat4, Vec3};
 
 use crate::command::{CadCommand, CmdResult, EntityTransform};
 use crate::modules::draw::defaults;
@@ -62,6 +62,7 @@ pub struct ArrayRectCommand {
     default_cols: u32,
     default_row_sp: f32,
     default_col_sp: f32,
+    ucs: Mat4,
 }
 
 impl ArrayRectCommand {
@@ -74,20 +75,27 @@ impl ArrayRectCommand {
             default_cols: defaults::get_array_cols() as u32,
             default_row_sp: defaults::get_array_row_sp(),
             default_col_sp: defaults::get_array_col_sp(),
+            ucs: Mat4::IDENTITY,
         }
     }
 
-    fn build_transforms(rows: u32, cols: u32, row_sp: f32, col_sp: f32) -> Vec<EntityTransform> {
+    /// Row/column offsets run along the active UCS axes (`ucs` rotates the
+    /// world-frame grid step), identity = world.
+    fn build_transforms(
+        rows: u32,
+        cols: u32,
+        row_sp: f32,
+        col_sp: f32,
+        ucs: Mat4,
+    ) -> Vec<EntityTransform> {
         let mut t = Vec::new();
         for r in 0..rows {
             for c in 0..cols {
                 if r == 0 && c == 0 {
                     continue;
                 }
-                t.push(EntityTransform::Translate(Vec3::new(
-                    col_sp * c as f32,
-                    row_sp * r as f32,
-                    0.0,
+                t.push(EntityTransform::Translate(ucs.transform_vector3(
+                    Vec3::new(col_sp * c as f32, row_sp * r as f32, 0.0),
                 )));
             }
         }
@@ -98,6 +106,10 @@ impl ArrayRectCommand {
 impl CadCommand for ArrayRectCommand {
     fn name(&self) -> &'static str {
         "ARRAYRECT"
+    }
+
+    fn set_ucs(&mut self, ucs: Mat4) {
+        self.ucs = ucs;
     }
 
     fn prompt(&self) -> String {
@@ -176,7 +188,7 @@ impl CadCommand for ArrayRectCommand {
                 };
                 Some(CmdResult::BatchCopy(
                     self.handles.clone(),
-                    Self::build_transforms(rows, cols, row_sp, col_sp),
+                    Self::build_transforms(rows, cols, row_sp, col_sp, self.ucs),
                 ))
             }
         }
@@ -201,7 +213,7 @@ impl CadCommand for ArrayRectCommand {
             }
             RectStep::ColSp { rows, cols, row_sp } => (rows, cols, row_sp, self.default_col_sp),
         };
-        Self::build_transforms(rows, cols, row_sp, col_sp)
+        Self::build_transforms(rows, cols, row_sp, col_sp, self.ucs)
             .iter()
             .flat_map(|t| {
                 if let EntityTransform::Translate(delta) = t {

@@ -1660,6 +1660,7 @@ impl OpenCADStudio {
                         .map(|c| c.wants_text_input())
                         .unwrap_or(false)
                     {
+                        self.push_ucs_to_cmd(i);
                         if let Some(result) = self.tabs[i]
                             .active_cmd
                             .as_mut()
@@ -1687,6 +1688,7 @@ impl OpenCADStudio {
                             self.dyn_user_reshaped = false;
                             self.sync_dyn_fields();
                             self.reset_tracking_after_point();
+                            self.push_ucs_to_cmd(i);
                             let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt));
                             if let Some(r) = result {
                                 let task = self.apply_cmd_result(r);
@@ -1728,6 +1730,7 @@ impl OpenCADStudio {
                         self.dyn_user_reshaped = false;
                         self.sync_dyn_fields();
                         self.reset_tracking_after_point();
+                        self.push_ucs_to_cmd(i);
                         let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(wcs_pt));
                         if let Some(r) = result {
                             let task = self.apply_cmd_result(r);
@@ -1744,6 +1747,7 @@ impl OpenCADStudio {
                         return Task::none();
                     }
 
+                    self.push_ucs_to_cmd(i);
                     if let Some(result) = self.tabs[i]
                         .active_cmd
                         .as_mut()
@@ -2971,6 +2975,9 @@ impl OpenCADStudio {
                         s.screen.y += tile_b.y;
                     }
 
+                    // Give the command the current UCS before it builds its
+                    // rubber-band preview (and, by persistence, its commit).
+                    self.push_ucs_to_cmd(i);
                     let mut previews = if needs_structure {
                         let mut p = self.tabs[i]
                             .active_cmd
@@ -8347,6 +8354,16 @@ impl OpenCADStudio {
     /// values. Locked fields use their typed buffer; the rest fall back to
     /// the live cursor-derived value. Returns `None` when the field set
     /// isn't one we know how to turn into a point.
+    /// Hand the active command the current UCS (as a UCS→wire affine) so
+    /// axis-aligned constructions build square to the user's coordinate system.
+    /// No-op for commands that don't override `set_ucs`.
+    fn push_ucs_to_cmd(&mut self, i: usize) {
+        let ucs = self.tabs[i].ucs_wire_affine();
+        if let Some(c) = self.tabs[i].active_cmd.as_mut() {
+            c.set_ucs(ucs);
+        }
+    }
+
     fn dyn_resolve_point(&self) -> Option<glam::Vec3> {
         use super::document::DynComponent;
         let i = self.active_tab;
@@ -8606,6 +8623,7 @@ impl OpenCADStudio {
                         self.dyn_user_reshaped = false;
                         self.sync_dyn_fields();
                         self.reset_tracking_after_point();
+                        self.push_ucs_to_cmd(i);
                         let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt));
                         let task = result.map(|r| self.apply_cmd_result(r))?;
                         self.refresh_active_cmd_preview(i);
@@ -8664,6 +8682,7 @@ impl OpenCADStudio {
         self.dyn_user_reshaped = false;
         self.sync_dyn_fields();
         self.reset_tracking_after_point();
+        self.push_ucs_to_cmd(i);
         let result = self.tabs[i].active_cmd.as_mut().map(|c| c.on_point(pt));
         for f in self.tabs[i].dyn_fields.iter_mut() {
             f.buffer = None;

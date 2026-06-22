@@ -416,6 +416,13 @@ pub trait CadCommand: Send {
     /// Current prompt string to display in the command line.
     fn prompt(&self) -> String;
 
+    /// Push the active UCS into the command as a UCS→render(wire)-space affine
+    /// (identity = plain WCS). Commands that build axis-aligned geometry (RECT,
+    /// rectangular ARRAY, …) override this to store it and rotate their implicit
+    /// axes into the UCS; most commands work purely from picked points and
+    /// ignore it. Called before each point / preview dispatch.
+    fn set_ucs(&mut self, _ucs: glam::Mat4) {}
+
     /// Called when the user left-clicks in the viewport (point pick).
     fn on_point(&mut self, pt: Vec3) -> CmdResult;
 
