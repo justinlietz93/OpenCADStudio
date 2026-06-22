@@ -803,6 +803,10 @@ pub struct Scene {
     paper_projected_cache: RefCell<HashMap<Handle, (u64, Vec<WireModel>)>>,
     /// Active layout name — "Model" or a paper space layout name.
     pub current_layout: String,
+    /// UCS→world rotation for the ViewCube, kept in sync with the tab's active
+    /// UCS by `DocumentTab::sync_ucs_to_scene`. Identity = WCS. Applied only in
+    /// model space so the cube's faces follow the user's coordinate system.
+    pub viewcube_ucs: glam::Mat4,
     /// GPU render data for hatch fills, keyed by the DXF entity Handle.
     pub hatches: HashMap<Handle, HatchModel>,
     /// GPU render data for solid meshes (truck Shell/Solid tessellation).
@@ -954,6 +958,7 @@ impl Scene {
             paper_sheet_cache: RefCell::new(None),
             paper_projected_cache: RefCell::new(HashMap::default()),
             current_layout: "Model".to_string(),
+            viewcube_ucs: glam::Mat4::IDENTITY,
             hatches: HashMap::default(),
             meshes: HashMap::default(),
             block_meshes: HashMap::default(),
@@ -3794,7 +3799,18 @@ impl Scene {
                 return cam.view_rotation_mat();
             }
         }
-        self.camera.borrow().view_rotation_mat()
+        self.camera.borrow().view_rotation_mat() * self.viewcube_ucs_mat()
+    }
+
+    /// The UCS→world rotation the ViewCube should compose with the camera —
+    /// the active UCS in model space, identity everywhere else. Render,
+    /// hit-test, and click-snap all go through this so they stay in lock-step.
+    pub fn viewcube_ucs_mat(&self) -> glam::Mat4 {
+        if self.current_layout == "Model" {
+            self.viewcube_ucs
+        } else {
+            glam::Mat4::IDENTITY
+        }
     }
 
     /// Return the handle of the user viewport whose bounding rectangle contains

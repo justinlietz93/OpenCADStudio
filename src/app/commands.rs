@@ -3822,6 +3822,8 @@ impl OpenCADStudio {
                         }
                     }
                 }
+                // Keep the scene's ViewCube UCS in lock-step with active_ucs.
+                self.tabs[i].sync_ucs_to_scene();
             }
 
             // ── Named Views (VIEW command) ────────────────────────────────

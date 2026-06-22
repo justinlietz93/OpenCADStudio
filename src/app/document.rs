@@ -186,6 +186,19 @@ impl DocumentTab {
         } else {
             Some(u)
         };
+        self.sync_ucs_to_scene();
+    }
+
+    /// Push the active UCS rotation into the scene so the ViewCube composes with
+    /// it. Call after any change to `active_ucs`.
+    pub(super) fn sync_ucs_to_scene(&mut self) {
+        let (_, x, y, z) = self.ucs_xform().axes();
+        self.scene.viewcube_ucs = glam::Mat4::from_cols(
+            x.extend(0.0),
+            y.extend(0.0),
+            z.extend(0.0),
+            glam::Vec4::W,
+        );
     }
 
     pub(super) fn new_drawing(n: usize) -> Self {

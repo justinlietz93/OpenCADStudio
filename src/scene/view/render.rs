@@ -794,7 +794,7 @@ impl Scene {
             images,
             meshes: self.meshes_arc(),
             uniforms,
-            cam_rotation: inst.camera.view_rotation_mat(),
+            cam_rotation: inst.camera.view_rotation_mat() * self.viewcube_ucs_mat(),
             // Only the active viewport gets the hovered-region highlight.
             hover_region: if inst.active { hover_region } else { None },
             show_viewcube: inst.active,
@@ -826,7 +826,7 @@ impl Scene {
         cursor: mouse::Cursor,
     ) {
         let pos = cursor.position_in(bounds);
-        let cam_rotation = self.camera.borrow().view_rotation_mat();
+        let cam_rotation = self.camera.borrow().view_rotation_mat() * self.viewcube_ucs_mat();
         if let Some(p) = pos {
             let tile = self.active_model_tile_bounds(bounds.width, bounds.height);
             state.hover_region = hover_id(

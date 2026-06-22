@@ -3175,10 +3175,9 @@ impl OpenCADStudio {
                 let (vw, vh) = vp_size;
 
                 if vw > 1.0 && vh > 1.0 {
-                    let cam = self.tabs[i].scene.camera.borrow();
-                    if scene::hit_test(p.x, p.y, vw, vh, cam.view_rotation_mat(), VIEWCUBE_PX)
-                        .is_some()
-                    {
+                    let rot = self.tabs[i].scene.camera.borrow().view_rotation_mat()
+                        * self.tabs[i].scene.viewcube_ucs_mat();
+                    if scene::hit_test(p.x, p.y, vw, vh, rot, VIEWCUBE_PX).is_some() {
                         return Task::none();
                     }
                 }
@@ -4330,9 +4329,13 @@ impl OpenCADStudio {
             Message::ViewCubeSnap(region) => {
                 let i = self.active_tab;
                 let mut region = region;
+                // The cube is oriented in the active UCS, so its face directions
+                // are UCS-frame — rotate them into world before comparing /
+                // snapping (identity outside model space).
+                let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
                 // "Already there → flip to opposite" check: compare the
                 // current gaze direction with the region's target gaze.
-                let target_dir = region.snap_direction();
+                let target_dir = r_ucs.transform_vector3(region.snap_direction());
                 let cur_dir = {
                     let cam = self.tabs[i].scene.camera.borrow();
                     cam.rotation * glam::Vec3::Z
@@ -4340,7 +4343,7 @@ impl OpenCADStudio {
                 if cur_dir.dot(target_dir) > 0.9999 {
                     region = region.opposite();
                 }
-                let eye_dir = region.snap_direction();
+                let eye_dir = r_ucs.transform_vector3(region.snap_direction());
 
                 if self.tabs[i].scene.active_viewport.is_some() {
                     self.tabs[i]
