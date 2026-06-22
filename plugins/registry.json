@@ -8,5 +8,10 @@
     "repo": "mf4633/opencad-storm-sewer-plugin",
     "name": "Storm Sewer",
     "description": "Gravity storm-drain network design and analysis (Rational + Manning + HGL, LandXML import)."
+  },
+  {
+    "repo": "mf4633/opencad-hydrocomplete-plugin",
+    "name": "HydroComplete",
+    "description": "Full stormwater hydrology and hydraulics — mirrors HydroComplete for Civil 3D (HC_ANALYZE, HC_REVIEW, KaTeX HTML reports, Atlas 14, BMP/WQV, LandXML)."
   }
 ]
