@@ -40,8 +40,9 @@ const DRAW_ORDER_BIAS: f32 = 0.001;
 
 // ── Vertex stage ──────────────────────────────────────────────────────────────
 struct VertIn {
-    @location(0) pos:  vec3<f32>,
-    @location(1) uv:   vec2<f32>,
+    @location(0) pos:     vec3<f32>,
+    @location(1) uv:      vec2<f32>,
+    @location(2) pos_low: vec3<f32>,
 };
 
 struct VertOut {
@@ -52,7 +53,8 @@ struct VertOut {
 @vertex
 fn vs_main(in: VertIn) -> VertOut {
     var out: VertOut;
-    out.clip_pos = u.view_rot * vec4<f32>((in.pos - u.eye_high) - u.eye_low, 1.0);
+    let rel = (in.pos - u.eye_high) + (in.pos_low - u.eye_low);
+    out.clip_pos = u.view_rot * vec4<f32>(rel, 1.0);
     out.clip_pos.z = out.clip_pos.z - img_params.draw_depth * DRAW_ORDER_BIAS * out.clip_pos.w;
     out.uv = in.uv;
     return out;

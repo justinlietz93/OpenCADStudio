@@ -23,6 +23,9 @@ pub struct ImageModel {
     ///   [2] origin + U*W + V*H (top-right)
     ///   [3] origin + V*H (top-left)
     pub corners: [[f32; 3]; 4],
+    /// Low residual paired with `corners` (double-single) so the GPU keeps
+    /// sub-unit precision at UTM-scale insertion points.
+    pub corners_low: [[f32; 3]; 4],
     /// Optional world-space XY rect [x0, y0, x1, y1] for paper-space
     /// viewport clipping. Mirrors `WireModel.vp_scissor` /
     /// `HatchModel.vp_scissor`.
@@ -44,21 +47,33 @@ impl ImageModel {
         let h = img.size.y;
         // Model-space geometry is drawn in (WCS - world_offset) so large UTM-
         // scale coordinates stay within f32 precision; offset the image too.
-        let ox = (img.insertion_point.x - world_offset[0]) as f32;
-        let oy = (img.insertion_point.y - world_offset[1]) as f32;
-        let oz = (img.insertion_point.z - world_offset[2]) as f32;
+        // Corners come from a large insertion point plus small u/v spans.
+        // Split each into double-single (high, low) f32 so the GPU keeps
+        // sub-unit precision at UTM scale and after a cross-drawing paste.
+        let oxv = img.insertion_point.x - world_offset[0];
+        let oyv = img.insertion_point.y - world_offset[1];
+        let ozv = img.insertion_point.z - world_offset[2];
         let ux = (img.u_vector.x * w) as f32;
         let uy = (img.u_vector.y * w) as f32;
         let uz = (img.u_vector.z * w) as f32;
         let vx = (img.v_vector.x * h) as f32;
         let vy = (img.v_vector.y * h) as f32;
         let vz = (img.v_vector.z * h) as f32;
+        // High/low split of the anchor; the u/v spans are small and added to
+        // the high half (their own residual is below f32 noise at this scale).
+        let ox = oxv as f32;
+        let oy = oyv as f32;
+        let oz = ozv as f32;
+        let oxl = (oxv - ox as f64) as f32;
+        let oyl = (oyv - oy as f64) as f32;
+        let ozl = (ozv - oz as f64) as f32;
         let corners = [
             [ox, oy, oz],
             [ox + ux, oy + uy, oz + uz],
             [ox + ux + vx, oy + uy + vy, oz + uz + vz],
             [ox + vx, oy + vy, oz + vz],
         ];
+        let corners_low = [[oxl, oyl, ozl]; 4];
         let opacity = 1.0 - img.fade as f32 / 100.0;
 
         let (pixels, width, height) = load_pixels(&img.file_path)?;
@@ -69,6 +84,7 @@ impl ImageModel {
             height,
             opacity,
             corners,
+            corners_low,
             vp_scissor: None,
             draw_depth: 0.0,
         })

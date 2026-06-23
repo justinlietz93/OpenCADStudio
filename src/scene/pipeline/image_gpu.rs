@@ -16,25 +16,32 @@ use iced::wgpu::util::DeviceExt;
 pub struct ImageVertex {
     pub pos: [f32; 3],
     pub uv: [f32; 2],
+    pub pos_low: [f32; 3],
 }
 
 impl ImageVertex {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
+        const ATTRS: &[wgpu::VertexAttribute] = &[
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(ImageVertex, pos) as u64,
+                shader_location: 0,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(ImageVertex, uv) as u64,
+                shader_location: 1,
+                format: wgpu::VertexFormat::Float32x2,
+            },
+            wgpu::VertexAttribute {
+                offset: std::mem::offset_of!(ImageVertex, pos_low) as u64,
+                shader_location: 2,
+                format: wgpu::VertexFormat::Float32x3,
+            },
+        ];
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<ImageVertex>() as u64,
             step_mode: wgpu::VertexStepMode::Vertex,
-            attributes: &[
-                wgpu::VertexAttribute {
-                    offset: 0,
-                    shader_location: 0,
-                    format: wgpu::VertexFormat::Float32x3,
-                },
-                wgpu::VertexAttribute {
-                    offset: 12,
-                    shader_location: 1,
-                    format: wgpu::VertexFormat::Float32x2,
-                },
-            ],
+            attributes: ATTRS,
         }
     }
 }
@@ -154,31 +161,14 @@ impl ImageGpu {
         // corners: [p0=BL, p1=BR, p2=TR, p3=TL]
         // UV: BL=(0,1), BR=(1,1), TR=(1,0), TL=(0,0)
         let [p0, p1, p2, p3] = model.corners;
+        let [l0, l1, l2, l3] = model.corners_low;
         let verts = [
-            ImageVertex {
-                pos: p0,
-                uv: [0.0, 1.0],
-            },
-            ImageVertex {
-                pos: p1,
-                uv: [1.0, 1.0],
-            },
-            ImageVertex {
-                pos: p2,
-                uv: [1.0, 0.0],
-            },
-            ImageVertex {
-                pos: p0,
-                uv: [0.0, 1.0],
-            },
-            ImageVertex {
-                pos: p2,
-                uv: [1.0, 0.0],
-            },
-            ImageVertex {
-                pos: p3,
-                uv: [0.0, 0.0],
-            },
+            ImageVertex { pos: p0, uv: [0.0, 1.0], pos_low: l0 },
+            ImageVertex { pos: p1, uv: [1.0, 1.0], pos_low: l1 },
+            ImageVertex { pos: p2, uv: [1.0, 0.0], pos_low: l2 },
+            ImageVertex { pos: p0, uv: [0.0, 1.0], pos_low: l0 },
+            ImageVertex { pos: p2, uv: [1.0, 0.0], pos_low: l2 },
+            ImageVertex { pos: p3, uv: [0.0, 0.0], pos_low: l3 },
         ];
         let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("image.vbuf"),
