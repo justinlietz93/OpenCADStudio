@@ -287,15 +287,37 @@ impl Camera {
         self.distance = (self.distance * (1.0 - delta * 0.1)).max(0.001);
     }
 
+    /// World-space offset from `target` to the point under `screen` on the
+    /// target plane. Computed in the camera frame (small numbers) and rotated
+    /// to world — it never touches the large absolute target, so it stays
+    /// precise at UTM-scale coordinates. For perspective this is the offset
+    /// evaluated at the target plane (the correct pivot for zoom-to-cursor).
+    fn cursor_offset_on_target_plane(&self, screen: Point, bounds: Rectangle) -> Vec3 {
+        let ndc_x = (screen.x / bounds.width) * 2.0 - 1.0;
+        let ndc_y = 1.0 - (screen.y / bounds.height) * 2.0;
+        let aspect = bounds.width / bounds.height;
+        let half_h = self.ortho_size();
+        let half_w = half_h * aspect;
+        let cam_right = self.rotation * Vec3::X;
+        let cam_up = self.rotation * Vec3::Y;
+        cam_right * (ndc_x * half_w) + cam_up * (ndc_y * half_h)
+    }
+
     pub fn zoom_about_point(&mut self, screen: Point, bounds: Rectangle, delta: f32) {
         if bounds.width <= 0.0 || bounds.height <= 0.0 {
             self.zoom(delta);
             return;
         }
 
-        let before = self.pick_on_target_plane(screen, bounds);
+        // Keep the point under the cursor fixed by working with its offset
+        // *relative to target* before and after the zoom. Both offsets are
+        // small (camera-frame) numbers, so their difference is exact even at
+        // UTM coordinates — the old absolute view_proj.inverse() picks each
+        // carried ~0.5 m of f32 error that didn't cancel, making the whole
+        // scene jump on every zoom step.
+        let before = self.cursor_offset_on_target_plane(screen, bounds);
         self.zoom(delta);
-        let after = self.pick_on_target_plane(screen, bounds);
+        let after = self.cursor_offset_on_target_plane(screen, bounds);
         self.target += (before - after).as_dvec3();
     }
 
