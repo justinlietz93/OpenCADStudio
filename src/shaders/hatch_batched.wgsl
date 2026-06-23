@@ -41,7 +41,8 @@ struct HatchInstance {
     color:           vec4<f32>,
     color2:          vec4<f32>,
     aabb:            vec4<f32>,   // (xmin, ymin, xmax, ymax) — local space
-    world_origin:    vec2<f32>,
+    world_origin:    vec2<f32>,     // anchor high half
+    world_origin_low: vec2<f32>,    // anchor low residual (double-single)
     angle_offset:    f32,
     scale:           f32,
     grad_cos:        f32,
@@ -56,6 +57,8 @@ struct HatchInstance {
     family_count:    u32,
     draw_depth:      f32,          // signed (-1,1) draw-order bias; 0 = neutral
     _pad0:           u32,
+    _pad1:           u32,
+    _pad2:           u32,
 }
 
 // Draw-order depth bias (see wire.wgsl). Higher draw_depth → smaller z →
@@ -132,10 +135,17 @@ fn corner_xy(c: u32, aabb: vec4<f32>) -> vec2<f32> {
     }
 
     let local = corner_xy(v.corner, inst.aabb);
-    let world = vec3<f32>(local.x + inst.world_origin.x,
-                          local.y + inst.world_origin.y,
-                          0.0);
-    o.clip = u.view_rot * vec4<f32>((world - u.eye_high) - u.eye_low, 1.0);
+    // Double-single relative-to-eye: the anchor high half cancels exactly
+    // against eye_high (Sterbenz); local + anchor low + (−eye_low) carry the
+    // residual. `local` is small (boundary-relative), so adding it in the low
+    // term keeps full precision at UTM-scale anchors.
+    let hi = vec3<f32>(inst.world_origin.x - u.eye_high.x,
+                       inst.world_origin.y - u.eye_high.y,
+                       -u.eye_high.z);
+    let lo = vec3<f32>(local.x + inst.world_origin_low.x - u.eye_low.x,
+                       local.y + inst.world_origin_low.y - u.eye_low.y,
+                       -u.eye_low.z);
+    o.clip = u.view_rot * vec4<f32>(hi + lo, 1.0);
     o.clip.z = o.clip.z - inst.draw_depth * DRAW_ORDER_BIAS * o.clip.w;
     o.xz = local;
     o.instance_index = v.instance_index;

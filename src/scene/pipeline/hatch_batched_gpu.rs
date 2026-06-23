@@ -51,26 +51,38 @@ pub struct HatchInstance {
     pub color: [f32; 4],            //   0
     pub color2: [f32; 4],           //  16  (gradient end)
     pub aabb: [f32; 4],             //  32  (local-space xmin,ymin,xmax,ymax)
-    pub world_origin: [f32; 2],     //  48  (anchor added back in VS)
-    pub angle_offset: f32,          //  56
-    pub scale: f32,                 //  60
-    pub grad_cos: f32,              //  64
-    pub grad_sin: f32,              //  68
-    pub grad_min: f32,              //  72
-    pub grad_range: f32,            //  76
-    pub mode: u32,                  //  80  (0=pattern, 1=solid, 2=gradient)
-    pub visible: u32,               //  84  (CPU sets to 0 to skip)
-    pub boundary_offset: u32,       //  88  (first boundary vert index)
-    pub boundary_count: u32,        //  92
-    pub family_offset: u32,         //  96
-    pub family_count: u32,          // 100
+    pub world_origin: [f32; 2],     //  48  (anchor high half, added back in VS)
+    pub world_origin_low: [f32; 2], //  56  (anchor low residual — double-single)
+    pub angle_offset: f32,          //  64
+    pub scale: f32,                 //  68
+    pub grad_cos: f32,              //  72
+    pub grad_sin: f32,              //  76
+    pub grad_min: f32,              //  80
+    pub grad_range: f32,            //  84
+    pub mode: u32,                  //  88  (0=pattern, 1=solid, 2=gradient)
+    pub visible: u32,               //  92  (CPU sets to 0 to skip)
+    pub boundary_offset: u32,       //  96  (first boundary vert index)
+    pub boundary_count: u32,        // 100
+    pub family_offset: u32,         // 104
+    pub family_count: u32,          // 108
     /// Signed draw-order depth (-1,1); 0.0 = neutral. Applied as a clip-z
     /// bias in the vertex shader so this fill orders against other types.
-    pub draw_depth: f32,            // 104
-    pub _pad0: u32,                 // 108  (pad to 112 = 16-byte stride)
+    pub draw_depth: f32,            // 112
+    pub _pad0: u32,                 // 116  (pad to 128 = 16-byte stride)
+    pub _pad1: u32,                 // 120
+    pub _pad2: u32,                 // 124
 }
 
-const _: () = assert!(std::mem::size_of::<HatchInstance>() == 112);
+const _: () = assert!(std::mem::size_of::<HatchInstance>() == 128);
+
+/// Split a hatch's f64 world-origin anchor into double-single (high, low) f32
+/// pairs so the GPU keeps sub-unit precision at UTM-scale coordinates.
+#[inline]
+fn split_origin_ds(o: [f64; 2]) -> ([f32; 2], [f32; 2]) {
+    let hx = o[0] as f32;
+    let hy = o[1] as f32;
+    ([hx, hy], [(o[0] - hx as f64) as f32, (o[1] - hy as f64) as f32])
+}
 
 /// Mirrors the per-family struct used by the existing per-hatch shader,
 /// but the dash slice lives in a separate concatenated DashBuffer (the
@@ -261,11 +273,13 @@ impl HatchBatchedGpu {
             if !min_x.is_finite() {
                 // Empty / all-NaN — skip but keep the slot so indices
                 // stay in lockstep with the input list (visibility=0).
+                let (wo_hi, wo_lo) = split_origin_ds(h.world_origin);
                 instances.push(HatchInstance {
                     color: h.color,
                     color2,
                     aabb: [0.0, 0.0, 0.0, 0.0],
-                    world_origin: h.world_origin.map(|v| v as f32),
+                    world_origin: wo_hi,
+                    world_origin_low: wo_lo,
                     angle_offset: h.angle_offset,
                     scale: h.scale.max(1e-6),
                     grad_cos,
@@ -280,6 +294,8 @@ impl HatchBatchedGpu {
                     family_count,
                     draw_depth: h.draw_depth,
                     _pad0: 0,
+                    _pad1: 0,
+                    _pad2: 0,
                 });
                 continue;
             }
@@ -300,11 +316,13 @@ impl HatchBatchedGpu {
             };
             let pad = (diag * 0.8 + max_spacing * 2.0 * h.scale).max(1.0);
 
+            let (wo_hi, wo_lo) = split_origin_ds(h.world_origin);
             instances.push(HatchInstance {
                 color: h.color,
                 color2,
                 aabb: [min_x - pad, min_y - pad, max_x + pad, max_y + pad],
-                world_origin: h.world_origin.map(|v| v as f32),
+                world_origin: wo_hi,
+                world_origin_low: wo_lo,
                 angle_offset: h.angle_offset,
                 scale: h.scale.max(1e-6),
                 grad_cos,
@@ -319,6 +337,8 @@ impl HatchBatchedGpu {
                 family_count,
                 draw_depth: h.draw_depth,
                 _pad0: 0,
+                _pad1: 0,
+                _pad2: 0,
             });
         }
 

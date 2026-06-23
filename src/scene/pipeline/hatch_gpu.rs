@@ -58,13 +58,15 @@ pub struct HatchUniformData {
     pub grad_sin: f32,       // 52: gradient direction sin
     pub grad_min: f32,       // 56: gradient proj_min
     pub grad_range: f32,     // 60: gradient proj_range
-    pub origin: [f32; 2],    // 64: hatch-local origin (boundary AABB centre).
+    pub origin: [f32; 2],    // 64: hatch-local origin (boundary AABB centre),
+    //                       //     high half of the double-single anchor.
     //                       //     The pattern fragment shader subtracts this
     //                       //     from xz before the perp/perp_step quotient
     //                       //     so f32 doesn't catastrophically cancel when
     //                       //     world coords are large and pattern spacing
     //                       //     is small (e.g. UTM drawing + sub-mm hatch).
-    pub _pad: [f32; 2],      // 72: 16-byte alignment
+    pub origin_low: [f32; 2], // 72: anchor low residual (double-single) so the
+    //                        //     vertex clip position stays precise at UTM scale.
 } // total 80 bytes
 
 /// Boundary polygon (binding 1).  Matches WGSL `Boundary`.
@@ -288,7 +290,10 @@ impl HatchGpu {
             grad_min,
             grad_range,
             origin: [origin[0] as f32, origin[1] as f32],
-            _pad: [0.0; 2],
+            origin_low: [
+                (origin[0] - origin[0] as f32 as f64) as f32,
+                (origin[1] - origin[1] as f32 as f64) as f32,
+            ],
         };
 
         // ── BoundaryData (in snapped-local space) ────────────────────────

@@ -53,7 +53,7 @@ struct HatchUniforms {
     //                        //     `xz - origin` so the f32 modulo doesn't
     //                        //     catastrophically cancel when world coords
     //                        //     are large and pattern spacing is small.
-    _pad:         vec2<f32>,  // 72: 16-byte alignment
+    origin_low:   vec2<f32>,  // 72: anchor low residual (double-single)
 }
 @group(1) @binding(0) var<uniform> h: HatchUniforms;
 
@@ -104,8 +104,15 @@ struct VOut {
     // jitter is invisible. The local-space `xz` we export to the
     // fragment shader stays at full f32 precision so the in_polygon /
     // pattern math doesn't catastrophically cancel.
-    let world = vec3<f32>(v.pos.x + h.origin.x, v.pos.y + h.origin.y, v.pos.z);
-    o.clip = u.view_rot * vec4<f32>((world - u.eye_high) - u.eye_low, 1.0);
+    // Double-single relative-to-eye: anchor high cancels eye_high (Sterbenz);
+    // boundary-local v.pos + anchor low + (−eye_low) carry the residual.
+    let hi = vec3<f32>(h.origin.x - u.eye_high.x,
+                       h.origin.y - u.eye_high.y,
+                       -u.eye_high.z);
+    let lo = vec3<f32>(v.pos.x + h.origin_low.x - u.eye_low.x,
+                       v.pos.y + h.origin_low.y - u.eye_low.y,
+                       v.pos.z - u.eye_low.z);
+    o.clip = u.view_rot * vec4<f32>(hi + lo, 1.0);
     o.xz   = vec2<f32>(v.pos.x, v.pos.y);
     return o;
 }
