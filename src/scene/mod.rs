@@ -448,18 +448,19 @@ fn world_offset_from_centers(
     // median-of-centroids ignores Ray/orphan/duplicate-block-defn outliers
     // that the header EXTMIN/EXTMAX (a min/max midpoint) bakes in. Header
     // is the fallback only when the entity scan found nothing.
+    // world_offset is being retired: geometry now reaches the GPU as absolute
+    // coordinates and the double-single relative-to-eye path keeps it precise
+    // even at UTM scale, so there's no longer a coarse origin to subtract.
+    // Always return a zero offset; only `local_extent_max` (camera/cull span)
+    // is still derived from the content.
+    let _ = (ecx, ecy, ecz);
     if entity_ok {
-        ([ecx, ecy, ecz], espan_max)
+        ([0.0; 3], espan_max)
     } else if header_ok {
-        let offset = [
-            (hmin.x + hmax.x) * 0.5,
-            (hmin.y + hmax.y) * 0.5,
-            (hmin.z + hmax.z) * 0.5,
-        ];
         let hw = ((hmax.x - hmin.x) * 0.5) as f32;
         let hh = ((hmax.y - hmin.y) * 0.5) as f32;
         let hz = ((hmax.z - hmin.z) * 0.5).max(1.0) as f32;
-        (offset, hw.max(hh).max(hz) * 10.0)
+        ([0.0; 3], hw.max(hh).max(hz) * 10.0)
     } else {
         ([0.0; 3], 1e9_f32)
     }
