@@ -435,7 +435,7 @@ impl OpenCADStudio {
         let wo = if is_paper {
             [0.0f64; 3]
         } else {
-            self.tabs[i].scene.world_offset
+            [0.0_f64; 3]
         };
         let (new_handle, new_grips) = {
             let selected = self.tabs[i].scene.selected_entities();
@@ -657,7 +657,7 @@ impl OpenCADStudio {
         // DXF coordinate. Skip for paper-space entities (they use sheet mm coords).
         let is_paper = self.tabs[i].scene.current_layout != "Model";
         if !is_paper {
-            let wo = self.tabs[i].scene.world_offset;
+            let wo = [0.0_f64; 3];
             if wo[0] != 0.0 || wo[1] != 0.0 || wo[2] != 0.0 {
                 let delta = acadrust::types::Vector3::new(wo[0], wo[1], wo[2]);
                 let t = acadrust::types::Transform::from_translation(delta);

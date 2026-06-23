@@ -144,7 +144,7 @@ impl OpenCADStudio {
                 (glam::Vec3::ZERO, (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z))
             } else {
                 let (o, ux, uy, uz) = tab.ucs_xform().axes();
-                let wo = tab.scene.world_offset;
+                let wo = [0.0_f64; 3];
                 let o_wire = glam::Vec3::new(
                     o.x - wo[0] as f32,
                     o.y - wo[1] as f32,
@@ -901,7 +901,7 @@ impl OpenCADStudio {
                     let cursor_coord = {
                         let lc = tab.last_cursor_world;
                         if is_model {
-                            let wo = tab.scene.world_offset;
+                            let wo = [0.0_f64; 3];
                             let wcs = glam::Vec3::new(
                                 lc.x + wo[0] as f32,
                                 lc.y + wo[1] as f32,

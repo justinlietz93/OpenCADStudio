@@ -395,7 +395,7 @@ impl super::OpenCADStudio {
         let Some(ed) = self.mtext_editor.as_ref() else { return };
         let mt = ed.build_mtext();
         let entity = EntityType::MText(mt.clone());
-        let woff = self.tabs[i].scene.world_offset;
+        let woff = [0.0_f64; 3];
         let anno = self.tabs[i].scene.annotation_scale;
         let wires: Vec<WireModel> = tessellate::tessellate(
             &self.tabs[i].scene.document,

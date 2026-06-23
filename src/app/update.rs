@@ -633,7 +633,6 @@ impl OpenCADStudio {
                 ));
 
                 // Caches were built on the background thread inside open_path().
-                self.tabs[i].scene.world_offset = caches.world_offset;
                 self.tabs[i].scene.local_extent_max = caches.local_extent_max;
                 self.tabs[i].scene.hatches = caches.hatches;
                 self.tabs[i].scene.images = caches.images;
@@ -2678,7 +2677,7 @@ impl OpenCADStudio {
                     // Paper-space entities use sheet coordinates (no world_offset).
                     // Only add world_offset when converting local → DXF space in model space.
                     let wo_vec = if self.tabs[i].scene.current_layout == "Model" {
-                        let wo = self.tabs[i].scene.world_offset;
+                        let wo = [0.0_f64; 3];
                         glam::Vec3::new(wo[0] as f32, wo[1] as f32, wo[2] as f32)
                     } else {
                         glam::Vec3::ZERO
@@ -2930,7 +2929,7 @@ impl OpenCADStudio {
                     // offset-relative frame the renderer expects (model space
                     // only; paper-space entities use sheet coordinates).
                     let wo_local = if self.tabs[i].scene.current_layout == "Model" {
-                        self.tabs[i].scene.world_offset
+                        [0.0_f64; 3]
                     } else {
                         [0.0; 3]
                     };
@@ -3526,7 +3525,7 @@ impl OpenCADStudio {
                     // TRIM/EXTEND/FILLET pick the wrong side on UTM-scale files.
                     let pick_wcs = {
                         let wo = if self.tabs[i].scene.current_layout == "Model" {
-                            self.tabs[i].scene.world_offset
+                            [0.0_f64; 3]
                         } else {
                             [0.0; 3]
                         };

@@ -610,7 +610,7 @@ impl OpenCADStudio {
                     // paste lands at the cursor instead of drifting by the
                     // offset gap. Zero for a same-drawing paste. (#135)
                     let src_wo = self.clipboard_world_offset;
-                    let tgt_wo = self.tabs[i].scene.world_offset;
+                    let tgt_wo = [0.0_f64; 3];
                     let wo_corr = glam::Vec3::new(
                         (tgt_wo[0] - src_wo[0]) as f32,
                         (tgt_wo[1] - src_wo[1]) as f32,
@@ -1262,7 +1262,7 @@ impl OpenCADStudio {
                 let entity_opt = self.tabs[i].scene.document.get_entity(handle).cloned();
                 if let Some(entity) = entity_opt {
                     let truck_entity = entity.to_truck_entity(&self.tabs[i].scene.document);
-                    let woff = self.tabs[i].scene.world_offset;
+                    let woff = [0.0_f64; 3];
                     let result = truck_entity.and_then(|te| {
                         match te.object {
                             TruckObject::Contour(wire) => {
@@ -1330,7 +1330,7 @@ impl OpenCADStudio {
                 let entity_opt = self.tabs[i].scene.document.get_entity(handle).cloned();
                 if let Some(entity) = entity_opt {
                     let truck_entity = entity.to_truck_entity(&self.tabs[i].scene.document);
-                    let woff = self.tabs[i].scene.world_offset;
+                    let woff = [0.0_f64; 3];
                     let result = truck_entity.and_then(|te| {
                         let wire: Option<truck_modeling::Wire> = match te.object {
                             TruckObject::Contour(w) => Some(w),
@@ -1410,7 +1410,7 @@ impl OpenCADStudio {
                     .get_entity(profile_handle)
                     .cloned();
                 let path_ent = self.tabs[i].scene.document.get_entity(path_handle).cloned();
-                let woff = self.tabs[i].scene.world_offset;
+                let woff = [0.0_f64; 3];
 
                 let result = profile_ent.zip(path_ent).and_then(|(prof_e, path_e)| {
                     let prof_truck = prof_e.to_truck_entity(&self.tabs[i].scene.document)?;
@@ -1577,7 +1577,7 @@ impl OpenCADStudio {
                     }
                 }
 
-                let woff = self.tabs[i].scene.world_offset;
+                let woff = [0.0_f64; 3];
                 let result: Option<crate::scene::model::mesh_model::MeshModel> = (|| {
                     if wires.len() < 2 {
                         return None;

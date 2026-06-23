@@ -540,7 +540,7 @@ impl OpenCADStudio {
                     self.clipboard_centroid = super::helpers::entities_centroid(
                         &self.tabs[i].scene.wire_models_for(&handles),
                     );
-                    self.clipboard_world_offset = self.tabs[i].scene.world_offset;
+                    self.clipboard_world_offset = [0.0_f64; 3];
                     self.clipboard = entities;
                     self.clipboard_deps = super::ClipboardDeps::capture(
                         &self.tabs[i].scene.document,
@@ -573,7 +573,7 @@ impl OpenCADStudio {
                     self.clipboard_centroid = super::helpers::entities_centroid(
                         &self.tabs[i].scene.wire_models_for(&handles),
                     );
-                    self.clipboard_world_offset = self.tabs[i].scene.world_offset;
+                    self.clipboard_world_offset = [0.0_f64; 3];
                     let count = entities.len();
                     self.clipboard = entities;
                     self.clipboard_deps = super::ClipboardDeps::capture(
@@ -601,7 +601,7 @@ impl OpenCADStudio {
                     // so the ghost tracks the cursor instead of drifting by the
                     // offset gap. Zero within one drawing. (#135)
                     let src_wo = self.clipboard_world_offset;
-                    let tgt_wo = self.tabs[i].scene.world_offset;
+                    let tgt_wo = [0.0_f64; 3];
                     let centroid = self.clipboard_centroid
                         + glam::Vec3::new(
                             (src_wo[0] - tgt_wo[0]) as f32,

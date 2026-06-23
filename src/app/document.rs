@@ -203,7 +203,7 @@ impl DocumentTab {
             return glam::Mat4::IDENTITY;
         }
         let (o, x, y, z) = self.ucs_xform().axes();
-        let wo = self.scene.world_offset;
+        let wo = [0.0_f64; 3];
         let origin = glam::Vec3::new(
             o.x - wo[0] as f32,
             o.y - wo[1] as f32,
@@ -236,7 +236,7 @@ impl DocumentTab {
         }
         let xf = self.ucs_xform();
         let (o, ..) = xf.axes();
-        let wo = self.scene.world_offset;
+        let wo = [0.0_f64; 3];
         let origin = glam::Vec3::new(
             o.x - wo[0] as f32,
             o.y - wo[1] as f32,

@@ -92,7 +92,6 @@ pub fn vp_effective_scale(custom_scale: f64, view_height: f64, vp_height: f64) -
 /// Produced in the file-load background task so the UI thread only assigns.
 #[derive(Debug, Clone)]
 pub struct DerivedCaches {
-    pub world_offset: [f64; 3],
     pub local_extent_max: f32,
     pub hatches: HashMap<Handle, HatchModel>,
     pub images: HashMap<Handle, ImageModel>,
@@ -184,7 +183,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             centers.push(c);
         }
     }
-    let (world_offset, local_extent_max) = world_offset_from_centers(centers, &doc.header);
+    let (_world_offset, local_extent_max) = world_offset_from_centers(centers, &doc.header);
 
     // Default bg adaptation target at load: the model background (paper
     // bg is only relevant after the user enters a paper layout, and
@@ -199,7 +198,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             let e = doc.get_entity(handle)?;
             let owner = e.common().owner_handle;
             let offset = if owner == model_block {
-                world_offset
+                [0.0_f64; 3]
             } else {
                 [0.0; 3]
             };
@@ -219,7 +218,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
         .par_iter()
         .filter_map(|&handle| {
             if let EntityType::RasterImage(img) = doc.get_entity(handle)? {
-                ImageModel::from_raster_image(img, world_offset).map(|m| (handle, m))
+                ImageModel::from_raster_image(img, [0.0_f64; 3]).map(|m| (handle, m))
             } else {
                 None
             }
@@ -252,7 +251,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             let color = view::render::adapt_to_bg(raw, LOAD_BG);
             let top_level = layout_blocks.contains(&e.common().owner_handle);
             crate::entities::solid3d::tessellate_volume(e, color, facet_res).map(|m| {
-                let m = if top_level { offset_mesh_lod_set(m, world_offset) } else { m };
+                let m = if top_level { offset_mesh_lod_set(m, [0.0_f64; 3]) } else { m };
                 (handle, m, top_level)
             })
         })
@@ -268,7 +267,6 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     }
 
     DerivedCaches {
-        world_offset,
         local_extent_max,
         hatches,
         images,
@@ -861,9 +859,6 @@ pub struct Scene {
     pub bg_color: [f32; 4],
     /// Custom paper-space background fill color for Wipeout entities.
     pub paper_bg_color: [f32; 4],
-    /// Scene centroid subtracted from all coordinates before f32 conversion.
-    /// Eliminates f32 precision loss at large world coordinates (e.g. UTM 4,000,000 m).
-    pub world_offset: [f64; 3],
     /// Largest local-space coordinate expected from real geometry, derived from
     /// EXTMIN/EXTMAX (10× safety margin). Used by fit_all() to ignore garbage
     /// entity coordinates (origin-stuck entities, bad Ray/XLine direction vectors).
@@ -994,7 +989,6 @@ impl Scene {
             active_viewport: None,
             bg_color: [0.11, 0.11, 0.11, 1.0],
             paper_bg_color: [1.0, 1.0, 1.0, 1.0],
-            world_offset: [0.0; 3],
             local_extent_max: 1e9,
             annotation_scale: 1.0,
             model_extents_cache: RefCell::new(None),
@@ -2324,7 +2318,7 @@ impl Scene {
         if self.block_meshes.is_empty() {
             return Vec::new();
         }
-        let woff = self.world_offset;
+        let woff = [0.0_f64; 3];
         let mut out = Vec::new();
         for e in self.document.entities() {
             if e.common().owner_handle != layout_block {
@@ -2432,7 +2426,7 @@ impl Scene {
     pub fn insert_hatches_for_click(&self) -> Vec<(Handle, HatchModel)> {
         let layout_block = self.current_layout_block_handle();
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -2580,7 +2574,7 @@ impl Scene {
         let mut block_owned: Vec<(Handle, crate::scene::model::mesh_model::MeshModel)> = Vec::new();
         if !self.block_meshes.is_empty() {
             let layout_block = self.current_layout_block_handle();
-            let woff = self.world_offset;
+            let woff = [0.0_f64; 3];
             for e in self.document.entities() {
                 if e.common().owner_handle != layout_block {
                     continue;
@@ -2622,7 +2616,7 @@ impl Scene {
             return Vec::new();
         }
         let layout_block = self.current_layout_block_handle();
-        let woff = self.world_offset;
+        let woff = [0.0_f64; 3];
         let mut out = Vec::new();
         for e in self.document.entities() {
             if e.common().owner_handle != layout_block {
@@ -2666,7 +2660,7 @@ impl Scene {
             return Vec::new();
         }
         let layout_block = self.current_layout_block_handle();
-        let woff = self.world_offset;
+        let woff = [0.0_f64; 3];
         let mut out = Vec::new();
         for e in self.document.entities() {
             if e.common().owner_handle != layout_block {
@@ -2797,7 +2791,7 @@ impl Scene {
         // Paper space and the first-frame "settle" path fall back to the
         // full doc scan — preserving prior behaviour.
         let visible: Vec<&EntityType> = if let Some(local_view) = view_aabb {
-            let [ox, oy, _] = self.world_offset;
+            let [ox, oy, _] = [0.0_f64; 3];
             let view_wcs: [f64; 4] = [
                 local_view[0] as f64 + ox,
                 local_view[1] as f64 + oy,
@@ -2859,7 +2853,7 @@ impl Scene {
         // Decide based on the block being tessellated, not the layout.
         let is_model_block = block_handle == self.model_space_block_handle();
         let woff = if is_model_block {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -3165,7 +3159,7 @@ impl Scene {
             &self.document,
             &self.selected,
             self.active_viewport,
-            self.world_offset,
+            [0.0_f64; 3],
             bg,
             anno,
             e,
@@ -3219,7 +3213,7 @@ impl Scene {
         if model_block.is_null() {
             return None;
         }
-        let [ox, oy, _] = self.world_offset;
+        let [ox, oy, _] = [0.0_f64; 3];
         let mut min = glam::Vec3::splat(f32::INFINITY);
         let mut max = glam::Vec3::splat(f32::NEG_INFINITY);
         let mut any = false;
@@ -3261,7 +3255,7 @@ impl Scene {
         // offset-rel coords there silently double-subtracts world_offset
         // inside `camera_for_viewport` and points the viewport at the
         // wrong location on UTM-scale drawings.
-        let oz = self.world_offset[2] as f32;
+        let oz = [0.0_f64; 3][2] as f32;
         for entity in self.document.entities() {
             let c = entity.common();
             if c.owner_handle != model_block || c.invisible {
@@ -3466,9 +3460,9 @@ impl Scene {
             // already folded view_center through the (twisted) view basis and
             // applied the empty-WCS auto-fit, so taking its target keeps the CPU
             // projection identical to the GPU renderer under any twist.
-            let display_center_x = cam_frame.target.x as f64 + self.world_offset[0];
-            let display_center_y = cam_frame.target.y as f64 + self.world_offset[1];
-            let display_center_z = cam_frame.target.z as f64 + self.world_offset[2];
+            let display_center_x = cam_frame.target.x as f64 + [0.0_f64; 3][0];
+            let display_center_y = cam_frame.target.y as f64 + [0.0_f64; 3][1];
+            let display_center_z = cam_frame.target.z as f64 + [0.0_f64; 3][2];
             let view_right_d = (
                 view_right.x as f64,
                 view_right.y as f64,
@@ -3481,7 +3475,7 @@ impl Scene {
             let scale_d = scale as f64;
             let pcx_d = pcx as f64;
             let pcy_d = pcy as f64;
-            let [wo_x, wo_y, wo_z] = self.world_offset;
+            let [wo_x, wo_y, wo_z] = [0.0_f64; 3];
 
             for wire in model_wires.iter() {
                 let projected_pts: Vec<[f32; 3]> = wire
@@ -4015,7 +4009,7 @@ impl Scene {
             EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
         );
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -4029,7 +4023,7 @@ impl Scene {
             None
         };
         let image_seed = if let EntityType::RasterImage(img) = &entity {
-            ImageModel::from_raster_image(img, self.world_offset)
+            ImageModel::from_raster_image(img, [0.0_f64; 3])
         } else {
             None
         };
@@ -4039,7 +4033,7 @@ impl Scene {
             EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_)
         ) {
             let color = self.render_style(&entity).0;
-            let woff = self.world_offset;
+            let woff = [0.0_f64; 3];
             crate::entities::solid3d::tessellate_volume(&entity, color, facet_res)
                 .map(|m| offset_mesh_lod_set(m, woff))
         } else {
@@ -4307,7 +4301,7 @@ impl Scene {
     fn synced_hatch_models(&self) -> Vec<HatchModel> {
         let layout_block = self.current_layout_block_handle();
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -4547,7 +4541,7 @@ impl Scene {
             // viewports still see model-block wipeouts at the right local
             // coordinates (same rationale as hatches).
             let world_offset = if wo.common.owner_handle == model_block {
-                self.world_offset
+                [0.0_f64; 3]
             } else {
                 [0.0; 3]
             };
@@ -4990,7 +4984,7 @@ impl Scene {
             })
             .collect();
         for (handle, img) in entries {
-            if let Some(model) = ImageModel::from_raster_image(&img, self.world_offset) {
+            if let Some(model) = ImageModel::from_raster_image(&img, [0.0_f64; 3]) {
                 self.images.insert(handle, model);
             }
         }
@@ -5001,7 +4995,7 @@ impl Scene {
         self.hatches.clear();
 
         let model_block = self.model_space_block_handle();
-        let world_offset = self.world_offset;
+        let world_offset = [0.0_f64; 3];
 
         let entries: Vec<(Handle, EntityType)> = self
             .document
@@ -5084,7 +5078,7 @@ impl Scene {
 
         use crate::par::prelude::*;
         let facet_res = self.document.header.facet_resolution;
-        let woff = self.world_offset;
+        let woff = [0.0_f64; 3];
         // Top-level solids: offset into the render frame, drawn flat.
         // Block-definition solids: keep block-local coords for per-INSERT
         // instancing (no offset applied here).
@@ -5163,7 +5157,7 @@ impl Scene {
         // offset back — otherwise the boundary wire, re-projected through the
         // normal entity path, lands `world_offset` away from the fill.
         let off = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -5705,7 +5699,7 @@ impl Scene {
 
     pub fn transform_entities(&mut self, handles: &[Handle], t: &EntityTransform) {
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -5855,7 +5849,7 @@ impl Scene {
 
     pub fn copy_entities(&mut self, handles: &[Handle], t: &EntityTransform) -> Vec<Handle> {
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -5938,7 +5932,7 @@ impl Scene {
 
         // Rebuild GPU hatch/solid model when a boundary vertex or corner moves.
         let hatch_offset = if self.current_layout == "Model" {
-            self.world_offset
+            [0.0_f64; 3]
         } else {
             [0.0; 3]
         };
@@ -6068,7 +6062,7 @@ impl Scene {
         view: &acadrust::tables::View,
         model_space: bool,
     ) -> bool {
-        let offset = if model_space { self.world_offset } else { [0.0; 3] };
+        let offset = if model_space { [0.0_f64; 3] } else { [0.0; 3] };
         let Some(cam) = self.camera_from_view(
             view.direction,
             view.target,
@@ -6142,7 +6136,7 @@ impl Scene {
         view_height: f64,
         twist: f64,
         // Subtracted from `view_target` to reach wire-space. Model views pass
-        // `self.world_offset`; paper-space views (whose entities carry no
+        // `[0.0_f64; 3]`; paper-space views (whose entities carry no
         // offset) pass `[0; 3]`.
         world_offset: [f64; 3],
     ) -> Option<Camera> {
@@ -6203,7 +6197,7 @@ impl Scene {
             vp.view_center,
             vp.view_height,
             vp.view_twist,
-            self.world_offset,
+            [0.0_f64; 3],
         )
     }
 
@@ -6220,9 +6214,9 @@ impl Scene {
         let view_dir = cam.rotation * glam::Vec3::Z;
         let view_height = cam.ortho_size() * 2.0;
         let target_wcs = acadrust::types::Vector3 {
-            x: (cam.target.x as f64) + self.world_offset[0],
-            y: (cam.target.y as f64) + self.world_offset[1],
-            z: (cam.target.z as f64) + self.world_offset[2],
+            x: (cam.target.x as f64) + [0.0_f64; 3][0],
+            y: (cam.target.y as f64) + [0.0_f64; 3][1],
+            z: (cam.target.z as f64) + [0.0_f64; 3][2],
         };
         let mut entry = acadrust::tables::VPort::new(name);
         entry.lower_left = lower_left;
@@ -6491,9 +6485,9 @@ impl Scene {
 
         if self.current_layout == "Model" {
             let target_wcs = acadrust::types::Vector3 {
-                x: (cam.target.x as f64) + self.world_offset[0],
-                y: (cam.target.y as f64) + self.world_offset[1],
-                z: (cam.target.z as f64) + self.world_offset[2],
+                x: (cam.target.x as f64) + [0.0_f64; 3][0],
+                y: (cam.target.y as f64) + [0.0_f64; 3][1],
+                z: (cam.target.z as f64) + [0.0_f64; 3][2],
             };
 
             // Write back to the *Active VPort entry (may be overridden by DWG writer).
@@ -7551,7 +7545,7 @@ impl Scene {
             },
             saved_h,
             vp.twist_angle,
-            self.world_offset,
+            [0.0_f64; 3],
         ) {
             let half_h = saved_h * 0.5;
             let half_w = half_h * aspect_d;
@@ -7568,8 +7562,8 @@ impl Scene {
         // Auto-fit: aim at the content cluster, drop the stale view_center.
         let fit_h = cluster_half * 2.0 * 1.05;
         let tgt = acadrust::types::Vector3 {
-            x: self.world_offset[0],
-            y: self.world_offset[1],
+            x: [0.0_f64; 3][0],
+            y: [0.0_f64; 3][1],
             z: vp.view_target.z,
         };
         self.camera_from_view(
@@ -7578,7 +7572,7 @@ impl Scene {
             acadrust::types::Vector2::ZERO,
             fit_h,
             vp.twist_angle,
-            self.world_offset,
+            [0.0_f64; 3],
         )
     }
 
