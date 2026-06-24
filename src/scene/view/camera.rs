@@ -93,8 +93,6 @@ impl Camera {
     // ── Projection matrices ────────────────────────────────────────────────
 
     pub fn view_proj(&self, bounds: Rectangle) -> Mat4 {
-        let near = self.distance * 0.001;
-        let far = self.distance * 1000.0;
         let aspect = bounds.width / bounds.height;
 
         // Up vector: use the rotation to find which world direction is "up"
@@ -103,14 +101,31 @@ impl Camera {
 
         let view = Mat4::look_at_rh(self.eye(), self.target.as_vec3(), up_dir);
         let proj = match self.projection {
-            Projection::Perspective => Mat4::perspective_rh(self.fov_y, aspect, near, far),
+            Projection::Perspective => {
+                Mat4::perspective_rh(self.fov_y, aspect, self.distance * 0.001, self.distance * 1000.0)
+            }
             Projection::Orthographic => {
                 let h = self.ortho_size();
                 let w = h * aspect;
+                let (near, far) = self.ortho_depth_range();
                 Mat4::orthographic_rh(-w, w, -h, h, near, far)
             }
         };
         OPENGL_TO_WGPU * proj * view
+    }
+
+    /// Orthographic near/far that CENTRE the target plane at ndc-z ≈ 0.5.
+    ///
+    /// The draw-order depth bias shifts clip-z by ±`DRAW_ORDER_BIAS` (0.001).
+    /// The old range (`near = distance*0.001`, `far = distance*1000`) parked the
+    /// geometry at ndc-z ≈ 0.001 — right on the near plane — so a front-biased
+    /// entity landed exactly at z = 0 and got clipped the moment f32 rounding
+    /// (worse at high zoom) tipped it past the plane, making the drawing vanish.
+    /// A symmetric range gives the bias half the depth buffer of headroom on
+    /// each side; ortho permits a negative near.
+    fn ortho_depth_range(&self) -> (f32, f32) {
+        let r = (self.distance * 1000.0).max(1.0);
+        (self.distance - r, self.distance + r)
     }
 
     /// Relative-to-eye view-projection: identical projection, but the view
@@ -119,8 +134,6 @@ impl Camera {
     /// double-single precision in the shader), so the large eye translation
     /// never enters the f32 matrix and large-coordinate jitter disappears.
     pub fn view_proj_rte(&self, bounds: Rectangle) -> Mat4 {
-        let near = self.distance * 0.001;
-        let far = self.distance * 1000.0;
         let aspect = bounds.width / bounds.height;
         let up_dir = self.rotation * Vec3::Y;
 
@@ -129,10 +142,13 @@ impl Camera {
         view.w_axis = glam::vec4(0.0, 0.0, 0.0, 1.0);
 
         let proj = match self.projection {
-            Projection::Perspective => Mat4::perspective_rh(self.fov_y, aspect, near, far),
+            Projection::Perspective => {
+                Mat4::perspective_rh(self.fov_y, aspect, self.distance * 0.001, self.distance * 1000.0)
+            }
             Projection::Orthographic => {
                 let h = self.ortho_size();
                 let w = h * aspect;
+                let (near, far) = self.ortho_depth_range();
                 Mat4::orthographic_rh(-w, w, -h, h, near, far)
             }
         };
