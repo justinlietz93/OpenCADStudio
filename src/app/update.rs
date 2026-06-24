@@ -4,7 +4,7 @@ use super::helpers::{
 };
 use super::{Message, OpenCADStudio, POLY_START_DELAY_MS};
 use crate::modules::ModuleEvent;
-use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, GripEdit};
+use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
 use crate::scene::model::object::GripApply;
 use crate::scene::{
     self, hover_id, Scene, TileEdgeOrient, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
@@ -360,21 +360,21 @@ impl OpenCADStudio {
     /// model tile so a save writes them to that viewport's VPort entry (#121).
     fn sync_vport_display(&mut self, i: usize) {
         let grid_on = self.show_grid;
-        let snap_on = self.snapper.is_on(crate::snap::SnapType::Grid);
+        let snap_on = self.snapper.grid_snap();
         self.tabs[i].scene.set_active_tile_grid_snap(grid_on, snap_on);
     }
 
-    /// Adopt the active viewport's grid display + grid-snap into the live
-    /// toggles. Called on load and whenever the active tab or viewport changes,
-    /// so grid/snap follow the active viewport rather than a global setting.
+    /// Adopt the active viewport's grid *display* into the live toggle. Called
+    /// on load and whenever the active tab or viewport changes, so the grid
+    /// drawing follows the active viewport.
+    ///
+    /// Grid *snap* (`SnapType::Grid`) is deliberately NOT adopted here: it stays
+    /// off by default everywhere and is controlled solely by the user's snap
+    /// toggle, so it never silently leaks into object-snap when entering a
+    /// viewport whose stored `snap_on` flag happens to be set.
     fn adopt_view_display(&mut self, i: usize) {
-        if let Some((grid_on, snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
+        if let Some((grid_on, _snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
             self.show_grid = grid_on;
-            if snap_on {
-                self.snapper.enabled.insert(crate::snap::SnapType::Grid);
-            } else {
-                self.snapper.enabled.remove(&crate::snap::SnapType::Grid);
-            }
         }
     }
 
@@ -2598,9 +2598,20 @@ impl OpenCADStudio {
                 // the active pane. `p_full` keeps the canvas-space cursor
                 // for screen overlays (cursor marker, snap glyph).
                 let p_full = p;
-                let tile_b = self.tabs[i]
-                    .scene
-                    .active_model_tile_bounds(vp_size.0, vp_size.1);
+                // Inside a floating viewport (MSPACE) the active "pane" is the
+                // viewport's own screen rectangle and its own camera — the very
+                // camera the GPU draws the content with. Routing picking / snap
+                // / projection through it makes in-viewport editing behave like
+                // the main model view (model coords, no paper round-trip) and
+                // track the viewport's pan / zoom / twist exactly.
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame(vp_size);
+                let tile_b = match &edit_frame {
+                    Some((_, full)) => *full,
+                    None => self.tabs[i]
+                        .scene
+                        .active_model_tile_bounds(vp_size.0, vp_size.1),
+                };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
                 let p = iced::Point {
                     x: p_full.x - tile_b.x,
                     y: p_full.y - tile_b.y,
@@ -2616,11 +2627,28 @@ impl OpenCADStudio {
                         width: vw,
                         height: vh,
                     };
-                    let cam = self.tabs[i].scene.camera.borrow();
-                    let raw_paper = cam.pick_on_target_plane(p, bounds);
-                    let view_rot = cam.view_proj_rte(bounds); let eye = cam.eye_f64();
-                    drop(cam);
-                    let raw = self.tabs[i].scene.paper_to_model(raw_paper);
+                    // In a viewport, pick the cursor's model point with the
+                    // viewport camera directly; otherwise project on the paper
+                    // sheet and map to model. Either way `raw` is model space.
+                    let raw = match &edit_cam {
+                        Some(cam) => cam.pick_on_target_plane(p, bounds),
+                        None => {
+                            let paper = self
+                                .tabs[i]
+                                .scene
+                                .camera
+                                .borrow()
+                                .pick_on_target_plane(p, bounds);
+                            self.tabs[i].scene.paper_to_model(paper)
+                        }
+                    };
+                    let (view_rot, eye) = match &edit_cam {
+                        Some(cam) => (cam.view_proj_rte(bounds), cam.eye_f64()),
+                        None => {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            (cam.view_proj_rte(bounds), cam.eye_f64())
+                        }
+                    };
 
                     // First move of this drag: hide the edited entity from the
                     // base tessellation (one re-tess) so subsequent moves only
@@ -2643,12 +2671,21 @@ impl OpenCADStudio {
                     // The edited entity is hidden, so it's already absent from
                     // `hit_test_wires` — snap against the set directly, no clone
                     // and no self-snap.
-                    let all_wires = self.tabs[i].scene.hit_test_wires();
+                    let all_wires = if let (Some(_), Some(h)) =
+                        (&edit_cam, self.tabs[i].scene.active_viewport)
+                    {
+                        self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
+                    } else {
+                        self.tabs[i].scene.hit_test_wires()
+                    };
                     // Grip drag has no single rubber-band origin for a perp foot.
                     self.snapper.from_point = None;
                     let (go, gr) = self.tabs[i].ucs_grid_basis();
-                    let snap_hit =
-                        self.snapper.snap(raw, p, &all_wires[..], view_rot, eye, bounds, go, gr);
+                    // `raw` is already model space (viewport camera or paper→model),
+                    // and the wires are model space, so the snap result is model.
+                    let snap_hit = self
+                        .snapper
+                        .snap(raw, p, &all_wires[..], view_rot, eye, bounds, go, gr);
                     let mut snapped = snap_hit.map(|s| s.world).unwrap_or(raw);
                     self.tabs[i].snap_result = snap_hit;
                     if let Some(s) = self.tabs[i].snap_result.as_mut() {
@@ -2713,22 +2750,7 @@ impl OpenCADStudio {
                         width: vp_size.0,
                         height: vp_size.1,
                     };
-                    let paper = if let Some(ref ucs) = self.tabs[i].active_ucs {
-                        let origin = glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z);
-                        let normal = ucs_z_axis(ucs);
-                        self.tabs[i]
-                            .scene
-                            .camera
-                            .borrow()
-                            .pick_on_plane(p, bounds, normal, origin)
-                    } else {
-                        self.tabs[i]
-                            .scene
-                            .camera
-                            .borrow()
-                            .pick_on_target_plane(p, bounds)
-                    };
-                    let world = self.tabs[i].scene.paper_to_model(paper);
+                    let world = self.cursor_model_point(i, &edit_cam, p, bounds);
                     self.tabs[i].last_cursor_world = world.as_vec3();
                 }
 
@@ -2761,43 +2783,31 @@ impl OpenCADStudio {
                         width: vw,
                         height: vh,
                     };
-                    let cursor_paper = if let Some(ref ucs) = self.tabs[i].active_ucs {
-                        let origin = glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z);
-                        let normal = ucs_z_axis(ucs);
-                        self.tabs[i]
-                            .scene
-                            .camera
-                            .borrow()
-                            .pick_on_plane(p, bounds, normal, origin)
-                    } else {
-                        self.tabs[i]
-                            .scene
-                            .camera
-                            .borrow()
-                            .pick_on_target_plane(p, bounds)
-                    };
-                    let (view_rot, eye) = {
-                        let cam = self.tabs[i].scene.camera.borrow();
-                        (cam.view_proj_rte(bounds), cam.eye_f64())
+                    // Inside a floating viewport the cursor, camera and wires are
+                    // all model-space (the viewport's own camera draws the
+                    // content), so snap / hit-test / preview run exactly like the
+                    // main model view — no paper projection, tracks pan/zoom/twist.
+                    let cursor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                    let (view_rot, eye) = match &edit_cam {
+                        Some(cam) => (cam.view_proj_rte(bounds), cam.eye_f64()),
+                        None => {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            (cam.view_proj_rte(bounds), cam.eye_f64())
+                        }
                     };
                     // Sync grid-snap spacing to the adaptive spacing of the visible grid.
                     self.snapper.grid_spacing =
                         crate::ui::overlay::compute_grid_step(view_rot, bounds);
-                    // In MSPACE, map paper-space cursor to model space so that
-                    // command previews and snapping work in the correct coordinate space.
-                    let cursor_world = self.tabs[i].scene.paper_to_model(cursor_paper);
-                    // Inside a viewport the hit-test wires are projected into
-                    // PAPER coordinates, so snapping must compare against the
-                    // paper cursor — feeding the model-space (UTM) cursor would
-                    // make `wire_in_range` reject every wire and snap nothing.
-                    // The snapped paper point is mapped back to model below.
-                    let snap_cursor = if self.tabs[i].scene.active_viewport.is_some() {
-                        cursor_paper
-                    } else {
-                        cursor_world
-                    };
+                    // Cursor and wires are model-space; the snap result is model.
+                    let snap_cursor = cursor_world;
 
-                    let all_wires = self.tabs[i].scene.hit_test_wires();
+                    let all_wires = if let (Some(_), Some(h)) =
+                        (&edit_cam, self.tabs[i].scene.active_viewport)
+                    {
+                        self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
+                    } else {
+                        self.tabs[i].scene.hit_test_wires()
+                    };
                     let needs_entity = self.tabs[i]
                         .active_cmd
                         .as_ref()
@@ -2876,11 +2886,11 @@ impl OpenCADStudio {
                             // ortho/polar don't re-constrain it.
                             h.aligned.as_dvec3()
                         } else {
-                            // snap.world is paper-space for viewport-projected
-                            // wires; convert to model-space for previews.
+                            // Snap runs in model space (viewport camera or the
+                            // model/paper view), so the result is already model.
                             let mut pt = self.tabs[i]
                                 .snap_result
-                                .map(|s| self.tabs[i].scene.paper_to_model(s.world))
+                                .map(|s| s.world)
                                 .unwrap_or(cursor_world);
                             // Object snap wins over ortho/polar: a snapped point
                             // is taken as-is so it isn't pulled onto the ortho
@@ -2924,32 +2934,25 @@ impl OpenCADStudio {
                     // Project the step anchor (an explicit `dyn_anchor` or the
                     // last point) so the dynamic-input overlay can place its
                     // guide geometry and labels.
+                    // `proj` returns a pane-local pixel; shift by the active pane
+                    // origin (`tile_b`, the viewport rect inside a viewport) so
+                    // the DYN guide/labels share the canvas frame with
+                    // `last_cursor_screen` (= p_full, canvas space).
                     let proj = |bp: glam::Vec3| {
                         let ndc = view_rot.project_point3((bp.as_dvec3() - eye).as_vec3());
                         iced::Point::new(
-                            (ndc.x + 1.0) * 0.5 * bounds.width,
-                            (1.0 - ndc.y) * 0.5 * bounds.height,
+                            (ndc.x + 1.0) * 0.5 * bounds.width + tile_b.x,
+                            (1.0 - ndc.y) * 0.5 * bounds.height + tile_b.y,
                         )
                     };
-                    // Anchors are stored in model coords; inside a viewport they
-                    // must be mapped onto the paper sheet before projecting with
-                    // the paper camera — otherwise a UTM model point lands
-                    // millions of pixels away and the dynamic-input guide arc
-                    // (radius = anchor→cursor distance) tessellates into a buffer
-                    // big enough to abort the GPU. Compute into locals first to
-                    // release the scene borrow before assigning.
-                    let in_vp = self.tabs[i].scene.active_viewport.is_some();
+                    // Anchors are stored in model coords and `proj` (view_rot /
+                    // eye) is the model→screen view — the viewport camera inside
+                    // a viewport, the model/paper camera otherwise — so feed them
+                    // straight through; no paper mapping needed.
                     let anchor = self.tabs[i].dyn_anchor.or(self.last_point);
                     let dyn_ref = self.tabs[i].dyn_ref;
-                    let map_paper = |bp: glam::Vec3| -> glam::Vec3 {
-                        if in_vp {
-                            self.tabs[i].scene.model_to_paper(bp.as_dvec3()).as_vec3()
-                        } else {
-                            bp
-                        }
-                    };
-                    let lps = anchor.map(|a| proj(map_paper(a)));
-                    let drs = dyn_ref.map(|r| proj(map_paper(r)));
+                    let lps = anchor.map(|a| proj(a));
+                    let drs = dyn_ref.map(|r| proj(r));
                     self.tabs[i].last_point_screen = lps;
                     self.tabs[i].dyn_ref_screen = drs;
 
@@ -3276,7 +3279,14 @@ impl OpenCADStudio {
                 // cursor into it and use the tile's size for picking, so
                 // grip / selection hit-tests land in the right pane.
                 let p_full = p;
-                let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                // Inside a floating viewport the pane is the viewport's own rect
+                // + camera (matches the GPU); otherwise the active model tile.
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame((vw, vh));
+                let tile_b = match &edit_frame {
+                    Some((_, full)) => *full,
+                    None => self.tabs[i].scene.active_model_tile_bounds(vw, vh),
+                };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
                 let p = iced::Point {
                     x: p_full.x - tile_b.x,
                     y: p_full.y - tile_b.y,
@@ -3295,7 +3305,19 @@ impl OpenCADStudio {
                 {
                     if let Some(handle) = self.tabs[i].selected_handle {
                         let is_paper = self.tabs[i].scene.current_layout != "Model";
-                        let grip_hit = if is_paper {
+                        // In-viewport grips are model-space; project them with the
+                        // viewport camera so they hit-test where the GPU draws
+                        // them. Paper-space entities use the 2-D paper transform;
+                        // the model tab uses the model camera.
+                        let grip_hit = if let Some(cam) = &edit_cam {
+                            find_hit_grip_rte(
+                                p,
+                                &self.tabs[i].selected_grips,
+                                cam.view_proj_rte(bounds),
+                                cam.eye_f64(),
+                                bounds,
+                            )
+                        } else if is_paper {
                             let cam = self.tabs[i].scene.camera.borrow();
                             let aspect = if vh > 0.0 { vw / vh } else { 1.0 };
                             let half_h = cam.ortho_size();
@@ -3420,11 +3442,22 @@ impl OpenCADStudio {
                 // camera + bounds. `p_full` keeps the canvas point for the
                 // box/poly selection rectangle (drawn in canvas space).
                 let p_full = p;
-                let (tile_vw, tile_vh, tile_off) = {
-                    let (svw, svh) = self.tabs[i].scene.selection.borrow().vp_size;
-                    let tb = self.tabs[i].scene.active_model_tile_bounds(svw, svh);
-                    (tb.width, tb.height, iced::Point::new(tb.x, tb.y))
+                // Inside a floating viewport the pane is the viewport's own rect
+                // and camera (see the MoveCursor path); pick / snap then run in
+                // model space exactly where the GPU draws the content.
+                let canvas_sz = self.tabs[i].scene.selection.borrow().vp_size;
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame(canvas_sz);
+                let (tile_vw, tile_vh, tile_off) = match &edit_frame {
+                    Some((_, full)) => (full.width, full.height, iced::Point::new(full.x, full.y)),
+                    None => {
+                        let tb = self
+                            .tabs[i]
+                            .scene
+                            .active_model_tile_bounds(canvas_sz.0, canvas_sz.1);
+                        (tb.width, tb.height, iced::Point::new(tb.x, tb.y))
+                    }
                 };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
                 let p = iced::Point {
                     x: p_full.x - tile_off.x,
                     y: p_full.y - tile_off.y,
@@ -3449,35 +3482,24 @@ impl OpenCADStudio {
                     let tangent_obj_at_click = snap_taken.and_then(|s| s.tangent_obj);
 
                     let world_pt = {
-                        // Project screen point onto the active UCS XY plane (or world XY when
-                        // no UCS is active).
-                        let raw_paper = if let Some(ref ucs) = self.tabs[i].active_ucs {
-                            let origin = glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z);
-                            let normal = ucs_z_axis(ucs);
-                            self.tabs[i]
-                                .scene
-                                .camera
-                                .borrow()
-                                .pick_on_plane(p, bounds, normal, origin)
-                        } else {
-                            self.tabs[i]
-                                .scene
-                                .camera
-                                .borrow()
-                                .pick_on_target_plane(p, bounds)
+                        // Cursor → model point (viewport camera inside a viewport,
+                        // else paper sheet → model). Model space throughout.
+                        let raw = self.cursor_model_point(i, &edit_cam, p, bounds);
+                        let (view_rot, eye) = match &edit_cam {
+                            Some(cam) => (cam.view_proj_rte(bounds), cam.eye_f64()),
+                            None => {
+                                let c = self.tabs[i].scene.camera.borrow();
+                                (c.view_proj_rte(bounds), c.eye_f64())
+                            }
                         };
-                        // Convert paper-space → model-space when inside a viewport.
-                        let raw = self.tabs[i].scene.paper_to_model(raw_paper);
-                        // Inside a viewport snapping runs in paper coords (the
-                        // hit-test wires are paper-projected); the snapped paper
-                        // point is mapped back to model below.
-                        let snap_cursor = if self.tabs[i].scene.active_viewport.is_some() {
-                            raw_paper
+                        let snap_cursor = raw;
+                        let all_wires = if let (Some(_), Some(h)) =
+                            (&edit_cam, self.tabs[i].scene.active_viewport)
+                        {
+                            self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
                         } else {
-                            raw
+                            self.tabs[i].scene.hit_test_wires()
                         };
-                        let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
-                        let all_wires = self.tabs[i].scene.hit_test_wires();
                         let needs_tan = self.tabs[i]
                             .active_cmd
                             .as_ref()
@@ -3498,11 +3520,8 @@ impl OpenCADStudio {
                             self.snapper.from_point = self.last_point;
                             self.snapper.snap(snap_cursor, p, &all_wires[..], view_rot, eye, bounds, go, gr)
                         };
-                        // snap.world is in paper-space (projected wire coords in MSPACE);
-                        // convert to model-space so commands receive consistent coordinates.
-                        let mut pt = snap_hit
-                            .map(|s| self.tabs[i].scene.paper_to_model(s.world))
-                            .unwrap_or(raw);
+                        // Snap runs in model space; the result is already model.
+                        let mut pt = snap_hit.map(|s| s.world).unwrap_or(raw);
                         // When no UCS is active clamp to world XY; with a UCS the point is
                         // already constrained to that plane by the ray–plane intersection.
                         if self.tabs[i].active_ucs.is_none() {
@@ -3607,8 +3626,7 @@ impl OpenCADStudio {
                         .map(|c| c.needs_entity_pick())
                         .unwrap_or(false)
                     {
-                        let (view_rot2, eye2) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
-                        let all_wires2 = self.tabs[i].scene.hit_test_wires();
+                        let (view_rot2, eye2, all_wires2) = self.pick_view(i, &edit_cam, bounds);
                         let hit = scene::pick::hit_test::click_hit(p, &all_wires2[..], view_rot2, eye2, bounds)
                             .and_then(|s| Scene::handle_from_wire_name(s));
                         if let Some(handle) = hit {
@@ -3796,8 +3814,7 @@ impl OpenCADStudio {
                         if elapsed_ms < POLY_START_DELAY_MS {
                             if let Some(a) = box_anchor {
                                 let crossing = box_crossing;
-                                let all_wires = self.tabs[i].scene.hit_test_wires();
-                                let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
+                                let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                                 let mut handles: Vec<Handle> = scene::pick::hit_test::box_hit(
                                     a,
                                     p,
@@ -3857,8 +3874,7 @@ impl OpenCADStudio {
                                 (pts, sel.poly_crossing)
                             };
                             self.tabs[i].scene.selection.borrow_mut().poly_last_crossing = crossing;
-                            let all_wires = self.tabs[i].scene.hit_test_wires();
-                            let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
+                            let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                             let mut handles: Vec<Handle> = scene::pick::hit_test::poly_hit(
                                 &poly_pts,
                                 crossing,
@@ -3911,8 +3927,8 @@ impl OpenCADStudio {
                         sel.box_current = None;
                     } else {
                         if box_anchor.is_none() {
-                            let all_wires = self.tabs[i].scene.hit_test_wires();
-                            let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
+                            let (view_rot, eye, all_wires) =
+                                self.pick_view(i, &edit_cam, bounds);
 
                             // Selection cycling: where two or more objects
                             // overlap, open a list box to pick which one; a
@@ -4004,8 +4020,7 @@ impl OpenCADStudio {
                         } else {
                             let a = box_anchor.unwrap();
                             let crossing = box_crossing;
-                            let all_wires = self.tabs[i].scene.hit_test_wires();
-                            let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
+                            let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                             let mut handles: Vec<Handle> = scene::pick::hit_test::box_hit(
                                 a,
                                 p,
@@ -4463,8 +4478,16 @@ impl OpenCADStudio {
                     height: dwell.tile_size.1,
                 };
                 let p = dwell.point;
-                let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye_f64()) };
-                let all_wires = self.tabs[i].scene.hit_test_wires();
+                // Inside a viewport, hover-pick through the viewport camera +
+                // model wires so the rollover highlights the entity under the
+                // cursor (dwell.point / dwell.tile_size are already pane-local).
+                let canvas_sz = self.tabs[i].scene.selection.borrow().vp_size;
+                let edit_cam = self
+                    .tabs[i]
+                    .scene
+                    .viewport_edit_frame(canvas_sz)
+                    .map(|(cam, _)| cam);
+                let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
                 // Mirror the click-selection pick order so the rollover
                 // highlights every selectable object: wire → hatch →
                 // block-internal hatch → shaded 3D solid body.
@@ -4617,7 +4640,7 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::ToggleGridSnap => {
-                self.snapper.toggle(crate::snap::SnapType::Grid);
+                self.snapper.toggle_grid_snap();
                 self.sync_vport_display(self.active_tab);
                 Task::none()
             }
@@ -8287,6 +8310,70 @@ impl OpenCADStudio {
         self.tabs[i].scene.bump_geometry();
     }
 
+    /// Project a pane-local cursor onto the active drawing plane and return a
+    /// **model-space** point. Inside a floating viewport `edit_cam` is the
+    /// viewport's own camera (a target-plane / UCS pick there already yields
+    /// model coords); otherwise the paper camera projects onto the sheet and
+    /// the result is mapped paper→model. Used by the readout, snap and click
+    /// paths so all three agree on the cursor's model location.
+    fn cursor_model_point(
+        &self,
+        i: usize,
+        edit_cam: &Option<crate::scene::view::camera::Camera>,
+        p: iced::Point,
+        bounds: iced::Rectangle,
+    ) -> glam::DVec3 {
+        let plane = self.tabs[i].active_ucs.as_ref().map(|ucs| {
+            (
+                ucs_z_axis(ucs),
+                glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z),
+            )
+        });
+        let pick = |cam: &crate::scene::view::camera::Camera| match plane {
+            Some((normal, origin)) => cam.pick_on_plane(p, bounds, normal, origin),
+            None => cam.pick_on_target_plane(p, bounds),
+        };
+        match edit_cam {
+            Some(cam) => pick(cam),
+            None => {
+                let paper = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    pick(&c)
+                };
+                self.tabs[i].scene.paper_to_model(paper)
+            }
+        }
+    }
+
+    /// Projection + hit-test wires for the active pane. Inside a floating
+    /// viewport (`edit_cam` Some) it returns the viewport camera and the live
+    /// **model** wires, so wire / hatch picking lands on the entity under the
+    /// cursor exactly where the GPU draws it; otherwise the model/paper camera
+    /// and the normal hit-test wires. `bounds` is the pane-local rectangle.
+    fn pick_view(
+        &self,
+        i: usize,
+        edit_cam: &Option<crate::scene::view::camera::Camera>,
+        bounds: iced::Rectangle,
+    ) -> (glam::Mat4, glam::DVec3, std::sync::Arc<Vec<crate::scene::WireModel>>) {
+        match edit_cam {
+            Some(cam) => {
+                let wires = match self.tabs[i].scene.active_viewport {
+                    Some(h) => self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height),
+                    None => self.tabs[i].scene.hit_test_wires(),
+                };
+                (cam.view_proj_rte(bounds), cam.eye_f64(), wires)
+            }
+            None => {
+                let (view_rot, eye) = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    (c.view_proj_rte(bounds), c.eye_f64())
+                };
+                (view_rot, eye, self.tabs[i].scene.hit_test_wires())
+            }
+        }
+    }
+
     fn update_grip_hover(&mut self, i: usize, p: iced::Point) {
         const HOVER_OPEN_MS: u128 = 600;
         const POPUP_DISMISS_PX: f32 = 80.0;
@@ -8311,7 +8398,25 @@ impl OpenCADStudio {
             height: vh,
         };
         let is_paper = self.tabs[i].scene.current_layout != "Model";
-        let hit = if is_paper {
+        // In-viewport grips are model-space — project with the viewport camera
+        // at the viewport's own rect; the cursor is mapped into that rect.
+        let edit_frame = self.tabs[i].scene.viewport_edit_frame((vw, vh));
+        let hit = if let Some((cam, full)) = &edit_frame {
+            let local = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: full.width,
+                height: full.height,
+            };
+            let p_local = iced::Point::new(p.x - full.x, p.y - full.y);
+            find_hit_grip_rte(
+                p_local,
+                &self.tabs[i].selected_grips,
+                cam.view_proj_rte(local),
+                cam.eye_f64(),
+                local,
+            )
+        } else if is_paper {
             let cam = self.tabs[i].scene.camera.borrow();
             let aspect = if vh > 0.0 { vw / vh } else { 1.0 };
             let half_h = cam.ortho_size();

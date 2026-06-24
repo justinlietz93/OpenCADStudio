@@ -3677,10 +3677,10 @@ impl Scene {
 
     /// Inverse of [`paper_to_model`]: map a model-space point to the paper
     /// sheet through the active viewport. Returns the input unchanged when
-    /// there is no active viewport. Used to place overlays (dynamic-input
-    /// anchors, guides) that are stored in model coords while editing inside a
-    /// viewport — projecting the raw UTM model point with the paper camera puts
-    /// them millions of pixels away.
+    /// there is no active viewport. Kept as the inverse companion to
+    /// `paper_to_model`; in-viewport overlays now project via the viewport
+    /// camera ([`viewport_edit_frame`]) rather than mapping onto the sheet.
+    #[allow(dead_code)]
     pub fn model_to_paper(&self, model_pt: glam::DVec3) -> glam::DVec3 {
         let vp_handle = match self.active_viewport {
             Some(h) => h,
@@ -3696,6 +3696,33 @@ impl Scene {
             (model_pt.y - vp.view_target.y) * scale + vp.center.y,
             model_pt.z,
         )
+    }
+
+    /// In-viewport (MSPACE) editing frame: the active floating viewport's own
+    /// camera — *exactly* the one the GPU renders its content with
+    /// ([`camera_for_viewport`]) — together with the viewport's full screen
+    /// rectangle in canvas pixels ([`viewport_screen_rect`]).
+    ///
+    /// This is the unified editing adapter (the "süzgeç"). Inside a viewport,
+    /// editing IS model-space: treat the returned camera as *the* camera, the
+    /// returned rect as *the* pane, and the cursor relative to that rect — then
+    /// the existing model-space snap / hit-test / grip / preview / plane-pick
+    /// code runs unchanged and lands on the same pixels the GPU draws. Results
+    /// come back as model coordinates directly (no paper round-trip).
+    ///
+    /// Because the camera is the real GPU camera, this tracks the viewport's
+    /// pan / zoom / twist / oblique view correctly — unlike a linear
+    /// paper-projection, whose auto-fit / saved-view / crop divergence left the
+    /// snap stale after pan/zoom. Returns `None` when not editing inside a
+    /// floating viewport, or the camera / rect cannot be derived.
+    pub fn viewport_edit_frame(
+        &self,
+        canvas_px: (f32, f32),
+    ) -> Option<(view::camera::Camera, iced::Rectangle)> {
+        let vp_handle = self.active_viewport?;
+        let cam = self.camera_for_viewport(vp_handle)?;
+        let full = self.viewport_screen_rect(vp_handle, canvas_px)?;
+        Some((cam, full))
     }
 
     /// Fold the active viewport's saved view onto the effective camera (the

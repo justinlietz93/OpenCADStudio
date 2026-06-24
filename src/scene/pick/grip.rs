@@ -1,7 +1,7 @@
 //! OpenCADStudio-style grip editing.
 
 use acadrust::Handle;
-use glam::DVec3;
+use glam::{DVec3, Mat4, Vec2};
 use iced::{Point, Rectangle};
 
 use crate::scene::model::object::{GripDef, GripShape};
@@ -119,6 +119,71 @@ pub fn find_hit_grip(
             continue;
         };
         let screen = Point::new(screen.x, screen.y);
+        let dx = screen.x - cursor.x;
+        let dy = screen.y - cursor.y;
+        let d = (dx * dx + dy * dy).sqrt();
+        if d < best_dist {
+            best_dist = d;
+            best = Some((g.id, g.is_midpoint, g.world));
+        }
+    }
+    best
+}
+
+/// Project an f64 world point with an explicit relative-to-eye `(view_rot,
+/// eye)` pair — the camera-less form of `Camera::project_f64`. Used by the
+/// in-viewport editing path, which supplies a *composed* model→screen view
+/// (see `Scene::composed_viewport_view`) instead of a real camera.
+fn project_rte(world: DVec3, view_rot: Mat4, eye: DVec3, bounds: Rectangle) -> Option<Vec2> {
+    let rel = (world - eye).as_vec3();
+    let clip = view_rot * rel.extend(1.0);
+    if clip.w.abs() < 1e-9 {
+        return None;
+    }
+    let ndc = clip.truncate() / clip.w;
+    Some(Vec2::new(
+        (ndc.x * 0.5 + 0.5) * bounds.width,
+        (0.5 - ndc.y * 0.5) * bounds.height,
+    ))
+}
+
+/// Relative-to-eye variant of [`grips_to_screen`] taking a `(view_rot, eye)`
+/// pair instead of a `Camera`, so the composed in-viewport view can project
+/// model-space grips exactly like the GPU renders the viewport content.
+pub fn grips_to_screen_rte(
+    grips: &[GripDef],
+    view_rot: Mat4,
+    eye: DVec3,
+    bounds: Rectangle,
+) -> Vec<(usize, Point, bool, GripShape, Option<[f32; 2]>)> {
+    grips
+        .iter()
+        .map(|g| {
+            let screen = match project_rte(g.world, view_rot, eye, bounds) {
+                Some(p) => Point::new(bounds.x + p.x, bounds.y + p.y),
+                None => Point::new(f32::NAN, f32::NAN),
+            };
+            (g.id, screen, g.is_midpoint, g.shape, g.dir)
+        })
+        .collect()
+}
+
+/// Relative-to-eye variant of [`find_hit_grip`] taking a `(view_rot, eye)`
+/// pair instead of a `Camera`, for in-viewport (MSPACE) grip hit-testing.
+pub fn find_hit_grip_rte(
+    cursor: Point,
+    grips: &[GripDef],
+    view_rot: Mat4,
+    eye: DVec3,
+    bounds: Rectangle,
+) -> Option<(usize, bool, DVec3)> {
+    let mut best_dist = GRIP_THRESHOLD_PX;
+    let mut best: Option<(usize, bool, DVec3)> = None;
+
+    for g in grips {
+        let Some(screen) = project_rte(g.world, view_rot, eye, bounds) else {
+            continue;
+        };
         let dx = screen.x - cursor.x;
         let dy = screen.y - cursor.y;
         let d = (dx * dx + dy * dy).sqrt();

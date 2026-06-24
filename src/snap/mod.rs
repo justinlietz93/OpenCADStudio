@@ -50,7 +50,9 @@ pub const ALL_SNAP_MODES: &[(SnapType, &str, &str)] = &[
     (SnapType::Nearest, "✧", "Nearest"),
     (SnapType::ApparentIntersection, "✗", "Apparent Intersection"),
     (SnapType::Parallel, "∥", "Parallel"),
-    (SnapType::Grid, "⊞", "Grid"),
+    // NOTE: Grid is intentionally NOT an object-snap mode. Grid snap is a
+    // separate system (`Snapper::grid_snap_on`) so object snap never catches a
+    // grid point; it is toggled on its own and handled directly in `snap()`.
 ];
 
 // ── Snap result ───────────────────────────────────────────────────────────
@@ -86,6 +88,9 @@ pub struct Snapper {
     pub snap_enabled: bool,
     /// Which snap modes are configured (used when `snap_enabled` is true).
     pub enabled: HashSet<SnapType>,
+    /// Grid snap on/off — a system fully separate from object snap. When on,
+    /// `snap()` can pick the nearest grid corner; object snap never does.
+    pub grid_snap_on: bool,
     /// World-space grid spacing.
     pub grid_spacing: f32,
     /// Pixel-radius snap aperture, shared by OSNAP, tracking, polar and
@@ -121,6 +126,7 @@ impl Default for Snapper {
         Self {
             snap_enabled: false,
             enabled,
+            grid_snap_on: false,
             grid_spacing: 1.0,
             osnap_radius_px: CROSSHAIR_ARM * 0.25,
             otrack_enabled: false,
@@ -145,6 +151,19 @@ impl Snapper {
 
     pub fn toggle_global(&mut self) {
         self.snap_enabled = !self.snap_enabled;
+    }
+
+    /// Grid snap on/off — independent of the object-snap master and mode set.
+    pub fn grid_snap(&self) -> bool {
+        self.grid_snap_on
+    }
+
+    pub fn toggle_grid_snap(&mut self) {
+        self.grid_snap_on = !self.grid_snap_on;
+    }
+
+    pub fn set_grid_snap(&mut self, on: bool) {
+        self.grid_snap_on = on;
     }
 
     pub fn toggle(&mut self, t: SnapType) {
@@ -422,6 +441,7 @@ impl Snapper {
                 s.insert(SnapType::Tangent);
                 s
             },
+            grid_snap_on: false,
             grid_spacing: self.grid_spacing,
             osnap_radius_px: self.osnap_radius_px,
             otrack_enabled: false,
@@ -458,9 +478,6 @@ impl Snapper {
         grid_origin: Vec3,
         grid_rot: Mat4,
     ) -> Option<SnapResult> {
-        if !self.snap_enabled {
-            return None;
-        }
         // Object-snap selection is priority-then-distance, NOT nearest-wins.
         // "Continuous" snaps (Nearest, Perpendicular, …) sit on the geometry
         // and are therefore almost always closer to the cursor than a discrete
@@ -472,6 +489,46 @@ impl Snapper {
         let mut best: Option<SnapResult> = None;
         let mut best_rank = u8::MAX;
         let mut best_d2 = f32::MAX;
+
+        // ── Grid snap — a SEPARATE system from object snap ───────────────────
+        // Grid snap has its own toggle (`grid_snap_on`) and is independent of
+        // the object-snap master (`snap_enabled`) and the object-snap mode set.
+        // Object snaps therefore NEVER catch grid points; only when grid snap is
+        // on can a grid corner be picked. It is evaluated first and at the
+        // lowest priority, so any object snap inside the aperture overrides it.
+        if self.grid_snap_on {
+            let s = self.grid_spacing as f64;
+            if s.abs() > 1e-9 {
+                // Round in the UCS grid frame, then map back to world.
+                let ax = grid_rot.transform_vector3(Vec3::X).as_dvec3();
+                let ay = grid_rot.transform_vector3(Vec3::Y).as_dvec3();
+                let az = grid_rot.transform_vector3(Vec3::Z).as_dvec3();
+                let origin = grid_origin.as_dvec3();
+                let rel = cursor_world - origin;
+                let ux = (rel.dot(ax) / s).round() * s;
+                let uy = (rel.dot(ay) / s).round() * s;
+                let uz = (rel.dot(az) / s).round() * s;
+                let gp = origin + ax * ux + ay * uy + az * uz;
+                let screen = world_to_screen(gp, view_rot, eye, bounds);
+                let d2 = dist2(screen, cursor_screen);
+                if d2 < radius2 {
+                    best = Some(SnapResult {
+                        world: gp,
+                        screen,
+                        snap_type: SnapType::Grid,
+                        tangent_obj: None,
+                    });
+                    best_rank = snap_priority(SnapType::Grid);
+                    best_d2 = d2;
+                }
+            }
+        }
+
+        // Object snaps are gated by the object-snap master toggle. With it off
+        // only the grid result (if any) stands.
+        if !self.snap_enabled {
+            return best;
+        }
 
         // World-space snap radius — derived from the view scale so wires whose
         // entire extent is clearly outside the snap circle can be skipped cheaply
@@ -755,21 +812,6 @@ impl Snapper {
                     }
                 }
             }
-        }
-
-        // ── Grid ───────────────────────────────────────────────────────────
-        if self.is_on(SnapType::Grid) {
-            let s = self.grid_spacing as f64;
-            // Round in the UCS grid frame, then map back to world.
-            let ax = grid_rot.transform_vector3(Vec3::X).as_dvec3();
-            let ay = grid_rot.transform_vector3(Vec3::Y).as_dvec3();
-            let az = grid_rot.transform_vector3(Vec3::Z).as_dvec3();
-            let origin = grid_origin.as_dvec3();
-            let rel = cursor_world - origin;
-            let ux = (rel.dot(ax) / s).round() * s;
-            let uy = (rel.dot(ay) / s).round() * s;
-            let uz = (rel.dot(az) / s).round() * s;
-            try_pt(origin + ax * ux + ay * uy + az * uz, SnapType::Grid);
         }
 
         // ── Tangent ────────────────────────────────────────────────────────

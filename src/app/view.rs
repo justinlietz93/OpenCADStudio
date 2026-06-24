@@ -3,7 +3,7 @@ use super::document::{DynComponent, DynFieldEntry};
 use super::helpers::grid_plane_from_camera;
 use super::history::history_dropdown_labels;
 use super::{Message, OpenCADStudio};
-use crate::scene::pick::grip::{grips_to_screen, grips_to_screen_paper};
+use crate::scene::pick::grip::{grips_to_screen, grips_to_screen_paper, grips_to_screen_rte};
 use crate::scene::view::viewport_pane::ViewportPane;
 use crate::scene::{VIEWCUBE_DRAW_PX, VIEWCUBE_PAD};
 use crate::ui::overlay;
@@ -86,9 +86,26 @@ impl OpenCADStudio {
                     // they must use the active tile's screen rectangle (with
                     // its canvas offset) — not the whole canvas — or they
                     // land in the wrong place in a tiled layout.
-                    let bounds = tab.scene.active_model_tile_bounds(vw, vh);
+                    // Inside a floating viewport the pane is the viewport's own
+                    // rect + camera; otherwise the active model tile.
+                    let edit_frame = tab.scene.viewport_edit_frame((vw, vh));
+                    let bounds = match &edit_frame {
+                        Some((_, full)) => *full,
+                        None => tab.scene.active_model_tile_bounds(vw, vh),
+                    };
                     let sel_h = tab.selected_handle;
-                    let screen_grips = if is_paper {
+                    // In-viewport grips are model-space; project them with the
+                    // viewport camera so they sit on the wire the GPU draws.
+                    // Paper entities use the 2-D paper transform; the model tab
+                    // uses the model camera.
+                    let screen_grips = if let Some((cam, _)) = &edit_frame {
+                        grips_to_screen_rte(
+                            &tab.selected_grips,
+                            cam.view_proj_rte(bounds),
+                            cam.eye_f64(),
+                            bounds,
+                        )
+                    } else if is_paper {
                         let cam = tab.scene.camera.borrow();
                         let aspect = if vh > 0.0 { vw / vh } else { 1.0 };
                         let half_h = cam.ortho_size();
@@ -388,7 +405,7 @@ impl OpenCADStudio {
             let bar = viewport_controls(
                 tab.render_mode,
                 self.show_grid,
-                self.snapper.is_on(crate::snap::SnapType::Grid),
+                self.snapper.grid_snap(),
                 true,
             );
             // Position the bar at the active model tile's top-left corner so
@@ -464,7 +481,7 @@ impl OpenCADStudio {
                     iced::widget::opaque(viewport_controls(
                         vp_mode,
                         self.show_grid,
-                        self.snapper.is_on(crate::snap::SnapType::Grid),
+                        self.snapper.grid_snap(),
                         false,
                     )),
                 ],
