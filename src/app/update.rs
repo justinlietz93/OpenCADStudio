@@ -5688,6 +5688,9 @@ impl OpenCADStudio {
                 self.tabs[i].scene.active_viewport = None;
                 self.tabs[i].scene.set_current_layout(name);
                 self.tabs[i].scene.deselect_all();
+                // UCS follows the pane: model header UCS in the Model tab, none
+                // in plain paper space (a viewport's UCS is adopted on entry).
+                self.tabs[i].refresh_active_ucs();
                 self.tabs[i].scene.restore_saved_camera();
                 self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
                 // Grid/snap are per-view: load the layout we just entered (its
@@ -6213,6 +6216,8 @@ impl OpenCADStudio {
                 self.tabs[i].scene.normalize_active_viewport_view();
                 // Grid/snap follow the entered viewport.
                 self.adopt_view_display(i);
+                // Adopt the entered viewport's own per-viewport UCS.
+                self.tabs[i].refresh_active_ucs();
                 self.refresh_properties();
                 self.command_line.push_output("MSPACE");
                 Task::none()
@@ -6225,6 +6230,8 @@ impl OpenCADStudio {
                 self.tabs[i].scene.active_viewport = None;
                 // Grid/snap return to the paper sheet's own state.
                 self.adopt_view_display(i);
+                // Paper space has no UCS — drop the viewport's UCS.
+                self.tabs[i].refresh_active_ucs();
                 self.refresh_properties();
                 self.command_line.push_output("PSPACE");
                 Task::none()
@@ -8323,12 +8330,19 @@ impl OpenCADStudio {
         p: iced::Point,
         bounds: iced::Rectangle,
     ) -> glam::DVec3 {
-        let plane = self.tabs[i].active_ucs.as_ref().map(|ucs| {
-            (
-                ucs_z_axis(ucs),
-                glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z),
-            )
-        });
+        // Constrain to the UCS plane only where the UCS applies (model space or
+        // inside a viewport); plain paper space uses the target plane.
+        let plane = self
+            .tabs[i]
+            .active_ucs
+            .as_ref()
+            .filter(|_| self.tabs[i].editing_model_space())
+            .map(|ucs| {
+                (
+                    ucs_z_axis(ucs),
+                    glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z),
+                )
+            });
         let pick = |cam: &crate::scene::view::camera::Camera| match plane {
             Some((normal, origin)) => cam.pick_on_plane(p, bounds, normal, origin),
             None => cam.pick_on_target_plane(p, bounds),

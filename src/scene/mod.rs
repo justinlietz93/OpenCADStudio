@@ -3967,7 +3967,9 @@ impl Scene {
     /// the active UCS in model space, identity everywhere else. Render,
     /// hit-test, and click-snap all go through this so they stay in lock-step.
     pub fn viewcube_ucs_mat(&self) -> glam::Mat4 {
-        if self.current_layout == "Model" {
+        // UCS applies in model space and inside a floating viewport (MSPACE);
+        // plain paper space stays WCS.
+        if self.current_layout == "Model" || self.active_viewport.is_some() {
             self.viewcube_ucs
         } else {
             glam::Mat4::IDENTITY
@@ -7366,11 +7368,11 @@ impl Scene {
     /// `active_viewports` enumeration the renderer uses, so the grid overlay can
     /// never drift from the views actually on screen (issue #121). The grid
     /// ignores render mode, so any value passes through.
-    pub fn grid_views(&self, vw: f32, vh: f32) -> Vec<(iced::Rectangle, Camera)> {
+    pub fn grid_views(&self, vw: f32, vh: f32) -> Vec<(iced::Rectangle, Camera, Handle)> {
         self.active_viewports(vw, vh, acadrust::entities::ViewportRenderMode::Wireframe2D)
             .into_iter()
             .filter(|inst| inst.grid_on)
-            .map(|inst| (inst.screen_rect, inst.camera))
+            .map(|inst| (inst.screen_rect, inst.camera, inst.handle))
             .collect()
     }
 

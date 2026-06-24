@@ -171,22 +171,107 @@ impl DocumentTab {
         super::helpers::UcsXform::from_active(self.active_ucs.as_ref())
     }
 
-    /// Adopt the document's saved current UCS (the header's model-space UCS) as
-    /// the active UCS, so the coordinate readout / icon / input follow the
-    /// file's coordinate system the moment it opens. An identity UCS clears it
-    /// back to plain WCS. Call wherever a document is loaded into the tab.
-    pub(super) fn adopt_active_ucs_from_header(&mut self) {
+    /// True when the active pane edits **model-space** geometry: the Model tab,
+    /// or inside a floating viewport (MSPACE). The UCS applies in both; plain
+    /// paper space (no active viewport) is excluded. Single predicate so every
+    /// UCS-aware system shares one rule. [[feedback_shared_infra]]
+    pub(super) fn editing_model_space(&self) -> bool {
+        self.scene.current_layout == "Model" || self.scene.active_viewport.is_some()
+    }
+
+    /// The document's saved model-space UCS (header), as a `Ucs`. `None` when it
+    /// is identity (plain WCS).
+    fn model_ucs_from_header(&self) -> Option<Ucs> {
         let h = &self.scene.document.header;
         let mut u = Ucs::new(h.model_space_ucs_name.clone());
         u.origin = h.model_space_ucs_origin;
         u.x_axis = h.model_space_ucs_x_axis;
         u.y_axis = h.model_space_ucs_y_axis;
-        self.active_ucs = if super::helpers::UcsXform::from_ucs(&u).is_identity() {
+        if super::helpers::UcsXform::from_ucs(&u).is_identity() {
             None
         } else {
             Some(u)
+        }
+    }
+
+    /// A floating viewport's own per-viewport UCS, if it has one set. `None`
+    /// when the viewport uses world coordinates or the handle is not a viewport.
+    pub(super) fn ucs_from_viewport(&self, h: Handle) -> Option<Ucs> {
+        let vp = match self.scene.document.get_entity(h) {
+            Some(acadrust::EntityType::Viewport(vp)) => vp,
+            _ => return None,
+        };
+        if !vp.ucs_per_viewport {
+            return None;
+        }
+        let mut u = Ucs::new("*VPUCS*");
+        u.origin = vp.ucs_origin;
+        u.x_axis = vp.ucs_x_axis;
+        u.y_axis = vp.ucs_y_axis;
+        if super::helpers::UcsXform::from_ucs(&u).is_identity() {
+            None
+        } else {
+            Some(u)
+        }
+    }
+
+    /// Set `active_ucs` to the UCS of the *current pane*: the entered viewport's
+    /// own per-viewport UCS, the model header UCS in the Model tab, or none in
+    /// plain paper space. Keeps the ViewCube in lock-step. Call on every pane
+    /// change (enter/exit viewport, layout / tab switch, load) so one field
+    /// drives all UCS-aware systems regardless of where editing happens.
+    pub(super) fn refresh_active_ucs(&mut self) {
+        self.active_ucs = if let Some(h) = self.scene.active_viewport {
+            self.ucs_from_viewport(h)
+        } else if self.scene.current_layout == "Model" {
+            self.model_ucs_from_header()
+        } else {
+            None
         };
         self.sync_ucs_to_scene();
+    }
+
+    /// Persist `active_ucs` back to its pane's storage so it round-trips: the
+    /// entered viewport's per-viewport UCS fields, or the document header's
+    /// model-space UCS in the Model tab. No-op in plain paper space. Call after
+    /// any UCS change.
+    pub(super) fn persist_active_ucs(&mut self) {
+        use acadrust::types::Vector3;
+        if let Some(h) = self.scene.active_viewport {
+            let (o, x, y, per) = match &self.active_ucs {
+                Some(u) => (u.origin, u.x_axis, u.y_axis, true),
+                None => (Vector3::ZERO, Vector3::UNIT_X, Vector3::UNIT_Y, false),
+            };
+            if let Some(acadrust::EntityType::Viewport(vp)) =
+                self.scene.document.get_entity_mut(h)
+            {
+                vp.ucs_origin = o;
+                vp.ucs_x_axis = x;
+                vp.ucs_y_axis = y;
+                vp.ucs_per_viewport = per;
+            }
+        } else if self.scene.current_layout == "Model" {
+            let h = &mut self.scene.document.header;
+            match &self.active_ucs {
+                Some(u) => {
+                    h.model_space_ucs_origin = u.origin;
+                    h.model_space_ucs_x_axis = u.x_axis;
+                    h.model_space_ucs_y_axis = u.y_axis;
+                }
+                None => {
+                    h.model_space_ucs_origin = Vector3::ZERO;
+                    h.model_space_ucs_x_axis = Vector3::UNIT_X;
+                    h.model_space_ucs_y_axis = Vector3::UNIT_Y;
+                }
+            }
+        }
+    }
+
+    /// Adopt the active pane's UCS on load (the file's saved model-space UCS in
+    /// the Model tab). Thin wrapper over [`refresh_active_ucs`] kept for the
+    /// load call sites.
+    pub(super) fn adopt_active_ucs_from_header(&mut self) {
+        self.refresh_active_ucs();
     }
 
     /// Push the active UCS rotation into the scene so the ViewCube composes with
@@ -199,7 +284,7 @@ impl DocumentTab {
     /// geometry. Columns are the UCS axes; translation is the UCS origin in wire
     /// space. Identity outside model space (no UCS there).
     pub(super) fn ucs_wire_affine(&self) -> glam::Mat4 {
-        if self.scene.current_layout != "Model" {
+        if !self.editing_model_space() {
             return glam::Mat4::IDENTITY;
         }
         let (o, x, y, z) = self.ucs_xform().axes();
@@ -221,7 +306,7 @@ impl DocumentTab {
     /// default rotation for new text-bearing objects so their text aligns to
     /// the user's coordinate system. Zero outside model space / with no UCS.
     pub(super) fn ucs_rotation_angle(&self) -> f64 {
-        if self.scene.current_layout != "Model" {
+        if !self.editing_model_space() {
             return 0.0;
         }
         let (_, x, ..) = self.ucs_xform().axes();
@@ -231,7 +316,7 @@ impl DocumentTab {
     /// Grid origin (render/wire space) and UCS→world rotation for grid snap and
     /// the grid overlay. Identity / origin-at-zero outside model space.
     pub(super) fn ucs_grid_basis(&self) -> (glam::Vec3, glam::Mat4) {
-        if self.scene.current_layout != "Model" {
+        if !self.editing_model_space() {
             return (glam::Vec3::ZERO, glam::Mat4::IDENTITY);
         }
         let xf = self.ucs_xform();

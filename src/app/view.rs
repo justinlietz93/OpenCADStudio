@@ -155,11 +155,10 @@ impl OpenCADStudio {
             // stay independent: model tiles in model space; the sheet plus each
             // floating viewport (clipped to its rectangle) in paper space. One
             // enumeration for both, shared with the renderer.
-            // Align the model grid to the active UCS (origin in wire space, world
-            // axis directions); paper space stays plain WCS.
-            let (grid_origin, grid_axes): (glam::DVec3, _) = if is_paper {
-                (glam::DVec3::ZERO, (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z))
-            } else {
+            // Align each grid to its pane's UCS (origin in wire space, world
+            // axis directions): model tiles to the tab's model UCS, each content
+            // viewport to its own per-viewport UCS, the paper sheet to plain WCS.
+            let model_basis = {
                 let (o, ux, uy, uz) = tab.ucs_xform().axes();
                 (o.as_dvec3(), (ux, uy, uz))
             };
@@ -167,27 +166,53 @@ impl OpenCADStudio {
                 .scene
                 .grid_views(vw, vh)
                 .into_iter()
-                .map(|(bounds, cam)| {
+                .map(|(bounds, cam, handle)| {
+                    let (origin, axes): (glam::DVec3, _) = if is_paper {
+                        match tab.ucs_from_viewport(handle) {
+                            Some(u) => {
+                                let (o, ux, uy, uz) =
+                                    super::helpers::UcsXform::from_ucs(&u).axes();
+                                (o.as_dvec3(), (ux, uy, uz))
+                            }
+                            None => (
+                                glam::DVec3::ZERO,
+                                (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z),
+                            ),
+                        }
+                    } else {
+                        model_basis
+                    };
                     let plane = grid_plane_from_camera(cam.pitch, cam.yaw);
                     overlay::GridParams {
                         view_rot: cam.view_proj_rte(bounds),
                         eye: cam.eye_f64(),
                         bounds,
                         plane,
-                        origin: grid_origin,
-                        axes: grid_axes,
+                        origin,
+                        axes,
                     }
                 })
                 .collect();
 
-            let ucs_icon = if self.show_ucs_icon && !is_paper {
+            // The UCS icon shows the active pane's UCS tripod: the model view, or
+            // (inside a floating viewport) projected through the viewport camera
+            // at the viewport's rect so it tracks the in-viewport UCS.
+            // Rotation-only projection (view_proj_rte): the icon shows axis
+            // DIRECTIONS only, so the full view_proj's huge UTM translation would
+            // cancel catastrophically in f32 and make the tripod jitter.
+            let ucs_icon = if !self.show_ucs_icon {
+                None
+            } else if let Some((vp_cam, full)) = tab.scene.viewport_edit_frame((vw, vh)) {
+                let (_, ux, uy, uz) = tab.ucs_xform().axes();
+                Some(overlay::UcsIconParams {
+                    view_proj: vp_cam.view_proj_rte(full),
+                    bounds: full,
+                    axes: (ux, uy, uz),
+                })
+            } else if !is_paper {
                 let cam = tab.scene.camera.borrow();
                 let (_, ux, uy, uz) = tab.ucs_xform().axes();
                 Some(overlay::UcsIconParams {
-                    // Rotation-only projection: the icon shows axis DIRECTIONS
-                    // only, so the full view_proj's huge UTM translation would
-                    // just cancel catastrophically in f32 and make the tripod
-                    // jitter. view_proj_rte drops the translation. (#utm-ucs)
                     view_proj: cam.view_proj_rte(vp_bounds),
                     bounds: vp_bounds,
                     axes: (ux, uy, uz),
@@ -916,7 +941,9 @@ impl OpenCADStudio {
                     // user's coordinate system, not raw WCS (no-op without UCS).
                     let cursor_coord = {
                         let lc = tab.last_cursor_world;
-                        if is_model {
+                        // The readout follows the active pane's UCS — model space
+                        // or inside a floating viewport (no-op without a UCS).
+                        if tab.editing_model_space() {
                             let wo = [0.0_f64; 3];
                             let wcs = glam::Vec3::new(
                                 lc.x + wo[0] as f32,

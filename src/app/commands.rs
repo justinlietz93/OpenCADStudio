@@ -3834,8 +3834,11 @@ impl OpenCADStudio {
                         }
                     }
                 }
-                // Keep the scene's ViewCube UCS in lock-step with active_ucs.
+                // Keep the scene's ViewCube UCS in lock-step with active_ucs and
+                // persist it to the active pane (per-viewport UCS inside a
+                // viewport, header model UCS in the Model tab) so it round-trips.
                 self.tabs[i].sync_ucs_to_scene();
+                self.tabs[i].persist_active_ucs();
             }
 
             // ── Named Views (VIEW command) ────────────────────────────────
