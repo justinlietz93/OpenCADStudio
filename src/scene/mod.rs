@@ -6311,17 +6311,23 @@ impl Scene {
         let view_up = rotation * glam::Vec3::Y;
         // view_target is WCS; wire-space subtracts world_offset. view_center is
         // a DCS (screen-plane) offset, so fold it through the view basis.
-        let base = glam::Vec3::new(
-            (view_target.x - world_offset[0]) as f32,
-            (view_target.y - world_offset[1]) as f32,
-            (view_target.z - world_offset[2]) as f32,
+        // Keep the target in f64: casting it to f32 first quantizes the camera
+        // to ~0.5 m at UTM scale, so panning/zooming inside a floating viewport
+        // (which nudges view_target by sub-metre f64 steps) made the content
+        // jump on the f32 grid. The axis directions stay f32 (orientation only);
+        // only the position must stay precise — matching the model camera.
+        let base = glam::DVec3::new(
+            view_target.x - world_offset[0],
+            view_target.y - world_offset[1],
+            view_target.z - world_offset[2],
         );
-        let target =
-            base + view_right * view_center.x as f32 + view_up * view_center.y as f32;
+        let target = base
+            + view_right.as_dvec3() * view_center.x
+            + view_up.as_dvec3() * view_center.y;
         let fov_y = 45.0_f32.to_radians();
         let distance = ((view_height as f32 / 2.0) / (fov_y * 0.5).tan()).max(0.001);
         Some(Camera {
-            target: target.as_dvec3(),
+            target,
             rotation,
             distance,
             fov_y,
