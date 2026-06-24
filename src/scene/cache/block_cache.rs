@@ -502,6 +502,54 @@ fn tessellate_sub_local(
         return None;
     }
 
+    // Block-defn geometry is stored relative to `local_offset` (re-added in f64
+    // at expand time) so the f32 high half stays precise at UTM-scale source
+    // coordinates. `tessellate()` emits absolute coordinates, so subtract the
+    // offset here and re-split the double-single residual.
+    if local_offset != [0.0_f64; 3] {
+        let [lo_x, lo_y, lo_z] = local_offset;
+        let resplit = |pts: &mut Vec<[f32; 3]>, low: &mut Vec<[f32; 3]>| {
+            let mut new_low = Vec::with_capacity(pts.len());
+            for (i, p) in pts.iter_mut().enumerate() {
+                if p[0].is_nan() {
+                    new_low.push([0.0; 3]);
+                    continue;
+                }
+                let l = low.get(i).copied().unwrap_or([0.0; 3]);
+                let (hx, lx) = WireModel::split_ds(p[0] as f64 + l[0] as f64 - lo_x);
+                let (hy, ly) = WireModel::split_ds(p[1] as f64 + l[1] as f64 - lo_y);
+                let (hz, lz) = WireModel::split_ds(p[2] as f64 + l[2] as f64 - lo_z);
+                *p = [hx, hy, hz];
+                new_low.push([lx, ly, lz]);
+            }
+            *low = new_low;
+        };
+        resplit(&mut wire.points, &mut wire.points_low);
+        resplit(&mut wire.fill_tris, &mut wire.fill_tris_low);
+        for kv in &mut wire.key_vertices {
+            kv[0] -= lo_x;
+            kv[1] -= lo_y;
+            kv[2] -= lo_z;
+        }
+        for (p, _) in &mut wire.snap_pts {
+            p.x -= lo_x;
+            p.y -= lo_y;
+            p.z -= lo_z;
+        }
+        let (lxf, lyf, lzf) = (lo_x as f32, lo_y as f32, lo_z as f32);
+        for tg in &mut wire.tangent_geoms {
+            match tg {
+                TangentGeom::Line { p1, p2 } => {
+                    p1[0] -= lxf; p1[1] -= lyf; p1[2] -= lzf;
+                    p2[0] -= lxf; p2[1] -= lyf; p2[2] -= lzf;
+                }
+                TangentGeom::Circle { center, .. } => {
+                    center[0] -= lxf; center[1] -= lyf; center[2] -= lzf;
+                }
+            }
+        }
+    }
+
     let aabb_local = aabb_from_points_iter(
         wire.points.iter().copied().chain(wire.fill_tris.iter().copied()),
     );
@@ -743,21 +791,21 @@ fn emit_greeked_text(
 ) {
     let [lo_x, lo_y, lo_z] = defn_lo;
     // Re-add the defn's `local_offset` in f64 before composing with
-    // `accum_xform` so the rect corners share the batch's f32 space
-    // without losing precision for distant text.
-    let xf = |p: [f32; 3]| -> [f32; 3] {
+    // `accum_xform`, and keep the result in f64 so the per-vertex
+    // double-single split below stays precise at UTM-scale coordinates.
+    let xf = |p: [f32; 3]| -> [f64; 3] {
         let w = accum_xform.apply(Vector3::new(
             p[0] as f64 + lo_x,
             p[1] as f64 + lo_y,
             p[2] as f64 + lo_z,
         ));
-        [(w.x) as f32, (w.y) as f32, (w.z) as f32]
+        [w.x, w.y, w.z]
     };
 
     // Per-line rects: split the OBB by `h_local` so each visible wrap
     // line gets its own box. Falls back to the axis-aligned AABB when no
     // OBB / height was cached.
-    let tris: Vec<[f32; 3]> = if let (Some(obb), Some(h_local)) =
+    let tris: Vec<[f64; 3]> = if let (Some(obb), Some(h_local)) =
         (lw.text_obb_local, lw.text_height_local)
     {
         if h_local <= 0.0 {
@@ -838,19 +886,23 @@ fn emit_greeked_text(
         .or_insert_with(|| BatchEntry::new(final_color, 0.0, [0.0; 8], 1.0, lw.aci, true, true));
 
     for p in tris {
-        if p[0] < entry.min_x {
-            entry.min_x = p[0];
+        let (hx, lx) = WireModel::split_ds(p[0]);
+        let (hy, ly) = WireModel::split_ds(p[1]);
+        let (hz, lz) = WireModel::split_ds(p[2]);
+        if hx < entry.min_x {
+            entry.min_x = hx;
         }
-        if p[1] < entry.min_y {
-            entry.min_y = p[1];
+        if hy < entry.min_y {
+            entry.min_y = hy;
         }
-        if p[0] > entry.max_x {
-            entry.max_x = p[0];
+        if hx > entry.max_x {
+            entry.max_x = hx;
         }
-        if p[1] > entry.max_y {
-            entry.max_y = p[1];
+        if hy > entry.max_y {
+            entry.max_y = hy;
         }
-        entry.fill_tris.push(p);
+        entry.fill_tris.push([hx, hy, hz]);
+        entry.fill_tris_low.push([lx, ly, lz]);
     }
 }
 
@@ -1052,6 +1104,11 @@ struct BatchEntry {
     key_vertices: Vec<[f64; 3]>,
     tangent_geoms: Vec<TangentGeom>,
     fill_tris: Vec<[f32; 3]>,
+    /// Double-single low residual paired with `fill_tris`, so block fills stay
+    /// precise at UTM-scale coordinates (the renderer's relative-to-eye path
+    /// reconstructs `high + low`). Without it absolute f32 fills quantize to
+    /// ~0.5 m and the greek-text rectangles shear.
+    fill_tris_low: Vec<[f32; 3]>,
     min_x: f32,
     min_y: f32,
     max_x: f32,
@@ -1144,7 +1201,7 @@ impl Batches {
                     plinegen: b.plinegen,
                     vp_scissor: None,
                     fill_tris: b.fill_tris,
-                    fill_tris_low: Vec::new(),
+                    fill_tris_low: b.fill_tris_low,
                 }
             })
             .collect();
@@ -1519,9 +1576,11 @@ fn emit_wire(
             p[1] as f64 + lo_y,
             p[2] as f64 + lo_z,
         ));
-        entry
-            .fill_tris
-            .push([(v.x) as f32, (v.y) as f32, (v.z) as f32]);
+        let (hx, lx) = WireModel::split_ds(v.x);
+        let (hy, ly) = WireModel::split_ds(v.y);
+        let (hz, lz) = WireModel::split_ds(v.z);
+        entry.fill_tris.push([hx, hy, hz]);
+        entry.fill_tris_low.push([lx, ly, lz]);
     }
 
 }
