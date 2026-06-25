@@ -634,6 +634,7 @@ impl OpenCADStudio {
 
                 // Caches were built on the background thread inside open_path().
                 self.tabs[i].scene.local_extent_max = caches.local_extent_max;
+                self.tabs[i].scene.local_center = caches.local_center;
                 self.tabs[i].scene.hatches = caches.hatches;
                 self.tabs[i].scene.images = caches.images;
                 self.tabs[i].scene.meshes = caches.meshes;

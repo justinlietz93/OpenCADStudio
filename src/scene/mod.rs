@@ -93,6 +93,7 @@ pub fn vp_effective_scale(custom_scale: f64, view_height: f64, vp_height: f64) -
 #[derive(Debug, Clone)]
 pub struct DerivedCaches {
     pub local_extent_max: f32,
+    pub local_center: [f64; 2],
     pub hatches: HashMap<Handle, HatchModel>,
     pub images: HashMap<Handle, ImageModel>,
     pub meshes: HashMap<Handle, MeshLodSet>,
@@ -183,7 +184,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
             centers.push(c);
         }
     }
-    let local_extent_max = cluster_extent_from_centers(centers, &doc.header);
+    let (local_center, local_extent_max) = cluster_extent_from_centers(centers, &doc.header);
 
     // Default bg adaptation target at load: the model background (paper
     // bg is only relevant after the user enters a paper layout, and
@@ -262,6 +263,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
 
     DerivedCaches {
         local_extent_max,
+        local_center,
         hatches,
         images,
         meshes,
@@ -391,10 +393,14 @@ fn offset_centroid(
 /// `$EXTMIN/$EXTMAX` only as a fallback when the entity scan found nothing.
 /// `centers` is gathered by the caller's single entity walk (see
 /// [`build_derived_caches`]) so no separate AABB pass is needed.
+/// Returns `(center, half_span)` of the dense entity cluster. The center is the
+/// median of entity centroids — robust against a second, far cluster (e.g. a
+/// small-coordinate legend beside a UTM survey), unlike the raw extents centre
+/// which would land in the empty gap between them.
 fn cluster_extent_from_centers(
     centers: Vec<[f64; 3]>,
     header: &acadrust::document::HeaderVariables,
-) -> f32 {
+) -> ([f64; 2], f32) {
     const SANE_EXTENT: f64 = CLUSTER_SANE_EXTENT;
     let entity_ok = !centers.is_empty();
 
@@ -410,7 +416,7 @@ fn cluster_extent_from_centers(
         let i = ((v.len() as f64 - 1.0) * frac).round() as usize;
         v[i]
     };
-    let espan_max = if entity_ok {
+    let (ecenter, espan_max) = if entity_ok {
         let mut xs: Vec<f64> = centers.iter().map(|c| c[0]).collect();
         let mut ys: Vec<f64> = centers.iter().map(|c| c[1]).collect();
         let mx = median(&mut xs);
@@ -418,9 +424,9 @@ fn cluster_extent_from_centers(
         let mut dx: Vec<f64> = centers.iter().map(|c| (c[0] - mx).abs()).collect();
         let mut dy: Vec<f64> = centers.iter().map(|c| (c[1] - my).abs()).collect();
         let p95 = percentile(&mut dx, 0.95).max(percentile(&mut dy, 0.95));
-        (p95 * 2.0).max(1.0) as f32
+        ([mx, my], (p95 * 2.0).max(1.0) as f32)
     } else {
-        0.0
+        ([0.0, 0.0], 0.0)
     };
 
     // ── Header extents (fallback only) ───────────────────────────────────
@@ -437,14 +443,15 @@ fn cluster_extent_from_centers(
     // relative-to-eye path keeps it precise at UTM scale), so only the
     // cluster span — for camera fit and cull — is derived from the content.
     if entity_ok {
-        espan_max
+        (ecenter, espan_max)
     } else if header_ok {
         let hw = ((hmax.x - hmin.x) * 0.5) as f32;
         let hh = ((hmax.y - hmin.y) * 0.5) as f32;
         let hz = ((hmax.z - hmin.z) * 0.5).max(1.0) as f32;
-        hw.max(hh).max(hz) * 10.0
+        let hcenter = [(hmin.x + hmax.x) * 0.5, (hmin.y + hmax.y) * 0.5];
+        (hcenter, hw.max(hh).max(hz) * 10.0)
     } else {
-        1e9_f32
+        ([0.0, 0.0], 1e9_f32)
     }
 }
 
@@ -844,6 +851,11 @@ pub struct Scene {
     /// EXTMIN/EXTMAX (10× safety margin). Used by fit_all() to ignore garbage
     /// entity coordinates (origin-stuck entities, bad Ray/XLine direction vectors).
     pub local_extent_max: f32,
+    /// Robust centre (median of entity centroids) of the dense model-space
+    /// cluster. Used together with `local_extent_max` to frame a viewport whose
+    /// saved view is missing — aiming at the raw extents centre would land in
+    /// the empty gap when a drawing has a second, far cluster.
+    pub local_center: [f64; 2],
     /// Current annotation scale (CANNOSCALE equivalent).
     /// Multiplier applied to Text/MText/Dimension sizes during tessellation.
     /// 1.0 = no scaling. 50.0 = "1:50" drawing scale.
@@ -971,6 +983,7 @@ impl Scene {
             bg_color: [0.11, 0.11, 0.11, 1.0],
             paper_bg_color: [1.0, 1.0, 1.0, 1.0],
             local_extent_max: 1e9,
+            local_center: [0.0, 0.0],
             annotation_scale: 1.0,
             model_extents_cache: RefCell::new(None),
             entity_block_map_cache: RefCell::new(None),
@@ -3193,9 +3206,14 @@ impl Scene {
                 if epoch == self.geometry_epoch {
                     for wire in arc.iter() {
                         let [ax, ay, bx, by] = wire.aabb;
-                        if ax.is_finite() && bx.is_finite() {
-                            min = min.min(glam::Vec3::new(ax as f32, ay as f32, 0.0));
-                            max = max.max(glam::Vec3::new(bx as f32, by as f32, 0.0));
+                        let lo = glam::Vec3::new(ax, ay, 0.0);
+                        let hi = glam::Vec3::new(bx, by, 0.0);
+                        // Reject the whole AABB unless every component is finite:
+                        // rays/xlines carry an unbounded AABB, and checking only
+                        // x let a vertical ray's infinite y poison the extents.
+                        if lo.is_finite() && hi.is_finite() {
+                            min = min.min(lo);
+                            max = max.max(hi);
                             any = true;
                         }
                     }
@@ -3203,9 +3221,11 @@ impl Scene {
                     // XY AABBs in too — otherwise ZOOM EXTENTS ignores them.
                     for set in self.meshes.values() {
                         let [ax, ay, bx, by] = set.world_aabb;
-                        if ax.is_finite() && bx.is_finite() {
-                            min = min.min(glam::Vec3::new(ax as f32, ay as f32, 0.0));
-                            max = max.max(glam::Vec3::new(bx as f32, by as f32, 0.0));
+                        let lo = glam::Vec3::new(ax, ay, 0.0);
+                        let hi = glam::Vec3::new(bx, by, 0.0);
+                        if lo.is_finite() && hi.is_finite() {
+                            min = min.min(lo);
+                            max = max.max(hi);
                             any = true;
                         }
                     }
@@ -3230,9 +3250,13 @@ impl Scene {
             }
             for wire in self.tessellate_one(entity) {
                 for &[x, y, z] in &wire.key_vertices {
-                    if x.is_finite() && y.is_finite() && z.is_finite() {
-                        min = min.min(glam::Vec3::new(x as f32, y as f32, z as f32));
-                        max = max.max(glam::Vec3::new(x as f32, y as f32, z as f32));
+                    let v = glam::Vec3::new(x as f32, y as f32, z as f32);
+                    // Check finiteness *after* the f32 cast: a ray/xline endpoint
+                    // is a huge-but-finite f64 that overflows to inf in f32, which
+                    // the f64 `is_finite` test would have let through.
+                    if v.is_finite() {
+                        min = min.min(v);
+                        max = max.max(v);
                         any = true;
                     }
                 }
@@ -3241,9 +3265,11 @@ impl Scene {
         // Same mesh inclusion for the tessellate fallback path.
         for set in self.meshes.values() {
             let [ax, ay, bx, by] = set.world_aabb;
-            if ax.is_finite() && bx.is_finite() {
-                min = min.min(glam::Vec3::new(ax, ay, 0.0));
-                max = max.max(glam::Vec3::new(bx, by, 0.0));
+            let lo = glam::Vec3::new(ax, ay, 0.0);
+            let hi = glam::Vec3::new(bx, by, 0.0);
+            if lo.is_finite() && hi.is_finite() {
+                min = min.min(lo);
+                max = max.max(hi);
                 any = true;
             }
         }
@@ -7677,12 +7703,21 @@ impl Scene {
         // re-centred the model there. Without it a UTM drawing sits ~5.7e6 away,
         // so a stale `(0,0,0)` saved view failed the overlap test AND the
         // auto-fit aimed at empty origin → blank viewports.
-        let (cx, cy) = self
-            .model_space_extents()
-            .map(|(mn, mx)| {
-                (((mn.x + mx.x) * 0.5) as f64, ((mn.y + mx.y) * 0.5) as f64)
-            })
-            .unwrap_or((0.0, 0.0));
+        // Frame the overlap test / auto-fit on the robust cluster centre (median
+        // of entity centroids), NOT the raw extents centre: a drawing with a
+        // far second cluster (e.g. a small-coordinate legend beside a UTM survey)
+        // has an extents centre in the empty gap, which would reject a valid
+        // saved view and then auto-fit onto blank space. Fall back to the extents
+        // centre only when no cluster centre was computed.
+        let (cx, cy) = if self.local_center != [0.0, 0.0] {
+            (self.local_center[0], self.local_center[1])
+        } else {
+            self.model_space_extents()
+                .map(|(mn, mx)| {
+                    (((mn.x + mx.x) * 0.5) as f64, ((mn.y + mx.y) * 0.5) as f64)
+                })
+                .unwrap_or((0.0, 0.0))
+        };
 
         if let Some(cam) = self.camera_from_view(
             vp.view_direction,
