@@ -198,7 +198,6 @@ const CELL_W: usize = 6;
 const CELL_H: usize = 8;
 const ATLAS_COLS: usize = 8;
 const ATLAS_ROWS: usize = 2;
-const FONT_SCALE: f32 = 1.35;
 const MAX_LABEL_CHARS: usize = 6;
 const LABEL_COUNT: usize = 6;
 const MAX_GLYPHS: usize = MAX_LABEL_CHARS * LABEL_COUNT;
@@ -544,11 +543,45 @@ impl ViewCubeText {
             ))
             * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
 
-        let glyph_w = GLYPH_W as f32 * FONT_SCALE;
-        let glyph_h = GLYPH_H as f32 * FONT_SCALE;
-        let advance = CELL_W as f32 * FONT_SCALE;
+        // Glyph size in cube-local units. Letters are laid out on the face
+        // plane itself (not screen-aligned), so they skew with perspective and
+        // look painted onto the surface as the cube rotates.
+        const GW: f32 = 0.17; // glyph width
+        const GH: f32 = 0.24; // glyph height
+        const ADV: f32 = 0.22; // pen advance
+        // In-plane (right, up) axes per face, ordered as FACE_CENTERS. Chosen
+        // so u × v = outward normal → letters never read mirrored.
+        const FACE_U: [[f32; 3]; 6] = [
+            [1.0, 0.0, 0.0],  // TOP
+            [-1.0, 0.0, 0.0], // BOTTOM
+            [1.0, 0.0, 0.0],  // FRONT
+            [-1.0, 0.0, 0.0], // BACK
+            [0.0, 1.0, 0.0],  // RIGHT
+            [0.0, -1.0, 0.0], // LEFT
+        ];
+        const FACE_V: [[f32; 3]; 6] = [
+            [0.0, 1.0, 0.0], // TOP
+            [0.0, 1.0, 0.0], // BOTTOM
+            [0.0, 0.0, 1.0], // FRONT
+            [0.0, 0.0, 1.0], // BACK
+            [0.0, 0.0, 1.0], // RIGHT
+            [0.0, 0.0, 1.0], // LEFT
+        ];
         let mut verts: Vec<TextVertex> = Vec::with_capacity(MAX_VERTS);
         let view_dir = Vec3::Z;
+
+        // Local cube point → screen pixel.
+        let project = |local: Vec3| -> Option<[f32; 2]> {
+            let world = cam_rotation.transform_point3(local);
+            let clip = view_proj * Vec4::new(world.x, world.y, world.z, 1.0);
+            if clip.w.abs() < 1e-6 {
+                return None;
+            }
+            Some([
+                (clip.x / clip.w + 1.0) * 0.5 * vw,
+                (1.0 - clip.y / clip.w) * 0.5 * vh,
+            ])
+        };
 
         for (fi, &c) in FACE_CENTERS.iter().enumerate() {
             let face_n = Vec3::from(c);
@@ -557,57 +590,37 @@ impl ViewCubeText {
             if dot < 0.12 {
                 continue;
             }
-            let world = cam_rotation.transform_point3(face_n * 0.82);
-            let clip = view_proj * Vec4::new(world.x, world.y, world.z, 1.0);
-            if clip.w.abs() < 1e-6 {
-                continue;
-            }
-            let sx = (clip.x / clip.w + 1.0) * 0.5 * vw;
-            let sy = (1.0 - clip.y / clip.w) * 0.5 * vh;
             let alpha = ((dot - 0.12) / 0.88).clamp(0.0, 1.0);
+            let color = [1.0, 1.0, 1.0, alpha];
+            let u = Vec3::from(FACE_U[fi]);
+            let v = Vec3::from(FACE_V[fi]);
+            let center = face_n; // unit normal = face surface centre (distance E)
+
             let label = FACE_LABELS[fi];
-            let label_w = label.len() as f32 * advance;
-            let mut x = sx - label_w * 0.5;
-            let y = sy - glyph_h * 0.5;
+            let total_w = label.len() as f32 * ADV;
+            let mut pen = -total_w * 0.5;
             for ch in label.chars() {
                 let Some(gi) = glyph_index(ch) else {
-                    x += advance;
+                    pen += ADV;
                     continue;
                 };
                 let (u0, v0, u1, v1) = glyph_uv(gi, self.atlas_w, self.atlas_h);
-                let (x0, y0, x1, y1) = (x, y, x + glyph_w, y + glyph_h);
-                let color = [1.0, 1.0, 1.0, alpha];
-                verts.push(TextVertex {
-                    pos: [x0, y0],
-                    uv: [u0, v0],
-                    color,
-                });
-                verts.push(TextVertex {
-                    pos: [x1, y0],
-                    uv: [u1, v0],
-                    color,
-                });
-                verts.push(TextVertex {
-                    pos: [x1, y1],
-                    uv: [u1, v1],
-                    color,
-                });
-                verts.push(TextVertex {
-                    pos: [x0, y0],
-                    uv: [u0, v0],
-                    color,
-                });
-                verts.push(TextVertex {
-                    pos: [x1, y1],
-                    uv: [u1, v1],
-                    color,
-                });
-                verts.push(TextVertex {
-                    pos: [x0, y1],
-                    uv: [u0, v1],
-                    color,
-                });
-                x += advance;
+                // Glyph quad corners on the face plane, then projected.
+                let corner = |lx: f32, ly: f32| center + u * lx + v * ly;
+                let tl = project(corner(pen, GH * 0.5));
+                let tr = project(corner(pen + GW, GH * 0.5));
+                let br = project(corner(pen + GW, -GH * 0.5));
+                let bl = project(corner(pen, -GH * 0.5));
+                if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
+                    let mk = |pos: [f32; 2], uv: [f32; 2]| TextVertex { pos, uv, color };
+                    verts.push(mk(tl, [u0, v0]));
+                    verts.push(mk(tr, [u1, v0]));
+                    verts.push(mk(br, [u1, v1]));
+                    verts.push(mk(tl, [u0, v0]));
+                    verts.push(mk(br, [u1, v1]));
+                    verts.push(mk(bl, [u0, v1]));
+                }
+                pen += ADV;
                 if verts.len() >= self.vertex_capacity as usize {
                     break;
                 }
