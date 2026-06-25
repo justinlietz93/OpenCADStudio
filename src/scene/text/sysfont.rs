@@ -37,11 +37,60 @@ pub fn families() -> &'static [String] {
     &fonts().families
 }
 
+/// Resolve a requested family name to the canonical installed system family name (with exact case).
+pub fn canonical_family_name(family: &str) -> Option<String> {
+    let db = &fonts().db;
+    
+    // 1. Try exact match first
+    let query = fontdb::Query {
+        families: &[fontdb::Family::Name(family)],
+        ..Default::default()
+    };
+    if db.query(&query).is_some() {
+        if let Some(canonical) = fonts().families.iter().find(|&f| f.eq_ignore_ascii_case(family)) {
+            return Some(canonical.clone());
+        }
+        return Some(family.to_string());
+    }
+    
+    // 2. Try case-insensitive match on the families we have
+    if let Some(matched) = fonts().families.iter().find(|&f| f.eq_ignore_ascii_case(family)) {
+        return Some(matched.clone());
+    }
+    
+    // 3. Match common prefixes / variations
+    let family_lower = family.to_lowercase();
+    let alias = match family_lower.as_str() {
+        "arialn" => Some("Arial Narrow"),
+        "gothic" => Some("Century Gothic"),
+        "times" => Some("Times New Roman"),
+        "cour" => Some("Courier New"),
+        _ => None,
+    };
+    
+    if let Some(alias_name) = alias {
+        if let Some(matched) = fonts().families.iter().find(|&f| f.eq_ignore_ascii_case(alias_name)) {
+            return Some(matched.clone());
+        }
+    }
+    
+    // 4. Try matching prefix/subset case-insensitively
+    if let Some(matched) = fonts().families.iter().find(|&f| {
+        let f_low = f.to_lowercase();
+        f_low.starts_with(&family_lower) || family_lower.starts_with(&f_low)
+    }) {
+        return Some(matched.clone());
+    }
+
+    None
+}
+
 /// Resolve a family name to a concrete face id (regular weight/style).
 fn face_id(family: &str) -> Option<fontdb::ID> {
     let db = &fonts().db;
+    let canonical = canonical_family_name(family)?;
     let query = fontdb::Query {
-        families: &[fontdb::Family::Name(family)],
+        families: &[fontdb::Family::Name(&canonical)],
         ..Default::default()
     };
     db.query(&query)
@@ -61,3 +110,4 @@ pub fn with_face_data<T>(family: &str, f: impl FnOnce(&[u8], u32) -> T) -> Optio
 pub fn has_family(family: &str) -> bool {
     face_id(family).is_some()
 }
+

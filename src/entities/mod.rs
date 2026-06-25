@@ -25,7 +25,7 @@ pub mod solid3d;
 pub mod spline;
 pub mod table;
 pub mod text;
-pub(crate) mod text_support;
+pub mod text_support;
 pub mod tolerance;
 pub mod traits;
 pub mod underlay;

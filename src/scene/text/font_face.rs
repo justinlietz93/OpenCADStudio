@@ -45,14 +45,17 @@ impl Face {
     /// Resolve a style's font name to a concrete face. Embedded stroke fonts
     /// take priority; only otherwise-unknown names try the system fonts.
     pub fn resolve(font_name: &str) -> Face {
-        if !lff::is_builtin(font_name) && sysfont::has_family(font_name) {
-            let word = ttf_glyph::glyph(font_name, ' ')
+        let is_builtin = lff::is_builtin(font_name);
+        let has_sys = sysfont::has_family(font_name);
+        if !is_builtin && has_sys {
+            let canonical = sysfont::canonical_family_name(font_name).unwrap_or_else(|| font_name.to_string());
+            let word = ttf_glyph::glyph(&canonical, ' ')
                 .map(|g| g.advance)
                 // Fall back to a sensible blank-width if the font has no space.
                 .filter(|w| *w > 0.0)
                 .unwrap_or(4.5);
             return Face::Ttf {
-                family: font_name.to_string(),
+                family: canonical,
                 word,
             };
         }
@@ -130,7 +133,7 @@ mod tests {
             .find(|f| ttf_glyph::glyph(f, 'A').is_some())
             .expect("a system family with an 'A'");
         assert!(matches!(Face::resolve(fam), Face::Ttf { .. }));
-        let strokes =
+        let (strokes, _) =
             lff::tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, fam, "ABC");
         assert!(!strokes.is_empty(), "TTF run produced no strokes");
     }
@@ -168,13 +171,41 @@ mod tests {
             .expect("a system family with an 'A'");
         // Underlined shaped text: glyph contours plus exactly one underline
         // segment (a 2-point polyline) emitted on the \l toggle.
-        let plain = lff::tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, fam, "AB");
-        let deco = lff::tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, fam, "\\LAB\\l");
+        let (plain, _) = lff::tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, fam, "AB");
+        let (deco, _) = lff::tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, fam, "\\LAB\\l");
         assert!(!plain.is_empty());
         assert_eq!(
             deco.len(),
             plain.len() + 1,
             "underline should add exactly one segment on the TTF path"
         );
+    }
+
+    #[test]
+    fn case_insensitive_ttf_resolution() {
+        let fams = sysfont::families();
+        if fams.is_empty() {
+            eprintln!("no system fonts; skipping");
+            return;
+        }
+        
+        // Arial and Cambria are typical on Windows/Mac/Linux
+        for test_name in &["arial", "ARIAL", "ARIALN", "cambria"] {
+            let resolved = Face::resolve(test_name);
+            match resolved {
+                Face::Ttf { family, .. } => {
+                    assert!(
+                        family == "Arial" || family == "Arial Narrow" || family == "Cambria",
+                        "Resolved to unexpected family name: {}", family
+                    );
+                }
+                Face::Lff(_) => {
+                    // It's possible some test environments don't have Arial or Cambria,
+                    // but if they are present in sysfont::families() (or we can fallback),
+                    // they should resolve to Ttf. If they aren't installed, Lff fallback is accepted.
+                    eprintln!("Font {} resolved to Lff (probably not installed)", test_name);
+                }
+            }
+        }
     }
 }

@@ -278,7 +278,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             anchor_f64[0] - (anchor_local_x as f64 * cos_r - local_y_for_line as f64 * sin_r),
             anchor_f64[1] - (anchor_local_x as f64 * sin_r + local_y_for_line as f64 * cos_r),
         ];
-        let strokes = lff::tessellate_text_ex(
+        let (strokes, fill_tris) = lff::tessellate_text_ex(
             [0.0, 0.0],
             input.height as f32,
             rotation,
@@ -291,6 +291,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             strokes,
             origin,
             color: None,
+            fill_tris,
         });
     }
     let _ = input.line_count; // round-trip only — recomputed above

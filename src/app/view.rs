@@ -75,6 +75,46 @@ impl OpenCADStudio {
             .into()
         };
 
+        let grid_overlay = {
+            let (vw, vh) = tab.scene.selection.borrow().vp_size;
+            let model_basis = {
+                let (o, ux, uy, uz) = tab.ucs_xform().axes();
+                (o.as_dvec3(), (ux, uy, uz))
+            };
+            let grid: Vec<overlay::GridParams> = tab
+                .scene
+                .grid_views(vw, vh)
+                .into_iter()
+                .map(|(bounds, cam, handle)| {
+                    let (origin, axes): (glam::DVec3, _) = if is_paper {
+                        match tab.ucs_from_viewport(handle) {
+                            Some(u) => {
+                                let (o, ux, uy, uz) =
+                                    super::helpers::UcsXform::from_ucs(&u).axes();
+                                (o.as_dvec3(), (ux, uy, uz))
+                            }
+                            None => (
+                                glam::DVec3::ZERO,
+                                (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z),
+                            ),
+                        }
+                    } else {
+                        model_basis
+                    };
+                    let plane = grid_plane_from_camera(cam.pitch, cam.yaw);
+                    overlay::GridParams {
+                        view_rot: cam.view_proj_rte(bounds),
+                        eye: cam.eye(),
+                        bounds,
+                        plane,
+                        origin,
+                        axes,
+                    }
+                })
+                .collect();
+            overlay::grid_overlay(grid)
+        };
+
         let selection_overlay = {
             let sel = tab.scene.selection.borrow().clone();
             let snap_info = tab.snap_result.map(|s| (s.screen, s.snap_type));
@@ -151,49 +191,6 @@ impl OpenCADStudio {
             // the correct place and scale.
             let vp_bounds = tab.scene.active_model_tile_bounds(vw, vh);
 
-            // Each view draws its own grid, clipped to its own bounds, so they
-            // stay independent: model tiles in model space; the sheet plus each
-            // floating viewport (clipped to its rectangle) in paper space. One
-            // enumeration for both, shared with the renderer.
-            // Align each grid to its pane's UCS (origin in wire space, world
-            // axis directions): model tiles to the tab's model UCS, each content
-            // viewport to its own per-viewport UCS, the paper sheet to plain WCS.
-            let model_basis = {
-                let (o, ux, uy, uz) = tab.ucs_xform().axes();
-                (o.as_dvec3(), (ux, uy, uz))
-            };
-            let grid: Vec<overlay::GridParams> = tab
-                .scene
-                .grid_views(vw, vh)
-                .into_iter()
-                .map(|(bounds, cam, handle)| {
-                    let (origin, axes): (glam::DVec3, _) = if is_paper {
-                        match tab.ucs_from_viewport(handle) {
-                            Some(u) => {
-                                let (o, ux, uy, uz) =
-                                    super::helpers::UcsXform::from_ucs(&u).axes();
-                                (o.as_dvec3(), (ux, uy, uz))
-                            }
-                            None => (
-                                glam::DVec3::ZERO,
-                                (glam::Vec3::X, glam::Vec3::Y, glam::Vec3::Z),
-                            ),
-                        }
-                    } else {
-                        model_basis
-                    };
-                    let plane = grid_plane_from_camera(cam.pitch, cam.yaw);
-                    overlay::GridParams {
-                        view_rot: cam.view_proj_rte(bounds),
-                        eye: cam.eye(),
-                        bounds,
-                        plane,
-                        origin,
-                        axes,
-                    }
-                })
-                .collect();
-
             // The UCS icon shows the active pane's UCS tripod: the model view, or
             // (inside a floating viewport) projected through the viewport camera
             // at the viewport's rect so it tracks the in-viewport UCS.
@@ -257,7 +254,6 @@ impl OpenCADStudio {
                 sel,
                 snap_info,
                 grips,
-                grid,
                 ucs_icon,
                 ost_points,
                 tab.last_cursor_screen,
@@ -396,13 +392,14 @@ impl OpenCADStudio {
                 a: 1.0,
             };
             stack![
-                container(viewport_3d)
+                container(grid_overlay)
                     .style(move |_: &Theme| container::Style {
                         background: Some(Background::Color(DESK)),
                         ..Default::default()
                     })
                     .width(Fill)
                     .height(Fill),
+                viewport_3d,
                 selection_overlay,
                 viewport_mouse,
             ]
@@ -410,13 +407,14 @@ impl OpenCADStudio {
             .height(Fill)
         } else {
             stack![
-                container(viewport_3d)
+                container(grid_overlay)
                     .style(move |_: &Theme| container::Style {
                         background: Some(Background::Color(bg_color)),
                         ..Default::default()
                     })
                     .width(Fill)
                     .height(Fill),
+                viewport_3d,
                 selection_overlay,
                 viewport_mouse,
             ]

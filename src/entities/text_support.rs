@@ -19,22 +19,20 @@ pub fn resolve_text_style(style_name: &str, document: &CadDocument) -> ResolvedT
             || (style_name.trim().is_empty() && entry.name.eq_ignore_ascii_case("Standard"))
     });
 
-    let font_name = if let Some(style) = style {
-        if !style.font_file.trim().is_empty() {
+    let mut font_name = if let Some(style) = style {
+        if !style.true_type_font.trim().is_empty() {
+            style.true_type_font.trim().to_string()
+        } else if !style.font_file.trim().is_empty() {
             let file = style.font_file.trim();
             let basename = file.rsplit(['/', '\\']).next().unwrap_or(file);
             let stem = basename.split('.').next().unwrap_or(basename).trim();
             if !stem.is_empty() {
                 stem.to_string()
-            } else if !style.true_type_font.trim().is_empty() {
-                style.true_type_font.trim().to_string()
             } else if !style.name.trim().is_empty() {
                 style.name.trim().to_string()
             } else {
                 "Standard".to_string()
             }
-        } else if !style.true_type_font.trim().is_empty() {
-            style.true_type_font.trim().to_string()
         } else if !style.name.trim().is_empty() {
             style.name.trim().to_string()
         } else {
@@ -46,8 +44,18 @@ pub fn resolve_text_style(style_name: &str, document: &CadDocument) -> ResolvedT
         style_name.trim().to_string()
     };
 
+    if !lff::is_builtin(&font_name) {
+        if let Some(canonical) = crate::scene::text::sysfont::canonical_family_name(&font_name) {
+            font_name = canonical;
+        }
+    }
+
     ResolvedTextStyle {
-        font_name,
+        font_name: {
+            eprintln!("[resolve_text_style] style={:?} font_file={:?} true_type_font={:?} → font_name={:?}",
+                style.map(|s| &s.name), style.map(|s| &s.font_file), style.map(|s| &s.true_type_font), &font_name);
+            font_name
+        },
         width_factor: style.map(|s| s.width_factor as f32).unwrap_or(1.0),
         oblique_angle: style.map(|s| s.oblique_angle as f32).unwrap_or(0.0),
         is_backward: style.map(|s| s.is_backward()).unwrap_or(false),
@@ -1420,7 +1428,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         ins_x + (line_base_x + world_dx) as f64,
                         ins_y + (line_base_y + world_dy) as f64,
                     ];
-                    let strokes = lff::tessellate_text_run(
+                    let (strokes, fill_tris) = lff::tessellate_text_run(
                         [0.0, 0.0],
                         run_h,
                         rot,
@@ -1434,6 +1442,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         strokes,
                         origin,
                         color,
+                        fill_tris,
                     });
                     if opts.want_glyph_boxes {
                         // Per-character boxes, advancing exactly as

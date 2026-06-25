@@ -175,7 +175,7 @@ pub fn apply_along(
                     let insert = offset_pt(insert, fwd, perp, *x, *y);
                     let fwd_angle = fwd[1].atan2(fwd[0]) + rot_deg.to_radians();
                     let resolved = resolve_dxf_special_chars(text);
-                    let text_strokes = lff::tessellate_text_ex(
+                    let (text_strokes, _) = lff::tessellate_text_ex(
                         [insert[0], insert[1]],
                         *tx_scale,
                         fwd_angle,
