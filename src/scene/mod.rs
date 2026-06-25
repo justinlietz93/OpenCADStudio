@@ -5063,7 +5063,26 @@ impl Scene {
         if boundary.is_empty() {
             return None;
         }
-        boundary.truncate(model::hatch_model::MAX_HATCH_BOUNDARY_VERTS);
+        // The batched hatch renderer keeps boundaries in a GPU storage
+        // buffer (no fixed length), so a hatch with many island loops must
+        // retain *every* loop or even-odd island detection breaks. The old
+        // flat `truncate(1024)` cut complex multi-loop hatches mid-boundary:
+        // trailing islands were dropped and the final partial loop was left
+        // open, flipping the even-odd parity so the fill bled across the
+        // rest of the shape. Only guard against pathological vertex counts,
+        // and when trimming, cut at a whole-loop (NaN sentinel) boundary so
+        // no sub-loop is ever left open. (#148)
+        const MAX_HATCH_MODEL_VERTS: usize = 16_384;
+        if boundary.len() > MAX_HATCH_MODEL_VERTS {
+            // Drop only whole trailing loops: cut at the last NaN sentinel
+            // at/before the cap. If the first loop alone exceeds the cap,
+            // keep it whole rather than leaving it open.
+            let cut = boundary[..MAX_HATCH_MODEL_VERTS]
+                .iter()
+                .rposition(|&[x, y]| x.is_nan() || y.is_nan())
+                .unwrap_or(boundary.len());
+            boundary.truncate(cut);
+        }
 
         let pattern = if dxf.gradient_color.is_enabled() {
             let color2 = dxf
