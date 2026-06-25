@@ -223,13 +223,13 @@ impl canvas::Program<Message> for SelectionCanvas {
         }
         if self.show_viewcube {
             if let Some(pos) = cursor.position_in(bounds) {
-                use crate::scene::{VIEWCUBE_DRAW_PX, VIEWCUBE_PAD};
-                let vc_x = bounds.width - VIEWCUBE_DRAW_PX - VIEWCUBE_PAD;
+                use crate::scene::{VIEWCUBE_PAD, VIEWCUBE_REGION_PX};
+                let vc_x = bounds.width - VIEWCUBE_REGION_PX - VIEWCUBE_PAD;
                 let vc_y = VIEWCUBE_PAD;
                 if pos.x >= vc_x
-                    && pos.x <= vc_x + VIEWCUBE_DRAW_PX
+                    && pos.x <= vc_x + VIEWCUBE_REGION_PX
                     && pos.y >= vc_y
-                    && pos.y <= vc_y + VIEWCUBE_DRAW_PX
+                    && pos.y <= vc_y + VIEWCUBE_REGION_PX
                 {
                     return mouse::Interaction::None;
                 }
@@ -757,14 +757,14 @@ impl canvas::Program<Message> for SelectionCanvas {
 
         // ── CAD crosshair cursor ──────────────────────────────────────────────
         let over_viewcube = self.show_viewcube && {
-            use crate::scene::{VIEWCUBE_DRAW_PX, VIEWCUBE_PAD};
+            use crate::scene::{VIEWCUBE_PAD, VIEWCUBE_REGION_PX};
             cursor.position_in(bounds).map_or(false, |pos| {
-                let vc_x = bounds.width - VIEWCUBE_DRAW_PX - VIEWCUBE_PAD;
+                let vc_x = bounds.width - VIEWCUBE_REGION_PX - VIEWCUBE_PAD;
                 let vc_y = VIEWCUBE_PAD;
                 pos.x >= vc_x
-                    && pos.x <= vc_x + VIEWCUBE_DRAW_PX
+                    && pos.x <= vc_x + VIEWCUBE_REGION_PX
                     && pos.y >= vc_y
-                    && pos.y <= vc_y + VIEWCUBE_DRAW_PX
+                    && pos.y <= vc_y + VIEWCUBE_REGION_PX
             })
         };
         // Over a Model-tile divider the OS cursor switches to a resize

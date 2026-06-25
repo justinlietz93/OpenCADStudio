@@ -4468,8 +4468,25 @@ impl OpenCADStudio {
                         )
                     }
                 };
+                // Prefer the currently-highlighted region: hover is recomputed
+                // on every move straight from the cube's own overlay, so it is
+                // immune to `cursor_pos` being overwritten by the viewport's
+                // move handler between the last move and this press.
+                if let Some(id) = self.tabs[i].scene.viewcube_hover.get() {
+                    let region = if id < 6 {
+                        scene::CubeRegion::Face(id)
+                    } else if id < 18 {
+                        scene::CubeRegion::Edge(id)
+                    } else {
+                        scene::CubeRegion::Corner(id)
+                    };
+                    return Task::done(Message::ViewCubeSnap(region));
+                }
                 if let Some(region) = scene::hit_test(cx, cy, w, h, rot, VIEWCUBE_PX) {
                     return Task::done(Message::ViewCubeSnap(region));
+                }
+                if let Some(card) = scene::hit_test_cardinal(cx, cy, w, h, rot, VIEWCUBE_PX) {
+                    return Task::done(Message::ViewCubeSnap(card.face_region()));
                 }
                 Task::none()
             }
@@ -4506,6 +4523,80 @@ impl OpenCADStudio {
                 self.tabs[i].scene.camera_generation += 1;
                 self.command_line
                     .push_output(&format!("View: {}", region.label()));
+                Task::none()
+            }
+
+            Message::ViewCubeHome => {
+                let i = self.active_tab;
+                let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    self.tabs[i]
+                        .scene
+                        .mutate_active_viewport_camera(|c| c.home_view(r_ucs));
+                } else {
+                    self.tabs[i].scene.camera.borrow_mut().home_view(r_ucs);
+                }
+                self.tabs[i].scene.camera_generation += 1;
+                self.command_line.push_output("View: Home");
+                Task::none()
+            }
+
+            Message::ViewCubeRoll(cw) => {
+                let i = self.active_tab;
+                let ang = if cw {
+                    std::f32::consts::FRAC_PI_2
+                } else {
+                    -std::f32::consts::FRAC_PI_2
+                };
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    self.tabs[i]
+                        .scene
+                        .mutate_active_viewport_camera(|c| c.roll_by(ang));
+                } else {
+                    self.tabs[i].scene.camera.borrow_mut().roll_by(ang);
+                }
+                self.tabs[i].scene.camera_generation += 1;
+                Task::none()
+            }
+
+            Message::ViewCubeNudge(dir) => {
+                use crate::scene::NudgeDir;
+                let (horizontal, positive) = match dir {
+                    NudgeDir::Up => (false, false),
+                    NudgeDir::Down => (false, true),
+                    NudgeDir::Left => (true, false),
+                    NudgeDir::Right => (true, true),
+                };
+                let i = self.active_tab;
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    self.tabs[i]
+                        .scene
+                        .mutate_active_viewport_camera(|c| c.nudge_90(horizontal, positive));
+                } else {
+                    self.tabs[i]
+                        .scene
+                        .camera
+                        .borrow_mut()
+                        .nudge_90(horizontal, positive);
+                }
+                self.tabs[i].scene.camera_generation += 1;
+                Task::none()
+            }
+
+            Message::SetViewcubeUcs(name) => {
+                let i = self.active_tab;
+                if name.is_empty() || name == "WCS" {
+                    self.tabs[i].active_ucs = None;
+                    self.command_line.push_output("UCS: World");
+                } else if let Some(named) =
+                    self.tabs[i].scene.document.ucss.get(&name).cloned()
+                {
+                    self.tabs[i].active_ucs = Some(named);
+                    self.command_line.push_output(&format!("UCS: {}", name));
+                }
+                self.tabs[i].sync_ucs_to_scene();
+                self.tabs[i].scene.camera_generation += 1;
+                self.tabs[i].dirty = true;
                 Task::none()
             }
 

@@ -12,6 +12,8 @@ use iced::{Color, Element, Length, Theme};
 const TRI_DOWN: &[u8] = include_bytes!("../../assets/icons/ui/tri_down.svg");
 const TRI_UP: &[u8] = include_bytes!("../../assets/icons/ui/tri_up.svg");
 const TRI_RIGHT: &[u8] = include_bytes!("../../assets/icons/ui/tri_right.svg");
+const TRI_LEFT: &[u8] = include_bytes!("../../assets/icons/ui/tri_left.svg");
+const HOME: &[u8] = include_bytes!("../../assets/icons/ui/home.svg");
 const UNDO: &[u8] = include_bytes!("../../assets/icons/ui/undo.svg");
 const REDO: &[u8] = include_bytes!("../../assets/icons/ui/redo.svg");
 
@@ -164,6 +166,16 @@ pub fn arrow_up<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
 /// Rightward caret for a collapsed item (replaces `▸`).
 pub fn arrow_right<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
     icon(TRI_RIGHT, size, color)
+}
+
+/// Leftward caret.
+pub fn arrow_left<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
+    icon(TRI_LEFT, size, color)
+}
+
+/// House glyph — the ViewCube "home view" button.
+pub fn home<'a, M: 'a>(size: f32, color: Color) -> Element<'a, M> {
+    icon(HOME, size, color)
 }
 
 /// Caret that flips up/down with `open`.

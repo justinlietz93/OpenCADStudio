@@ -19,6 +19,37 @@ pub const VIEWCUBE_PX: u32 = 120;
 pub const VIEWCUBE_SCALE: f32 = 0.36;
 pub const VIEWCUBE_DRAW_PX: f32 = VIEWCUBE_PX as f32 * VIEWCUBE_SCALE * 2.0;
 pub const VIEWCUBE_PAD: f32 = 12.0;
+/// The cube centre is inset from the screen corner by this multiple of the
+/// cube half-size, leaving room for the compass ring and the nav controls
+/// (home / roll / nudge) drawn around it.
+pub const NAV_INSET_F: f32 = 2.2;
+/// Side of the whole nav widget (cube + compass ring + controls) in pixels.
+pub const VIEWCUBE_REGION_PX: f32 = VIEWCUBE_DRAW_PX * NAV_INSET_F;
+/// Z height of the compass ring + cardinals in cube-local space. The cube
+/// spans ±1, so −1 parks the ring at the cube's base — it sits *under* the
+/// cube in 3D views and reads as a ground compass.
+const RING_Z: f32 = -1.0;
+/// Horizontal radius of the N/E/S/W cardinal letters — the ring's mid-line, so
+/// they sit painted on the ring band.
+const R_CARD: f32 = 1.57;
+
+/// Compass cardinal directions, mapped to a side-face snap when clicked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cardinal {
+    North,
+    East,
+    South,
+    West,
+}
+
+/// 90° view nudge directions (tip the cube up/down or spin it left/right).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NudgeDir {
+    Up,
+    Down,
+    Left,
+    Right,
+}
 
 const FACE_LABELS: [&str; 6] = ["TOP", "BOTTOM", "FRONT", "BACK", "RIGHT", "LEFT"];
 const FACE_CENTERS: [[f32; 3]; 6] = [
@@ -172,8 +203,10 @@ impl CubeUniforms {
     ) -> Self {
         let (hw, hh) = (vp_w as f32 * 0.5, vp_h as f32 * 0.5);
         let cube_half = cube_px as f32 * VIEWCUBE_SCALE;
-        let cx = hw - cube_half - VIEWCUBE_PAD;
-        let cy = hh - cube_half - VIEWCUBE_PAD;
+        // Inset the cube centre to leave room for the ring + controls.
+        let inset = cube_half * NAV_INSET_F;
+        let cx = hw - inset - VIEWCUBE_PAD;
+        let cy = hh - inset - VIEWCUBE_PAD;
         let view_proj = Mat4::orthographic_rh(-hw, hw, -hh, hh, -2000.0, 2000.0)
             * Mat4::from_translation(Vec3::new(cx, cy, 0.0))
             * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
@@ -197,10 +230,11 @@ const GLYPH_H: usize = 7;
 const CELL_W: usize = 6;
 const CELL_H: usize = 8;
 const ATLAS_COLS: usize = 8;
-const ATLAS_ROWS: usize = 2;
+const ATLAS_ROWS: usize = 3;
 const MAX_LABEL_CHARS: usize = 6;
 const LABEL_COUNT: usize = 6;
-const MAX_GLYPHS: usize = MAX_LABEL_CHARS * LABEL_COUNT;
+// Face labels + the four compass cardinals (one glyph each).
+const MAX_GLYPHS: usize = MAX_LABEL_CHARS * LABEL_COUNT + 4;
 const MAX_VERTS: usize = MAX_GLYPHS * 6;
 
 #[repr(C)]
@@ -249,6 +283,8 @@ fn glyph_index(c: char) -> Option<usize> {
         'P' => Some(13),
         'R' => Some(14),
         'T' => Some(15),
+        'S' => Some(16),
+        'W' => Some(17),
         _ => None,
     }
 }
@@ -303,6 +339,12 @@ fn glyph_rows(c: char) -> [u8; GLYPH_H] {
         'T' => [
             0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
         ],
+        'S' => [
+            0b01111, 0b10000, 0b10000, 0b01110, 0b00001, 0b00001, 0b11110,
+        ],
+        'W' => [
+            0b10001, 0b10001, 0b10001, 0b10101, 0b10101, 0b11011, 0b10001,
+        ],
         _ => [0; GLYPH_H],
     }
 }
@@ -312,7 +354,7 @@ fn build_atlas() -> (Vec<u8>, u32, u32) {
     let h = (ATLAS_ROWS * CELL_H) as u32;
     let mut data = vec![0u8; (w * h) as usize];
     let glyphs = [
-        'A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'T',
+        'A', 'B', 'C', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'R', 'T', 'S', 'W',
     ];
     for (i, &ch) in glyphs.iter().enumerate() {
         let col = i % ATLAS_COLS;
@@ -534,11 +576,12 @@ impl ViewCubeText {
     ) {
         let (vw, vh) = (vp_w as f32, vp_h as f32);
         let cube_half = cube_px as f32 * VIEWCUBE_SCALE;
+        let inset = cube_half * NAV_INSET_F;
         let (hw, hh) = (vw * 0.5, vh * 0.5);
         let view_proj = Mat4::orthographic_rh(-hw, hw, -hh, hh, -2000.0, 2000.0)
             * Mat4::from_translation(Vec3::new(
-                hw - cube_half - VIEWCUBE_PAD,
-                hh - cube_half - VIEWCUBE_PAD,
+                hw - inset - VIEWCUBE_PAD,
+                hh - inset - VIEWCUBE_PAD,
                 0.0,
             ))
             * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
@@ -624,6 +667,50 @@ impl ViewCubeText {
                 if verts.len() >= self.vertex_capacity as usize {
                     break;
                 }
+            }
+            if verts.len() >= self.vertex_capacity as usize {
+                break;
+            }
+        }
+
+        // ── Compass cardinals (N / E / S / W) ──────────────────────────────
+        // Painted flat onto the ring band (z = RING_Z) so they foreshorten with
+        // the ring and read upright in plan. Local axes u = +X, v = +Y give
+        // u × v = +Z → never mirrored when seen from above.
+        const CARD_GW: f32 = 0.16; // glyph size in cube-local units
+        const CARD_GH: f32 = 0.22;
+        let cardinals = [
+            ('N', Vec3::new(0.0, 1.0, 0.0)),
+            ('E', Vec3::new(1.0, 0.0, 0.0)),
+            ('S', Vec3::new(0.0, -1.0, 0.0)),
+            ('W', Vec3::new(-1.0, 0.0, 0.0)),
+        ];
+        for (ch, dir) in cardinals {
+            let Some(gi) = glyph_index(ch) else {
+                continue;
+            };
+            let center = Vec3::new(dir.x * R_CARD, dir.y * R_CARD, RING_Z);
+            // Dim a cardinal whose ring point sits behind the cube.
+            let alpha = if cam_rotation.transform_point3(center).z >= -0.15 {
+                1.0
+            } else {
+                0.5
+            };
+            let color = [1.0, 1.0, 1.0, alpha];
+            let (u0, v0, u1, v1) = glyph_uv(gi, self.atlas_w, self.atlas_h);
+            let corner = |lx: f32, ly: f32| center + Vec3::X * lx + Vec3::Y * ly;
+            let tl = project(corner(-CARD_GW * 0.5, CARD_GH * 0.5));
+            let tr = project(corner(CARD_GW * 0.5, CARD_GH * 0.5));
+            let br = project(corner(CARD_GW * 0.5, -CARD_GH * 0.5));
+            let bl = project(corner(-CARD_GW * 0.5, -CARD_GH * 0.5));
+            if let (Some(tl), Some(tr), Some(br), Some(bl)) = (tl, tr, br, bl) {
+                let mk = |pos: [f32; 2], uv: [f32; 2]| TextVertex { pos, uv, color };
+                verts.push(mk(tl, [u0, v0]));
+                verts.push(mk(tr, [u1, v0]));
+                verts.push(mk(br, [u1, v1]));
+                verts.push(mk(tl, [u0, v0]));
+                verts.push(mk(br, [u1, v1]));
+                verts.push(mk(bl, [u0, v1]));
             }
             if verts.len() >= self.vertex_capacity as usize {
                 break;
@@ -918,7 +1005,40 @@ pub fn build_geometry() -> (Vec<CubeVertex>, Vec<u32>) {
             &mut is,
         );
     }
+    build_ring(&mut vs, &mut is);
     (vs, is)
+}
+
+/// A flat compass ring in the cube's local XY plane (the ground plane),
+/// surrounding the cube. Pushed with a sentinel `region_f = -1.0` so the
+/// shader never highlights it on hover, and a constant grey colour.
+fn build_ring(vs: &mut Vec<CubeVertex>, is: &mut Vec<u32>) {
+    const SEG: usize = 64;
+    const R0: f32 = 1.40; // inner radius — clear gap to the cube faces
+    const R1: f32 = 1.74; // outer radius — wider, thicker band
+    const RING_RGB: [f32; 3] = [0.22, 0.23, 0.26];
+    for s in 0..SEG {
+        let a0 = s as f32 / SEG as f32 * std::f32::consts::TAU;
+        let a1 = (s + 1) as f32 / SEG as f32 * std::f32::consts::TAU;
+        let (c0, s0) = (a0.cos(), a0.sin());
+        let (c1, s1) = (a1.cos(), a1.sin());
+        let quad = [
+            [c0 * R0, s0 * R0, RING_Z],
+            [c1 * R0, s1 * R0, RING_Z],
+            [c1 * R1, s1 * R1, RING_Z],
+            [c0 * R1, s0 * R1, RING_Z],
+        ];
+        let base = vs.len() as u32;
+        for pos in quad {
+            vs.push(CubeVertex {
+                pos,
+                normal: [0.0, 0.0, 1.0],
+                color: RING_RGB,
+                region_f: -1.0,
+            });
+        }
+        is.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+    }
 }
 
 pub fn region_centroids() -> [[f32; 3]; NUM_REGIONS] {
@@ -1203,8 +1323,9 @@ pub fn hit_test(
     cube_px: u32,
 ) -> Option<CubeRegion> {
     let half = cube_px as f32 * VIEWCUBE_SCALE;
-    let cx = vp_w - half - VIEWCUBE_PAD;
-    let cy = half + VIEWCUBE_PAD;
+    let inset = half * NAV_INSET_F;
+    let cx = vp_w - inset - VIEWCUBE_PAD;
+    let cy = inset + VIEWCUBE_PAD;
     if (mx - cx).abs() > half || (my - cy).abs() > half {
         return None;
     }
@@ -1212,8 +1333,8 @@ pub fn hit_test(
     let (hw, hh) = (vp_w * 0.5, vp_h * 0.5);
     let vp = Mat4::orthographic_rh(-hw, hw, -hh, hh, -2000.0, 2000.0)
         * Mat4::from_translation(Vec3::new(
-            hw - half - VIEWCUBE_PAD,
-            hh - half - VIEWCUBE_PAD,
+            hw - inset - VIEWCUBE_PAD,
+            hh - inset - VIEWCUBE_PAD,
             0.0,
         ))
         * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
@@ -1258,4 +1379,70 @@ pub fn hover_id(
     cube_px: u32,
 ) -> Option<usize> {
     hit_test(mx, my, vp_w, vp_h, cam_rotation, cube_px).map(|r| r.id())
+}
+
+impl Cardinal {
+    /// The side-elevation face a compass letter snaps to when clicked.
+    pub fn face_region(self) -> CubeRegion {
+        CubeRegion::Face(match self {
+            Cardinal::North => FACE_BACK,
+            Cardinal::South => FACE_FRONT,
+            Cardinal::East => FACE_RIGHT,
+            Cardinal::West => FACE_LEFT,
+        })
+    }
+}
+
+/// Returns the compass cardinal under (mx, my), or None. Projects each of the
+/// four ring letters and accepts the nearest within a small pixel radius — the
+/// caller tries the cube body first, so this only fires out on the ring.
+pub fn hit_test_cardinal(
+    mx: f32,
+    my: f32,
+    vp_w: f32,
+    vp_h: f32,
+    cam_rotation: Mat4,
+    cube_px: u32,
+) -> Option<Cardinal> {
+    let half = cube_px as f32 * VIEWCUBE_SCALE;
+    let inset = half * NAV_INSET_F;
+    let cx = vp_w - inset - VIEWCUBE_PAD;
+    let cy = inset + VIEWCUBE_PAD;
+    if (mx - cx).abs() > inset || (my - cy).abs() > inset {
+        return None;
+    }
+
+    let (hw, hh) = (vp_w * 0.5, vp_h * 0.5);
+    let vp = Mat4::orthographic_rh(-hw, hw, -hh, hh, -2000.0, 2000.0)
+        * Mat4::from_translation(Vec3::new(
+            hw - inset - VIEWCUBE_PAD,
+            hh - inset - VIEWCUBE_PAD,
+            0.0,
+        ))
+        * Mat4::from_scale(Vec3::splat(cube_px as f32 * VIEWCUBE_SCALE));
+
+    let dirs = [
+        (Cardinal::North, Vec3::new(0.0, 1.0, 0.0)),
+        (Cardinal::East, Vec3::new(1.0, 0.0, 0.0)),
+        (Cardinal::South, Vec3::new(0.0, -1.0, 0.0)),
+        (Cardinal::West, Vec3::new(-1.0, 0.0, 0.0)),
+    ];
+    let thresh = (half * 0.34).powi(2);
+    let (mut best, mut best_d) = (None, f32::MAX);
+    for (card, dir) in dirs {
+        let anchor = Vec3::new(dir.x * R_CARD, dir.y * R_CARD, RING_Z);
+        let world = cam_rotation.transform_point3(anchor);
+        let clip = vp * Vec4::new(world.x, world.y, world.z, 1.0);
+        if clip.w.abs() < 1e-6 {
+            continue;
+        }
+        let sx = (clip.x / clip.w + 1.0) * 0.5 * vp_w;
+        let sy = (1.0 - clip.y / clip.w) * 0.5 * vp_h;
+        let d = (sx - mx).powi(2) + (sy - my).powi(2);
+        if d < thresh && d < best_d {
+            best_d = d;
+            best = Some(card);
+        }
+    }
+    best
 }

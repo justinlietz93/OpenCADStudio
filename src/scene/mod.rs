@@ -29,7 +29,8 @@ pub use model::mesh_model::MeshLodSet;
 pub use model::object::{GripApply, GripDef};
 pub use pipeline::uniforms::Uniforms;
 pub use pipeline::viewcube::{
-    hit_test, hover_id, CubeRegion, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
+    hit_test, hit_test_cardinal, hover_id, CubeRegion, NudgeDir, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD,
+    VIEWCUBE_PX, VIEWCUBE_REGION_PX,
 };
 pub use pick::selection::SelectionState;
 pub use model::wire_model::WireModel;
@@ -3937,6 +3938,45 @@ impl Scene {
             vp.view_direction.z = dir.z as f64;
             vp.twist_angle = twist;
         }
+    }
+
+    /// Mutate the active viewport's camera through a closure, then re-encode the
+    /// result to the stored `(view_direction, twist_angle)` — the same decode
+    /// the ViewCube snap uses. Lets the home / roll / nudge controls drive a
+    /// floating viewport just like the model camera. Returns `false` if there is
+    /// no active (unlocked) viewport.
+    pub fn mutate_active_viewport_camera(
+        &mut self,
+        f: impl FnOnce(&mut view::camera::Camera),
+    ) -> bool {
+        let Some(vp_handle) = self.active_viewport else {
+            return false;
+        };
+        let mut tmp = self.camera_for_viewport(vp_handle).unwrap_or_default();
+        f(&mut tmp);
+        let dir = (tmp.rotation * glam::Vec3::Z).normalize_or(glam::Vec3::Z);
+        let desired_up = (tmp.rotation * glam::Vec3::Y).normalize_or(glam::Vec3::Y);
+        let pitch = dir.z.clamp(-1.0, 1.0).asin();
+        let yaw = if dir.x.abs() < 1e-6 && dir.y.abs() < 1e-6 {
+            0.0
+        } else {
+            dir.x.atan2(-dir.y)
+        };
+        let up0 = (view::camera::yaw_pitch_to_quat(yaw, pitch, 0.0) * glam::Vec3::Y)
+            .normalize_or(glam::Vec3::Y);
+        let roll = up0.cross(desired_up).dot(dir).atan2(up0.dot(desired_up));
+        let twist = -roll as f64;
+        if let Some(acadrust::EntityType::Viewport(vp)) = self.document.get_entity_mut(vp_handle) {
+            if vp.status.locked {
+                return false;
+            }
+            vp.view_direction.x = dir.x as f64;
+            vp.view_direction.y = dir.y as f64;
+            vp.view_direction.z = dir.z as f64;
+            vp.twist_angle = twist;
+            return true;
+        }
+        false
     }
 
     /// Render mode of the active paper-space viewport, or `None` when no

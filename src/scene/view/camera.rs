@@ -390,6 +390,39 @@ impl Camera {
         self.sync_yaw_pitch();
     }
 
+    /// Jump to the default "home" view — top-down (looking along −Z), expressed
+    /// in the active UCS so it lands square to the user's coordinate frame.
+    pub fn home_view(&mut self, ucs: glam::Mat4) {
+        let dir = ucs.transform_vector3(Vec3::Z);
+        self.snap_to_direction(dir, ucs);
+    }
+
+    /// Roll the camera about its own view axis by `angle` radians. The gaze
+    /// direction is unchanged; only the up-sense twists.
+    pub fn roll_by(&mut self, angle: f32) {
+        self.rotation = (self.rotation * Quat::from_rotation_z(angle)).normalize();
+        self.sync_yaw_pitch();
+    }
+
+    /// Tip / spin the view 90° about a screen axis. `horizontal = false` tips
+    /// up/down (rotation about the camera's right axis); `true` spins
+    /// left/right (about the camera's up axis).
+    pub fn nudge_90(&mut self, horizontal: bool, positive: bool) {
+        let axis = if horizontal {
+            self.rotation * Vec3::Y
+        } else {
+            self.rotation * Vec3::X
+        };
+        let ang = if positive {
+            std::f32::consts::FRAC_PI_2
+        } else {
+            -std::f32::consts::FRAC_PI_2
+        };
+        let delta = Quat::from_axis_angle(axis, ang);
+        self.rotation = (delta * self.rotation).normalize();
+        self.sync_yaw_pitch();
+    }
+
     // ── Internal helpers ───────────────────────────────────────────────────
 
     /// Derive yaw and pitch from the current quaternion for the ViewCube

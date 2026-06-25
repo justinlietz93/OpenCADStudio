@@ -1114,6 +1114,14 @@ pub enum Message {
     ViewportScroll(mouse::ScrollDelta),
     ViewportExit,
     ViewCubeSnap(CubeRegion),
+    /// ViewCube home button → jump to the default isometric view.
+    ViewCubeHome,
+    /// ViewCube roll arrow → roll the view 90° (true = clockwise).
+    ViewCubeRoll(bool),
+    /// ViewCube nudge triangle → tip / spin the view 90°.
+    ViewCubeNudge(crate::scene::NudgeDir),
+    /// WCS/UCS selector under the cube — empty string = World.
+    SetViewcubeUcs(String),
     /// User picked an item in the multi-functional grip popup menu —
     /// the index is into `grip_popup.items`.
     GripMenuPick(usize),
