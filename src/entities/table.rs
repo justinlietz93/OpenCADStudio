@@ -65,6 +65,7 @@ impl TruckConvertible for Table {
         let total_h = *row_offsets.last().unwrap_or(&0.0);
 
         let mut pts: Vec<[f32; 3]> = Vec::new();
+        let mut tris_pts: Vec<[f32; 3]> = Vec::new();
 
         // Per-cell borders. When a cell carries a CellStyle, honour the
         // visibility / `invisible` flag of each of its four borders so
@@ -161,15 +162,28 @@ impl TruckConvertible for Table {
 
         let font_for_handle = |handle: Option<acadrust::Handle>| -> Option<String> {
             handle.and_then(|h| lookup_style(h)).and_then(|s| {
-                let file = s.font_file.trim();
-                if !file.is_empty() {
-                    let basename = file.rsplit(['/', '\\']).next().unwrap_or(file);
-                    let stem = basename.split('.').next().unwrap_or(basename).trim();
-                    if !stem.is_empty() {
-                        return Some(stem.to_string());
+                let mut font_name = if !s.true_type_font.trim().is_empty() {
+                    s.true_type_font.trim().to_string()
+                } else {
+                    let file = s.font_file.trim();
+                    if !file.is_empty() {
+                        let basename = file.rsplit(['/', '\\']).next().unwrap_or(file);
+                        let stem = basename.split('.').next().unwrap_or(basename).trim();
+                        if !stem.is_empty() {
+                            stem.to_string()
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                };
+                if !crate::scene::text::lff::is_builtin(&font_name) {
+                    if let Some(canonical) = crate::scene::text::sysfont::canonical_family_name(&font_name) {
+                        font_name = canonical;
                     }
                 }
-                None
+                Some(font_name)
             })
         };
         // Build a ResolvedTextStyle for the cell — needed by the shared MText
@@ -304,6 +318,9 @@ impl TruckConvertible for Table {
                             pts.push([x + ox, y + oy, origin.z]);
                         }
                     }
+                    for &[x, y] in &ts.fill_tris {
+                        tris_pts.push([x + ox, y + oy, origin.z]);
+                    }
                 }
             }
         }
@@ -321,12 +338,18 @@ impl TruckConvertible for Table {
                 }
             })
             .collect();
+        let fill_tris_f64: Vec<[f64; 3]> = tris_pts
+            .into_iter()
+            .map(|[x, y, z]| {
+                [x as f64 + base[0], y as f64 + base[1], z as f64 + base[2]]
+            })
+            .collect();
         Some(TruckEntity {
             object: TruckObject::Lines(pts_f64),
             snap_pts: vec![(glam::DVec3::new(self.insertion_point.x, self.insertion_point.y, self.insertion_point.z), SnapHint::Insertion)],
             tangent_geoms: vec![],
             key_vertices: vec![],
-            fill_tris: vec![],
+            fill_tris: fill_tris_f64,
         })
     }
 }
@@ -435,10 +458,24 @@ pub fn tessellate_table(
     };
     let font_for_handle = |handle: Option<acadrust::Handle>| -> Option<String> {
         handle.and_then(lookup_style).and_then(|s| {
-            let file = s.font_file.trim();
-            let basename = file.rsplit(['/', '\\']).next().unwrap_or(file);
-            let stem = basename.split('.').next().unwrap_or(basename).trim();
-            (!stem.is_empty()).then(|| stem.to_string())
+            let mut font_name = if !s.true_type_font.trim().is_empty() {
+                s.true_type_font.trim().to_string()
+            } else {
+                let file = s.font_file.trim();
+                let basename = file.rsplit(['/', '\\']).next().unwrap_or(file);
+                let stem = basename.split('.').next().unwrap_or(basename).trim();
+                if !stem.is_empty() {
+                    stem.to_string()
+                } else {
+                    return None;
+                }
+            };
+            if !crate::scene::text::lff::is_builtin(&font_name) {
+                if let Some(canonical) = crate::scene::text::sysfont::canonical_family_name(&font_name) {
+                    font_name = canonical;
+                }
+            }
+            Some(font_name)
         })
     };
     let resolved_style_for_handle =
@@ -455,7 +492,7 @@ pub fn tessellate_table(
 
     // Accumulators keyed by quantised colour (+ weight for borders).
     let mut fills: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>)> = HashMap::default();
-    let mut texts: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>)> = HashMap::default();
+    let mut texts: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>, Vec<[f32; 3]>)> = HashMap::default();
     let mut borders: HashMap<([u8; 4], u32), ([f32; 4], f32, Vec<[f32; 3]>)> = HashMap::default();
     let mut emitted: rustc_hash::FxHashSet<(i32, i32, i32, i32)> = rustc_hash::FxHashSet::default();
     let sel_col = WireModel::SELECTED;
@@ -672,10 +709,11 @@ pub fn tessellate_table(
             } else {
                 entity_color
             };
-            let buf = &mut texts
+            let entry = texts
                 .entry(key4(tcol))
-                .or_insert_with(|| (tcol, Vec::new()))
-                .1;
+                .or_insert_with(|| (tcol, Vec::new(), Vec::new()));
+            let buf = &mut entry.1;
+            let tris_buf = &mut entry.2;
             for ts in &layout.strokes {
                 let sx = ts.origin[0] as f32;
                 let sy = ts.origin[1] as f32;
@@ -689,6 +727,9 @@ pub fn tessellate_table(
                     for &[x, y] in stroke {
                         buf.push([x + sx, y + sy, (to.z as f64) as f32]);
                     }
+                }
+                for &[x, y] in &ts.fill_tris {
+                    tris_buf.push([x + sx, y + sy, (to.z as f64) as f32]);
                 }
             }
         }
@@ -730,9 +771,12 @@ pub fn tessellate_table(
             out.push(mk(color, pts, vec![], lw));
         }
     }
-    for (_, (color, pts)) in texts {
+    for (_, (color, pts, tris)) in texts {
         if !pts.is_empty() {
             out.push(mk(color, pts, vec![], line_weight_px));
+        }
+        if !tris.is_empty() {
+            out.push(mk(color, vec![], tris, line_weight_px));
         }
     }
     out

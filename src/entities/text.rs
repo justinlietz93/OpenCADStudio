@@ -137,7 +137,7 @@ fn to_truck(t: &Text, document: &acadrust::CadDocument) -> TruckEntity {
         anchor_f64[1] - (anchor_local_x as f64 * sin_r + anchor_local_y as f64 * cos_r),
     ];
     // Strokes are in glyph-local space (origin = [0,0]).
-    let strokes = lff::tessellate_text_ex(
+    let (strokes, fill_tris) = lff::tessellate_text_ex(
         [0.0, 0.0],
         t.height as f32,
         rotation,
@@ -151,6 +151,7 @@ fn to_truck(t: &Text, document: &acadrust::CadDocument) -> TruckEntity {
             strokes,
             origin,
             color: None,
+            fill_tris,
         }]),
         snap_pts: vec![(snap_pt, SnapHint::Insertion)],
         tangent_geoms: vec![],

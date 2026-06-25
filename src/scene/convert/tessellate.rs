@@ -160,17 +160,28 @@ pub fn tessellate(
                 // Selection forces a single uniform colour — never split.
                 let split_by_color = !selected;
 
-                // Bins: key = Some(rgb), parallel high/low f32 buffers — the
-                // low buffer is index-for-index with high so the renderer's
-                // double-single RTE shader survives at UTM-scale anchors.
-                let mut bins: Vec<(Option<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>)> = Vec::new();
+                // Bins: key = Some(rgb)
+                struct TextBin {
+                    color: Option<[f32; 3]>,
+                    pts: Vec<[f32; 3]>,
+                    pts_low: Vec<[f32; 3]>,
+                    fill_tris: Vec<[f32; 3]>,
+                    fill_tris_low: Vec<[f32; 3]>,
+                }
+                let mut bins: Vec<TextBin> = Vec::new();
                 let mut bin_first: Vec<bool> = Vec::new();
                 let find_or_make =
-                    |key: Option<[f32; 3]>, bins: &mut Vec<(Option<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 3]>)>, firsts: &mut Vec<bool>| -> usize {
-                        if let Some(i) = bins.iter().position(|(k, _, _)| *k == key) {
+                    |key: Option<[f32; 3]>, bins: &mut Vec<TextBin>, firsts: &mut Vec<bool>| -> usize {
+                        if let Some(i) = bins.iter().position(|b| b.color == key) {
                             i
                         } else {
-                            bins.push((key, Vec::new(), Vec::new()));
+                            bins.push(TextBin {
+                                color: key,
+                                pts: Vec::new(),
+                                pts_low: Vec::new(),
+                                fill_tris: Vec::new(),
+                                fill_tris_low: Vec::new(),
+                            });
                             firsts.push(true);
                             bins.len() - 1
                         }
@@ -184,27 +195,33 @@ pub fn tessellate(
                     let sly_v = (ly_v - ref_ly_v) * anno + ref_ly_v;
                     let bin_key = if split_by_color { group.color } else { None };
                     let bi = find_or_make(bin_key, &mut bins, &mut bin_first);
-                    let (_k, pts, pts_low) = {
-                        let b = &mut bins[bi];
-                        (&b.0, &mut b.1, &mut b.2)
-                    };
-                    let _ = _k;
+                    
+                    // 1. Process outline strokes
                     for stroke in &group.strokes {
                         if stroke.len() < 2 {
                             continue;
                         }
-                        if !bin_first[bi] && !pts.is_empty() {
-                            pts.push([f32::NAN, f32::NAN, f32::NAN]);
-                            pts_low.push([0.0; 3]);
+                        if !bin_first[bi] && !bins[bi].pts.is_empty() {
+                            bins[bi].pts.push([f32::NAN, f32::NAN, f32::NAN]);
+                            bins[bi].pts_low.push([0.0; 3]);
                         }
                         bin_first[bi] = false;
                         for &[x, y] in stroke {
                             let xv = x as f64 * anno + slx_v;
                             let yv = y as f64 * anno + sly_v;
                             let (h, l) = split_ds_xyz(xv, yv, elev_v);
-                            pts.push(h);
-                            pts_low.push(l);
+                            bins[bi].pts.push(h);
+                            bins[bi].pts_low.push(l);
                         }
+                    }
+
+                    // 2. Process fill triangles
+                    for &[x, y] in &group.fill_tris {
+                        let xv = x as f64 * anno + slx_v;
+                        let yv = y as f64 * anno + sly_v;
+                        let (h, l) = split_ds_xyz(xv, yv, elev_v);
+                        bins[bi].fill_tris.push(h);
+                        bins[bi].fill_tris_low.push(l);
                     }
                 }
 
@@ -239,38 +256,93 @@ pub fn tessellate(
                     }];
                 }
 
-                let bin_count = bins.len();
-                let mut out: Vec<WireModel> = Vec::with_capacity(bin_count);
-                for (idx, (override_rgb, pts, pts_low)) in bins.into_iter().enumerate() {
-                    let wire_color = match override_rgb {
+                let mut out: Vec<WireModel> = Vec::new();
+                let mut is_first = true;
+                for bin in bins {
+                    let wire_color = match bin.color {
                         Some([r, g, b]) => [r, g, b, color[3]],
                         None => color,
                     };
-                    // Snap points and key vertices belong to the entity as a
-                    // whole — attach them only to the first emitted wire so
-                    // pickers / hover don't double-count.
-                    let (snap, keys, tangents) = if idx == 0 {
-                        (
-                            snap_pts.clone(),
-                            key_vertices.clone(),
-                            te.tangent_geoms.clone(),
-                        )
-                    } else {
-                        (Vec::new(), Vec::new(), Vec::new())
-                    };
+                    
+                    if !bin.pts.is_empty() {
+                        let (snap, keys, tangents) = if is_first {
+                            is_first = false;
+                            (
+                                snap_pts.clone(),
+                                key_vertices.clone(),
+                                te.tangent_geoms.clone(),
+                            )
+                        } else {
+                            (Vec::new(), Vec::new(), Vec::new())
+                        };
+                        out.push(WireModel {
+                            name: name.clone(),
+                            points: bin.pts,
+                            points_low: bin.pts_low,
+                            color: wire_color,
+                            selected,
+                            pattern_length: 0.0,
+                            pattern: [0.0; 8],
+                            line_weight_px,
+                            snap_pts: snap,
+                            tangent_geoms: tangents,
+                            aci: 0,
+                            key_vertices: keys,
+                            aabb: WireModel::UNBOUNDED_AABB,
+                            plinegen: true,
+                            vp_scissor: None,
+                            fill_tris: vec![],
+                            fill_tris_low: Vec::new(),
+                        });
+                    }
+
+                    if !bin.fill_tris.is_empty() {
+                        let (snap, keys, tangents) = if is_first {
+                            is_first = false;
+                            (
+                                snap_pts.clone(),
+                                key_vertices.clone(),
+                                te.tangent_geoms.clone(),
+                            )
+                        } else {
+                            (Vec::new(), Vec::new(), Vec::new())
+                        };
+                        out.push(WireModel {
+                            name: name.clone(),
+                            points: Vec::new(),
+                            points_low: Vec::new(),
+                            color: wire_color,
+                            selected,
+                            pattern_length: 0.0,
+                            pattern: [0.0; 8],
+                            line_weight_px,
+                            snap_pts: snap,
+                            tangent_geoms: tangents,
+                            aci: 0,
+                            key_vertices: keys,
+                            aabb: WireModel::UNBOUNDED_AABB,
+                            plinegen: true,
+                            vp_scissor: None,
+                            fill_tris: bin.fill_tris,
+                            fill_tris_low: bin.fill_tris_low,
+                        });
+                    }
+                }
+
+                if out.is_empty() {
                     out.push(WireModel {
-                        name: name.clone(),
-                        points: pts,
-                        points_low: pts_low,
-                        color: wire_color,
+                        name,
+                        points: Vec::new(),
+                        points_low: Vec::new(),
+                        color,
                         selected,
                         pattern_length: 0.0,
                         pattern: [0.0; 8],
                         line_weight_px,
-                        snap_pts: snap,
-                        tangent_geoms: tangents,
+                        snap_pts,
+                        tangent_geoms: te.tangent_geoms,
                         aci: 0,
-                        key_vertices: keys,
+                        key_vertices,
                         aabb: WireModel::UNBOUNDED_AABB,
                         plinegen: true,
                         vp_scissor: None,
@@ -414,25 +486,95 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
                 let (fill_tris, fill_tris_low) = points_to_ds(te.fill_tris);
-                return vec![WireModel {
-                    name,
-                    points: local_pts,
-                    points_low: local_pts_low,
-                    color,
-                    selected,
-                    pattern_length: 0.0,
-                    pattern: [0.0; 8],
-                    line_weight_px,
-                    snap_pts,
-                    tangent_geoms: te.tangent_geoms,
-                    aci: 0,
-                    key_vertices,
-                    aabb: WireModel::UNBOUNDED_AABB,
-                    plinegen: true,
-                    vp_scissor: None,
-                    fill_tris,
-                    fill_tris_low,
-                }];
+                let mut out = Vec::new();
+                let mut is_first = true;
+
+                if !local_pts.is_empty() {
+                    let (snap, keys, tangents) = if is_first {
+                        is_first = false;
+                        (
+                            snap_pts.clone(),
+                            key_vertices.clone(),
+                            te.tangent_geoms.clone(),
+                        )
+                    } else {
+                        (Vec::new(), Vec::new(), Vec::new())
+                    };
+                    out.push(WireModel {
+                        name: name.clone(),
+                        points: local_pts,
+                        points_low: local_pts_low,
+                        color,
+                        selected,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: snap,
+                        tangent_geoms: tangents,
+                        aci: 0,
+                        key_vertices: keys,
+                        aabb: WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris: vec![],
+                        fill_tris_low: Vec::new(),
+                    });
+                }
+
+                if !fill_tris.is_empty() {
+                    let (snap, keys, tangents) = if is_first {
+                        (
+                            snap_pts.clone(),
+                            key_vertices.clone(),
+                            te.tangent_geoms.clone(),
+                        )
+                    } else {
+                        (Vec::new(), Vec::new(), Vec::new())
+                    };
+                    out.push(WireModel {
+                        name: name.clone(),
+                        points: Vec::new(),
+                        points_low: Vec::new(),
+                        color,
+                        selected,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: snap,
+                        tangent_geoms: tangents,
+                        aci: 0,
+                        key_vertices: keys,
+                        aabb: WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris,
+                        fill_tris_low,
+                    });
+                }
+
+                if out.is_empty() {
+                    out.push(WireModel {
+                        name,
+                        points: Vec::new(),
+                        points_low: Vec::new(),
+                        color,
+                        selected,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts,
+                        tangent_geoms: te.tangent_geoms,
+                        aci: 0,
+                        key_vertices,
+                        aabb: WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris: vec![],
+                        fill_tris_low: Vec::new(),
+                    });
+                }
+
+                return out;
             }
 
             TruckObject::SegmentedLines(points) => {

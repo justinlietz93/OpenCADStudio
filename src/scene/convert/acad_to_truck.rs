@@ -18,6 +18,7 @@ pub struct TextStroke {
     pub strokes: Vec<Vec<[f32; 2]>>,
     pub origin: [f64; 2],
     pub color: Option<[f32; 3]>,
+    pub fill_tris: Vec<[f32; 2]>,
 }
 
 #[allow(dead_code)]

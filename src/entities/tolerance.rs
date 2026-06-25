@@ -206,7 +206,7 @@ fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
                 let text_w = cell.len() as f32 * char_w;
                 let tx = cell_x + (cw - text_w) * 0.5;
                 // Tessellate text in local frame then transform
-                let local_strokes =
+                let (local_strokes, _) =
                     lff::tessellate_text_ex([0.0, 0.0], h, 0.0, 1.0, 0.0, "txt", cell);
                 for polyline in local_strokes {
                     let transformed: Vec<[f32; 2]> = polyline
@@ -248,6 +248,7 @@ impl TruckConvertible for Tolerance {
                 strokes,
                 origin,
                 color: None,
+                fill_tris: vec![],
             }]),
             snap_pts: vec![(snap_pt, SnapHint::Insertion)],
             tangent_geoms: vec![],

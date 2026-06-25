@@ -119,11 +119,60 @@ pub struct OstTrackPoint {
     pub screen: Point,
 }
 
+pub fn grid_overlay<'a>(
+    grid: Vec<GridParams>,
+) -> Element<'a, Message> {
+    canvas(GridCanvas { grid })
+        .width(Length::Fill)
+        .height(Length::Fill)
+        .into()
+}
+
+struct GridCanvas {
+    grid: Vec<GridParams>,
+}
+
+impl canvas::Program<Message> for GridCanvas {
+    type State = ();
+
+    fn draw(
+        &self,
+        _state: &(),
+        renderer: &iced::Renderer,
+        _theme: &Theme,
+        bounds: iced::Rectangle,
+        _cursor: mouse::Cursor,
+    ) -> Vec<canvas::Geometry> {
+        let mut frame = canvas::Frame::new(renderer, bounds.size());
+
+        for g in &self.grid {
+            let gb = g.bounds;
+            let cx0 = gb.x.max(0.0);
+            let cy0 = gb.y.max(0.0);
+            let cx1 = (gb.x + gb.width).min(bounds.width);
+            let cy1 = (gb.y + gb.height).min(bounds.height);
+            if cx1 <= cx0 || cy1 <= cy0 {
+                continue;
+            }
+            let clip = iced::Rectangle {
+                x: cx0,
+                y: cy0,
+                width: cx1 - cx0,
+                height: cy1 - cy0,
+            };
+            frame.with_clip(clip, |f| {
+                draw_grid(f, g.view_rot, g.eye, g.plane, gb, g.origin, g.axes)
+            });
+        }
+
+        vec![frame.into_geometry()]
+    }
+}
+
 pub fn selection_overlay<'a>(
     selection: SelectionState,
     snap: Option<(Point, SnapType)>,
     grips: Vec<GripMarker>,
-    grid: Vec<GridParams>,
     ucs_icon: Option<UcsIconParams>,
     ost_points: Vec<OstTrackPoint>,
     cursor_screen: Point,
@@ -135,7 +184,6 @@ pub fn selection_overlay<'a>(
         selection,
         snap,
         grips,
-        grid,
         ucs_icon,
         ost_points,
         cursor_screen,
@@ -152,7 +200,6 @@ struct SelectionCanvas {
     selection: SelectionState,
     snap: Option<(Point, SnapType)>,
     grips: Vec<GripMarker>,
-    grid: Vec<GridParams>,
     ucs_icon: Option<UcsIconParams>,
     ost_points: Vec<OstTrackPoint>,
     cursor_screen: Point,
@@ -313,32 +360,6 @@ impl canvas::Program<Message> for SelectionCanvas {
             }
         }
 
-        // ── Grid display ──────────────────────────────────────────────────
-        // One entry per pane with its grid on. Each is clipped to its own
-        // rectangle so lines never spill into neighbouring panes — and the clip
-        // is intersected with the widget so a zoomed-in viewport whose rectangle
-        // overflows the canvas never paints grid outside the 3-D view.
-        for g in &self.grid {
-            let gb = g.bounds;
-            let cx0 = gb.x.max(0.0);
-            let cy0 = gb.y.max(0.0);
-            let cx1 = (gb.x + gb.width).min(bounds.width);
-            let cy1 = (gb.y + gb.height).min(bounds.height);
-            if cx1 <= cx0 || cy1 <= cy0 {
-                continue;
-            }
-            let clip = iced::Rectangle {
-                x: cx0,
-                y: cy0,
-                width: cx1 - cx0,
-                height: cy1 - cy0,
-            };
-            // Project with the full viewport rect `gb` so the grid stays aligned;
-            // only the clip is clamped.
-            frame.with_clip(clip, |f| {
-                draw_grid(f, g.view_rot, g.eye, g.plane, gb, g.origin, g.axes)
-            });
-        }
 
         if let (Some(a), Some(b)) = (self.selection.box_anchor, self.selection.box_current) {
             let (fill, stroke) = if self.selection.box_crossing {

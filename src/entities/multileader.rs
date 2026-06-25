@@ -267,6 +267,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
 
     // Text strokes, drawn from the layout computed up front (centred on the
     // text grip). The snap node is the grip itself.
+    let mut fill_tris = Vec::new();
     if let Some(layout) = &text_layout {
         snap_pts.push(node([text_loc.x, text_loc.y, text_loc.z]));
         for ts in &layout.strokes {
@@ -281,6 +282,9 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
                     points.push([ox + x as f64, oy + y as f64, text_loc.z]);
                 }
             }
+            for &[x, y] in &ts.fill_tris {
+                fill_tris.push([ox + x as f64, oy + y as f64, text_loc.z]);
+            }
         }
     }
 
@@ -293,7 +297,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
         snap_pts,
         tangent_geoms: tangents,
         key_vertices: key_verts,
-        fill_tris: vec![],
+        fill_tris,
     })
 }
 
@@ -1597,6 +1601,7 @@ impl MultiLeaderTess for MultiLeader {
                 // local glyph space with its world origin (already offset-
                 // relative because we passed local_ins_x/y) stored as f64.
                 let mut text_points: Vec<[f32; 3]> = Vec::new();
+                let mut text_fill_tris: Vec<[f32; 3]> = Vec::new();
                 for ts in &layout.strokes {
                     let ox = ts.origin[0] as f32;
                     let oy = ts.origin[1] as f32;
@@ -1609,9 +1614,19 @@ impl MultiLeaderTess for MultiLeader {
                             text_points.push([x + ox, y + oy, z]);
                         }
                     }
+                    for &[x, y] in &ts.fill_tris {
+                        text_fill_tris.push([x + ox, y + oy, z]);
+                    }
                 }
 
+                let mut is_first = true;
                 if !text_points.is_empty() {
+                    let snap = if is_first {
+                        is_first = false;
+                        vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)]
+                    } else {
+                        vec![]
+                    };
                     wires.push(WireModel {
                         name: name.clone(),
                         points: text_points,
@@ -1622,13 +1637,39 @@ impl MultiLeaderTess for MultiLeader {
                         pattern_length: 0.0,
                         pattern: [0.0; 8],
                         line_weight_px,
-                        snap_pts: vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)],
+                        snap_pts: snap,
                         tangent_geoms: vec![],
                         key_vertices: vec![],
                         aabb: WireModel::UNBOUNDED_AABB,
                         plinegen: true,
                         vp_scissor: None,
                         fill_tris: vec![],
+                        fill_tris_low: Vec::new(),
+                    });
+                }
+                if !text_fill_tris.is_empty() {
+                    let snap = if is_first {
+                        vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)]
+                    } else {
+                        vec![]
+                    };
+                    wires.push(WireModel {
+                        name: name.clone(),
+                        points: vec![],
+                        points_low: Vec::new(),
+                        color: text_color,
+                        selected,
+                        aci: 0,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: snap,
+                        tangent_geoms: vec![],
+                        key_vertices: vec![],
+                        aabb: WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris: text_fill_tris,
                         fill_tris_low: Vec::new(),
                     });
                 }

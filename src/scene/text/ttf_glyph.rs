@@ -21,6 +21,10 @@ use crate::scene::text::sysfont;
 use rustc_hash::FxHashMap as HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
+use lyon_tessellation::math::point;
+use lyon_tessellation::path::Path;
+use lyon_tessellation::{FillTessellator, FillOptions, BuffersBuilder, VertexBuffers, FillVertex};
+
 /// Bézier flattening step counts. Outlines are small on screen most of the
 /// time; these are a fixed budget that keeps curves smooth without exploding
 /// vertex counts. Cubic gets more steps because OTF/CFF curves swing wider.
@@ -156,10 +160,12 @@ pub fn glyph(family: &str, ch: char) -> Option<Arc<Glyph>> {
         // A glyph with no outline (e.g. space) still has a valid advance.
         face.outline_glyph(gid, &mut fl);
         fl.flush();
+        let fill_tris = triangulate_contours(&fl.contours);
 
         Some(Arc::new(Glyph {
             strokes: fl.contours,
             advance,
+            fill_tris,
         }))
     })
     .flatten();
@@ -180,6 +186,46 @@ fn cap_scale(face: &ttf_parser::Face) -> f32 {
     CAP_UNITS / cap
 }
 
+fn triangulate_contours(contours: &[Vec<[f32; 2]>]) -> Vec<[f32; 2]> {
+    if contours.is_empty() {
+        return Vec::new();
+    }
+
+    let mut builder = Path::builder();
+    for contour in contours {
+        if contour.len() < 3 {
+            continue;
+        }
+        builder.begin(point(contour[0][0], contour[0][1]));
+        for p in &contour[1..] {
+            builder.line_to(point(p[0], p[1]));
+        }
+        builder.end(true);
+    }
+    let path = builder.build();
+
+    let mut geometry: VertexBuffers<[f32; 2], u32> = VertexBuffers::new();
+    let mut tessellator = FillTessellator::new();
+    if let Err(e) = tessellator.tessellate_path(
+        &path,
+        &FillOptions::default(),
+        &mut BuffersBuilder::new(&mut geometry, |vertex: FillVertex| {
+            vertex.position().to_array()
+        }),
+    ) {
+        eprintln!("[ttf_glyph] Tessellation error: {:?}", e);
+        return Vec::new();
+    }
+
+    let mut tris = Vec::with_capacity(geometry.indices.len());
+    for &idx in &geometry.indices {
+        if let Some(&p) = geometry.vertices.get(idx as usize) {
+            tris.push(p);
+        }
+    }
+    tris
+}
+
 // ── Shaping ────────────────────────────────────────────────────────────────
 
 /// One shaped glyph, positioned within its run. Strokes are in 9-unit space and
@@ -187,6 +233,7 @@ fn cap_scale(face: &ttf_parser::Face) -> f32 {
 /// so the caller only applies the run's own transform.
 pub struct PlacedGlyph {
     pub strokes: Vec<Vec<[f32; 2]>>,
+    pub fill_tris: Vec<[f32; 2]>,
 }
 
 /// A fully shaped run.
@@ -289,9 +336,11 @@ fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
     if fl.contours.is_empty() {
         return None;
     }
+    let fill_tris = triangulate_contours(&fl.contours);
     Some(Arc::new(Glyph {
         strokes: fl.contours,
         advance,
+        fill_tris,
     }))
 }
 
@@ -321,9 +370,11 @@ fn build_fallback(ch: char) -> Option<Arc<Glyph>> {
             let mut fl = OutlineFlattener::new(k);
             face.outline_glyph(gid, &mut fl);
             fl.flush();
+            let fill_tris = triangulate_contours(&fl.contours);
             return Some(Arc::new(Glyph {
                 strokes: fl.contours,
                 advance,
+                fill_tris,
             }));
         }
     }
@@ -391,8 +442,10 @@ fn build_shaped(family: &str, text: &str) -> Option<ShapedRun> {
             face.outline_glyph(ttf_parser::GlyphId(g.glyph_id), &mut fl);
             fl.flush();
             if !fl.contours.is_empty() {
+                let fill_tris = triangulate_contours(&fl.contours);
                 glyphs.push(PlacedGlyph {
                     strokes: fl.contours,
+                    fill_tris,
                 });
             }
         }

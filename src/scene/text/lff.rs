@@ -89,6 +89,7 @@ pub struct Glyph {
     pub strokes: Vec<Vec<[f32; 2]>>,
     /// Advance width in glyph units (rightmost X of all strokes).
     pub advance: f32,
+    pub fill_tris: Vec<[f32; 2]>,
 }
 
 /// A parsed LFF font.
@@ -329,7 +330,7 @@ pub fn tessellate_text_ex(
     oblique_angle: f32,
     font_name: &str,
     text: &str,
-) -> Vec<Vec<[f32; 2]>> {
+) -> (Vec<Vec<[f32; 2]>>, Vec<[f32; 2]>) {
     tessellate_text_run(
         origin,
         height,
@@ -352,9 +353,9 @@ pub fn tessellate_text_run(
     tracking: f32,
     font_name: &str,
     text: &str,
-) -> Vec<Vec<[f32; 2]>> {
+) -> (Vec<Vec<[f32; 2]>>, Vec<[f32; 2]>) {
     if text.is_empty() || height <= 0.0 {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let face = crate::scene::text::font_face::Face::resolve(font_name);
@@ -377,6 +378,7 @@ pub fn tessellate_text_run(
     };
 
     let mut out: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut fill_tris: Vec<[f32; 2]> = Vec::new();
     let mut cursor_x: f32 = 0.0;
     let mut underline: Option<f32> = None;
     let mut overline: Option<f32> = None;
@@ -399,10 +401,16 @@ pub fn tessellate_text_run(
         }
     };
 
+    let emit_fill = |fill_tris: &mut Vec<[f32; 2]>, tris: &[[f32; 2]], cx: f32| {
+        for &v in tris {
+            fill_tris.push(xform(v[0], v[1], cx));
+        }
+    };
+
     // Flush a buffered TTF segment: shape it, emit the positioned glyph
     // contours, and advance the pen by the shaped run width. Falls back to
     // per-glyph outlines if shaping is unavailable.
-    let flush_ttf = |seg: &mut String, cursor_x: &mut f32, out: &mut Vec<Vec<[f32; 2]>>| {
+    let flush_ttf = |seg: &mut String, cursor_x: &mut f32, out: &mut Vec<Vec<[f32; 2]>>, fill_tris: &mut Vec<[f32; 2]>| {
         if seg.is_empty() {
             return;
         }
@@ -410,6 +418,7 @@ pub fn tessellate_text_run(
         if let Some(run) = crate::scene::text::ttf_glyph::shape_run(family, seg) {
             for g in &run.glyphs {
                 emit_glyph(out, &g.strokes, *cursor_x);
+                emit_fill(fill_tris, &g.fill_tris, *cursor_x);
             }
             *cursor_x += run.advance * wf;
         } else {
@@ -417,6 +426,7 @@ pub fn tessellate_text_run(
                 match face.glyph(ch) {
                     Some(glyph) => {
                         emit_glyph(out, &glyph.strokes, *cursor_x);
+                        emit_fill(fill_tris, &glyph.fill_tris, *cursor_x);
                         *cursor_x += (glyph.advance + face.letter_spacing() * tracking) * wf;
                     }
                     None => {
@@ -435,7 +445,7 @@ pub fn tessellate_text_run(
         // decoration toggle, end of run) flushes the buffer first so pen
         // positions stay correct for decorations.
         if ttf_family.is_some() && !matches!(tok, Tok::Glyph(_)) {
-            flush_ttf(&mut seg, &mut cursor_x, &mut out);
+            flush_ttf(&mut seg, &mut cursor_x, &mut out, &mut fill_tris);
         }
         match tok {
             Tok::Glyph(c) => {
@@ -445,6 +455,7 @@ pub fn tessellate_text_run(
                     match face.glyph(*c) {
                         Some(glyph) => {
                             emit_glyph(&mut out, &glyph.strokes, cursor_x);
+                            emit_fill(&mut fill_tris, &glyph.fill_tris, cursor_x);
                             cursor_x += (glyph.advance + face.letter_spacing() * tracking) * wf;
                         }
                         None => {
@@ -487,7 +498,7 @@ pub fn tessellate_text_run(
         }
     }
     if ttf_family.is_some() {
-        flush_ttf(&mut seg, &mut cursor_x, &mut out);
+        flush_ttf(&mut seg, &mut cursor_x, &mut out, &mut fill_tris);
     }
 
     if let Some(start) = underline {
@@ -500,7 +511,7 @@ pub fn tessellate_text_run(
         out.push(vec![xform(start, STRIKE_Y, 0.0), xform(cursor_x, STRIKE_Y, 0.0)]);
     }
 
-    out
+    (out, fill_tris)
 }
 
 // ── Parser ────────────────────────────────────────────────────────────────
@@ -641,11 +652,11 @@ fn parse_lff(src: &str) -> Font {
     };
     for (c, g) in raw {
         let advance = advance_of(&g.strokes);
-        font.glyphs.insert(c, Glyph { strokes: g.strokes, advance });
+        font.glyphs.insert(c, Glyph { strokes: g.strokes, advance, fill_tris: Vec::new() });
     }
     for (n, g) in raw_shapes {
         let advance = advance_of(&g.strokes);
-        font.shapes.insert(n, Glyph { strokes: g.strokes, advance });
+        font.shapes.insert(n, Glyph { strokes: g.strokes, advance, fill_tris: Vec::new() });
     }
     font
 }
@@ -735,7 +746,7 @@ mod tests {
             ("Hello, World!", 15, 113, 5078.5248),
         ];
         for &(t, segs, verts, sum_ref) in cases {
-            let st = tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, "txt", t);
+            let (st, _) = tessellate_text_ex([0.0, 0.0], 10.0, 0.0, 1.0, 0.0, "txt", t);
             let nv: usize = st.iter().map(|s| s.len()).sum();
             let sum: f64 = st
                 .iter()
@@ -780,7 +791,7 @@ mod tests {
         assert!(!is_builtin("amiri-regular"));
         assert!(get_font("kochigothic").glyph('A').is_some());
         // Unicode fallback covers a non-ASCII letter via the renderer path.
-        let strokes = tessellate_text_run([0.0, 0.0], 2.5, 0.0, 1.0, 0.0, 1.0, "Standard", "Aб");
+        let (strokes, _) = tessellate_text_run([0.0, 0.0], 2.5, 0.0, 1.0, 0.0, 1.0, "Standard", "Aб");
         assert!(!strokes.is_empty());
         // The bulge belongs to the segment ENDING at the vertex (LibreCAD
         // convention): the standard/iso/unicode 'O' must come out as an
@@ -803,7 +814,7 @@ mod tests {
         // Turkish letters absent from simplex/unicode still render via the
         // iso3098 fallback (ı/U+0131 is the one exception iso3098 lacks).
         for ch in ['Ğ', 'ş', 'İ', 'Ş', 'ğ'] {
-            let s = tessellate_text_run(
+            let (s, _) = tessellate_text_run(
                 [0.0, 0.0],
                 2.5,
                 0.0,
