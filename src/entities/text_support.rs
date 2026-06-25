@@ -515,8 +515,14 @@ pub fn parse_mtext_paragraphs_ex(
                     chars.next();
                     if chars.peek() == Some(&'+') {
                         chars.next();
-                        let mut hex = String::with_capacity(6);
-                        for _ in 0..6 {
+                        // A `\U+XXXX` escape is exactly four hex digits (a BMP
+                        // code point). Reading more greedily swallows the
+                        // following literal characters — e.g. the diameter
+                        // value `\U+220520` ("⌀20") was parsed as code point
+                        // 0x220520, which is out of range, so the whole text
+                        // vanished. (#139)
+                        let mut hex = String::with_capacity(4);
+                        for _ in 0..4 {
                             match chars.peek() {
                                 Some(&c) if c.is_ascii_hexdigit() => {
                                     hex.push(chars.next().unwrap());

@@ -286,7 +286,16 @@ pub fn tessellate(
                 let result = tessellate_vertex(&v);
                 match result {
                     TruckTessResult::Point([x, y, z], [xl, yl, zl]) => {
-                        let s = 0.1_f32;
+                        // A PDMODE=0 point is a single dot. Size its marker to
+                        // ~1 px so it reads as a dot rather than a large
+                        // world-space "+" in small drawings — otherwise the
+                        // dimension def-points on the Defpoints layer litter
+                        // the view with crosses. The tessellation cache keys on
+                        // world-per-pixel, so this re-sizes on zoom and stays a
+                        // constant on-screen size. (#139)
+                        let s = world_per_pixel
+                            .map(|w| (w * 0.75).max(1e-6))
+                            .unwrap_or(0.1);
                         let snap_pts = te.snap_pts;
                         let key_vertices: Vec<[f64; 3]> = te
                             .key_vertices
