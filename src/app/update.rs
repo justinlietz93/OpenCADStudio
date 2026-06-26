@@ -196,6 +196,8 @@ impl OpenCADStudio {
             },
             plugin_repos: self.plugin_repos.clone(),
             texteditmode: self.texteditmode,
+            bg_color: self.default_bg_color.map(f4_to_u3),
+            paper_bg_color: self.default_paper_bg_color.map(f4_to_u3),
         }
     }
 
@@ -212,7 +214,40 @@ impl OpenCADStudio {
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
         self.plugin_repos = s.plugin_repos.clone();
         self.texteditmode = s.texteditmode;
+        self.default_bg_color = s.bg_color.map(u3_to_f4);
+        self.default_paper_bg_color = s.paper_bg_color.map(u3_to_f4);
+        // Push the restored background onto every drawing tab that exists now
+        // (the start tab and any initial drawing). Tabs created later pick it
+        // up via `apply_bg_default` at their construction site.
+        for idx in 0..self.tabs.len() {
+            self.apply_bg_default(idx);
+        }
         self.rebuild_ribbon_modules();
+    }
+
+    /// Apply the persisted default background(s) to tab `idx`. No-op for the
+    /// start tab or when no default is set. Refreshes the tab's cached wires
+    /// and meshes so background-adaptive colours pick up the change.
+    pub(super) fn apply_bg_default(&mut self, idx: usize) {
+        let bg = self.default_bg_color;
+        let paper_bg = self.default_paper_bg_color;
+        if bg.is_none() && paper_bg.is_none() {
+            return;
+        }
+        let tab = &mut self.tabs[idx];
+        if tab.is_start {
+            return;
+        }
+        if let Some(c) = bg {
+            tab.bg_color = Some(c);
+            tab.scene.bg_color = c;
+        }
+        if let Some(c) = paper_bg {
+            tab.paper_bg_color = Some(c);
+            tab.scene.paper_bg_color = c;
+        }
+        tab.scene.recolor_meshes();
+        tab.scene.bump_geometry();
     }
 
     /// Check if a suspended command exists on the active tab and resume it
@@ -555,6 +590,7 @@ impl OpenCADStudio {
                     self.tabs.push(new_tab);
                     let idx = self.tabs.len() - 1;
                     self.active_tab = idx;
+                    self.apply_bg_default(idx);
                     idx
                 };
 
@@ -1346,6 +1382,8 @@ impl OpenCADStudio {
                 let new_tab = super::document::DocumentTab::new_drawing(self.tab_counter);
                 self.tabs.push(new_tab);
                 self.active_tab = self.tabs.len() - 1;
+                let idx = self.active_tab;
+                self.apply_bg_default(idx);
                 self.sync_ribbon_layers();
                 self.sync_ribbon_styles();
                 // #21: reset ribbon Color / Linetype / Lineweight to the
@@ -1397,6 +1435,7 @@ impl OpenCADStudio {
                     self.tab_counter += 1;
                     self.tabs[0] = super::document::DocumentTab::new_drawing(self.tab_counter);
                     self.active_tab = 0;
+                    self.apply_bg_default(0);
                 } else {
                     self.tabs.remove(idx);
                     if self.active_tab >= self.tabs.len() {
@@ -6474,6 +6513,7 @@ impl OpenCADStudio {
                             self.tabs[0] =
                                 super::document::DocumentTab::new_drawing(self.tab_counter);
                             self.active_tab = 0;
+                            self.apply_bg_default(0);
                         } else {
                             self.tabs.remove(idx);
                             if self.active_tab >= self.tabs.len() {
@@ -9590,4 +9630,20 @@ fn parse_plot_scale(s: &str) -> (f64, f64) {
         }
     }
     (1.0, 1.0)
+}
+
+/// Convert an internal `[r,g,b,a]` colour (0.0–1.0) to a persisted 0–255 RGB
+/// triplet, dropping alpha (backgrounds are always opaque).
+fn f4_to_u3([r, g, b, _]: [f32; 4]) -> [u8; 3] {
+    [
+        (r * 255.0).round().clamp(0.0, 255.0) as u8,
+        (g * 255.0).round().clamp(0.0, 255.0) as u8,
+        (b * 255.0).round().clamp(0.0, 255.0) as u8,
+    ]
+}
+
+/// Inverse of [`f4_to_u3`]: a persisted 0–255 RGB triplet back to an opaque
+/// `[r,g,b,a]` colour.
+fn u3_to_f4([r, g, b]: [u8; 3]) -> [f32; 4] {
+    [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
 }

@@ -245,6 +245,12 @@ pub(super) struct OpenCADStudio {
     dyn_input: bool,
     /// Controls whether the TEXTEDIT command repeats automatically (0 = Multiple, 1 = Single).
     pub texteditmode: bool,
+    /// Persisted default viewport background, restored from settings and applied
+    /// to every drawing tab (new and opened) so a chosen background survives
+    /// restarts (#188). `None` = the built-in dark-grey / off-white defaults.
+    /// The `a` channel is always 1.0.
+    default_bg_color: Option<[f32; 4]>,
+    default_paper_bg_color: Option<[f32; 4]>,
     /// `true` after a bare `VPORTS` in model space — the next command-line
     /// entry is treated as the tiled-config option (SIngle/2H/2V/4).
     awaiting_vports: bool,
@@ -1770,6 +1776,8 @@ impl OpenCADStudio {
             show_grid: false,
             dyn_input: true,
             texteditmode: false,
+            default_bg_color: None,
+            default_paper_bg_color: None,
             awaiting_vports: false,
             tile_drag: None,
             dyn_user_reshaped: false,

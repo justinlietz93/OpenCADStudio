@@ -58,6 +58,25 @@ fn snap_from_id(s: &str) -> Option<SnapType> {
     SNAP_ORDER.iter().copied().find(|t| snap_id(*t) == s)
 }
 
+/// Parse a persisted `r,g,b` background triplet (each 0–255). Returns `None`
+/// for an empty or malformed value so a missing/garbage key falls back to the
+/// app default rather than a wrong colour.
+fn parse_rgb(val: &str) -> Option<[u8; 3]> {
+    let mut it = val.split(',').map(|t| t.trim().parse::<u8>());
+    let r = it.next()?.ok()?;
+    let g = it.next()?.ok()?;
+    let b = it.next()?.ok()?;
+    if it.next().is_some() {
+        return None;
+    }
+    Some([r, g, b])
+}
+
+/// Serialize an optional background triplet back to `r,g,b`, or empty when unset.
+fn rgb_to_str(c: Option<[u8; 3]>) -> String {
+    c.map(|[r, g, b]| format!("{r},{g},{b}")).unwrap_or_default()
+}
+
 /// A snapshot of the persisted preferences. Field defaults mirror the app's
 /// in-code defaults so a missing key restores the same value the app boots
 /// with.
@@ -84,6 +103,12 @@ pub struct UserSettings {
     pub plugin_repos: Vec<String>,
     /// Controls whether the TEXTEDIT command repeats automatically (0 = Multiple, 1 = Single).
     pub texteditmode: bool,
+    /// Persisted viewport background colours (0–255 RGB); `None` = app default
+    /// (dark grey model / off-white paper). Applied to every drawing tab on
+    /// launch and to tabs opened later, so a chosen background survives restarts
+    /// (#188).
+    pub bg_color: Option<[u8; 3]>,
+    pub paper_bg_color: Option<[u8; 3]>,
 }
 
 impl Default for UserSettings {
@@ -108,6 +133,8 @@ impl Default for UserSettings {
             disabled_plugins: Vec::new(),
             plugin_repos: Vec::new(),
             texteditmode: false,
+            bg_color: None,
+            paper_bg_color: None,
         }
     }
 }
@@ -140,6 +167,8 @@ impl UserSettings {
                 }
                 "osnap" => s.snap_enabled = val == "1",
                 "otrack" => s.otrack = val == "1",
+                "bg_color" => s.bg_color = parse_rgb(val),
+                "paper_bg_color" => s.paper_bg_color = parse_rgb(val),
                 "default_assoc_prompted" => s.default_assoc_prompted = val == "1",
                 "texteditmode" => {
                     if let Some(v) =
@@ -189,7 +218,7 @@ impl UserSettings {
             .collect::<Vec<_>>()
             .join(",");
         let body = format!(
-            "dyn={}\northo={}\npolar={}\npolar_increment_deg={}\nosnap={}\notrack={}\ndefault_assoc_prompted={}\nsnap_modes={}\ndisabled_plugins={}\nplugin_repos={}\ntexteditmode={}\n",
+            "dyn={}\northo={}\npolar={}\npolar_increment_deg={}\nosnap={}\notrack={}\ndefault_assoc_prompted={}\nsnap_modes={}\ndisabled_plugins={}\nplugin_repos={}\ntexteditmode={}\nbg_color={}\npaper_bg_color={}\n",
             b(self.dyn_input),
             b(self.ortho),
             b(self.polar),
@@ -201,6 +230,8 @@ impl UserSettings {
             self.disabled_plugins.join(","),
             self.plugin_repos.join(","),
             self.texteditmode,
+            rgb_to_str(self.bg_color),
+            rgb_to_str(self.paper_bg_color),
         );
         let _ = std::fs::write(path, body);
     }

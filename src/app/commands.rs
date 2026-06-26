@@ -108,6 +108,9 @@ impl OpenCADStudio {
             // ── Background color ───────────────────────────────────────────
             // Usage:  BACKGROUND <r> <g> <b>   (0–255 each)
             //         BACKGROUND RESET          (restore default)
+            // The chosen colour is also stored as the persisted default
+            // (`default_bg_color` / `default_paper_bg_color`) so it survives
+            // restarts and applies to new drawings (#188).
             cmd if cmd == "BACKGROUND" || cmd.starts_with("BACKGROUND ") => {
                 let args = cmd.split_whitespace().skip(1).collect::<Vec<_>>();
                 let is_paper = self.tabs[i].scene.current_layout != "Model";
@@ -119,9 +122,11 @@ impl OpenCADStudio {
                     if is_paper {
                         self.tabs[i].paper_bg_color = None;
                         self.tabs[i].scene.paper_bg_color = [1.0, 1.0, 1.0, 1.0];
+                        self.default_paper_bg_color = None;
                     } else {
                         self.tabs[i].bg_color = None;
                         self.tabs[i].scene.bg_color = [0.11, 0.11, 0.11, 1.0];
+                        self.default_bg_color = None;
                     }
                     // Wire colour adaptation (`adapt_to_bg`) reads the bg
                     // at tessellation time, so the cached wires need to
@@ -139,12 +144,15 @@ impl OpenCADStudio {
                     let r = args[0].parse::<u8>().unwrap_or(0) as f32 / 255.0;
                     let g = args[1].parse::<u8>().unwrap_or(0) as f32 / 255.0;
                     let b = args[2].parse::<u8>().unwrap_or(0) as f32 / 255.0;
+                    let rgba = [r, g, b, 1.0];
                     if is_paper {
-                        self.tabs[i].paper_bg_color = Some([r, g, b, 1.0]);
-                        self.tabs[i].scene.paper_bg_color = [r, g, b, 1.0];
+                        self.tabs[i].paper_bg_color = Some(rgba);
+                        self.tabs[i].scene.paper_bg_color = rgba;
+                        self.default_paper_bg_color = Some(rgba);
                     } else {
-                        self.tabs[i].bg_color = Some([r, g, b, 1.0]);
-                        self.tabs[i].scene.bg_color = [r, g, b, 1.0];
+                        self.tabs[i].bg_color = Some(rgba);
+                        self.tabs[i].scene.bg_color = rgba;
+                        self.default_bg_color = Some(rgba);
                     }
                     self.tabs[i].scene.recolor_meshes();
                     self.tabs[i].scene.bump_geometry();
@@ -152,6 +160,8 @@ impl OpenCADStudio {
                         "Background: rgb({}, {}, {})",
                         args[0], args[1], args[2]
                     ));
+                    // Persisted centrally after this message via
+                    // `persist_settings_if_changed()`.
                 } else {
                     self.command_line
                         .push_info("Usage: BACKGROUND <r> <g> <b>  (0–255)  |  BACKGROUND RESET");
