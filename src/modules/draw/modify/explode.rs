@@ -18,9 +18,11 @@ use std::f64::consts::TAU;
 
 use acadrust::entities::EntityCommon;
 use acadrust::entities::{
-    Arc as ArcEnt, Circle as CircleEnt, Dimension, Line as LineEnt, LwPolyline, MLine,
+    Arc as ArcEnt, Block, BlockEnd, Circle as CircleEnt, Dimension, Line as LineEnt, LwPolyline,
+    MLine,
 };
 use acadrust::entities::{Polyline, Polyline2D};
+use acadrust::tables::BlockRecord;
 use acadrust::types::Vector3;
 use acadrust::{CadDocument, EntityType, Handle};
 
@@ -428,6 +430,105 @@ fn explode_dimension(dim: &Dimension) -> Vec<EntityType> {
     result
 }
 
+// ── Dimension block baking (DWG/DXF interop) ────────────────────────────────
+
+/// Smallest free `*D<n>` anonymous block name in `doc`.
+fn next_dimension_block_name(doc: &CadDocument) -> String {
+    let mut n = 0u64;
+    loop {
+        let cand = format!("*D{n}");
+        if doc.block_records.get(&cand).is_none() {
+            return cand;
+        }
+        n += 1;
+    }
+}
+
+/// Bake an anonymous `*D<n>` geometry block for every DIMENSION that doesn't
+/// already own one, so the file is valid for AutoCAD-family readers.
+///
+/// OCS renders dimensions by re-tessellating them on the fly and never
+/// materialises the `*D` block that a DWG `DIMENSION` is supposed to reference
+/// (the lines / arrows / text that AutoCAD actually draws). A dimension created
+/// in OCS therefore goes out referencing a block that doesn't exist, and the
+/// writer emits a null block handle — strict readers (DWG TrueView, QCAD) drop
+/// the dimension or demand a recovery, and lenient ones (BricsCAD) regenerate it
+/// at a different position. Call this on the document about to be written so each
+/// such dimension gets a real block built from its exploded geometry (extension
+/// lines + dimension line + measurement text, the same decomposition EXPLODE
+/// uses) and its `block_name` points at it.
+///
+/// Dimensions that already reference an existing block (e.g. imported from a real
+/// DWG, or copied via the `*D`-cloning copy path) are left untouched so their
+/// original graphics are preserved.
+pub fn bake_dimension_blocks(doc: &mut CadDocument) {
+    // Handles of dimensions whose block reference is missing or dangling.
+    let pending: Vec<Handle> = doc
+        .entities()
+        .filter_map(|e| match e {
+            EntityType::Dimension(d) => {
+                let bn = &d.base().block_name;
+                if bn.trim().is_empty() || doc.block_records.get(bn).is_none() {
+                    Some(d.base().common.handle)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        })
+        .collect();
+
+    for handle in pending {
+        let dim = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.clone(),
+            _ => continue,
+        };
+        let subs = explode_dimension(&dim);
+        if subs.is_empty() {
+            continue;
+        }
+
+        let name = next_dimension_block_name(doc);
+        // Reserve three consecutive handles for the record / block / endblk.
+        // Adding the block + endblk (which carry explicit handles) advances the
+        // document's handle counter past them, so the NULL-handle sub-entities
+        // added afterwards get fresh handles without colliding.
+        let next = doc.next_handle();
+        let br_handle = Handle::new(next);
+        let block_handle = Handle::new(next + 1);
+        let end_handle = Handle::new(next + 2);
+
+        let mut br = BlockRecord::new(&name);
+        br.handle = br_handle;
+        br.block_entity_handle = block_handle;
+        br.block_end_handle = end_handle;
+        br.flags.anonymous = true;
+        if doc.block_records.add(br).is_err() {
+            continue;
+        }
+
+        let mut block = Block::new(&name, Vector3::new(0.0, 0.0, 0.0));
+        block.common.handle = block_handle;
+        block.common.owner_handle = br_handle;
+        let _ = doc.add_entity(EntityType::Block(block));
+
+        let mut block_end = BlockEnd::new();
+        block_end.common.handle = end_handle;
+        block_end.common.owner_handle = br_handle;
+        let _ = doc.add_entity(EntityType::BlockEnd(block_end));
+
+        for mut sub in subs {
+            sub.common_mut().handle = Handle::NULL;
+            sub.common_mut().owner_handle = br_handle;
+            let _ = doc.add_entity(sub);
+        }
+
+        if let Some(EntityType::Dimension(d)) = doc.get_entity_mut(handle) {
+            d.base_mut().block_name = name;
+        }
+    }
+}
+
 // ── Command stub (kept for future interactive selection mode) ───────────────
 
 pub struct ExplodeCommand;
@@ -455,5 +556,48 @@ impl CadCommand for ExplodeCommand {
     }
     fn on_escape(&mut self) -> CmdResult {
         CmdResult::Cancel
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use acadrust::entities::DimensionLinear;
+
+    /// A dimension created without a geometry block gets a real `*D` block on
+    /// bake, its `block_name` resolves to that block, and a second bake is a
+    /// no-op (already has a valid block).
+    #[test]
+    fn bakes_block_for_blockless_dimension_and_is_idempotent() {
+        let mut doc = CadDocument::new();
+
+        let mut d = DimensionLinear::new(Vector3::new(0.0, 0.0, 0.0), Vector3::new(10.0, 0.0, 0.0));
+        d.definition_point = Vector3::new(0.0, 5.0, 0.0);
+        d.base.text_middle_point = Vector3::new(5.0, 5.0, 0.0);
+        // block_name is left empty — exactly what OCS-created dimensions carry.
+        let handle = doc
+            .add_entity(EntityType::Dimension(Dimension::Linear(d)))
+            .unwrap();
+
+        bake_dimension_blocks(&mut doc);
+
+        let block_name = match doc.get_entity(handle) {
+            Some(EntityType::Dimension(d)) => d.base().block_name.clone(),
+            _ => panic!("dimension missing"),
+        };
+        assert!(!block_name.trim().is_empty(), "block_name should be set");
+        assert!(
+            doc.block_records.get(&block_name).is_some(),
+            "baked block must exist in the block table"
+        );
+
+        // Second pass must not create another block for the same dimension.
+        let before = doc.block_records.len();
+        bake_dimension_blocks(&mut doc);
+        assert_eq!(
+            doc.block_records.len(),
+            before,
+            "a dimension that already owns a block must not be re-baked"
+        );
     }
 }

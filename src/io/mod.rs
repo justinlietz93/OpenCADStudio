@@ -465,6 +465,7 @@ pub fn save_as_version(
     let mut doc = doc.clone();
     doc.version = version;
     sync_current_styles_on_save(&mut doc);
+    crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -496,6 +497,7 @@ pub fn save_to_bytes(
     let mut doc = doc.clone();
     doc.version = version;
     sync_current_styles_on_save(&mut doc);
+    crate::modules::draw::modify::explode::bake_dimension_blocks(&mut doc);
     match ext.to_lowercase().as_str() {
         "dxf" => DxfWriter::new(&doc).write_to_vec().map_err(|e| e.to_string()),
         _ => {
