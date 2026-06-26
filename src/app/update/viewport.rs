@@ -1,0 +1,2660 @@
+//! `viewport` arms and helpers, split out of the original `update.rs` (#mechanical decomposition).
+
+#![allow(unused_imports)]
+use super::util::*;
+use super::{format_size, tile_min_norm, TILE_EDGE_HIT_PX, VIEWCUBE_HIT_SIZE};
+use crate::app::helpers::{
+    ortho_constrain, parse_coord, polar_constrain_near, ucs_rotate_vec, ucs_to_wcs, ucs_z_axis,
+    CoordKind,
+};
+use crate::app::{Message, OpenCADStudio, POLY_START_DELAY_MS};
+use crate::modules::ModuleEvent;
+use crate::scene::pick::grip::{find_hit_grip, find_hit_grip_paper, find_hit_grip_rte, GripEdit};
+use crate::scene::model::object::GripApply;
+use crate::scene::{
+    self, hover_id, CubeRegion, Scene, TileEdgeOrient, VIEWCUBE_DRAW_PX, VIEWCUBE_PAD, VIEWCUBE_PX,
+};
+use crate::ui::PropertiesPanel;
+use acadrust::types::Color as AcadColor;
+use acadrust::{EntityType as AcadEntityType, Handle};
+use iced::time::Instant;
+use iced::{mouse, Point, Task};
+
+
+impl OpenCADStudio {
+    /// Write PDSIZE from the dialog buffer with the current relative/absolute
+    /// sign. A relative size is stored negative; absolute positive. Switching to
+    /// absolute with an empty/zero size seeds a positive value from the current
+    /// on-screen size so the point stays representable (PDSIZE 0 always reads as
+    /// relative, so absolute needs a non-zero magnitude).
+    pub(in crate::app) fn apply_point_size(&mut self) {
+        let i = self.active_tab;
+        let mut mag = self
+            .point_size_buf
+            .trim()
+            .parse::<f64>()
+            .unwrap_or(0.0)
+            .abs();
+        if !self.point_size_relative && mag == 0.0 {
+            let wpp = self.tabs[i].scene.world_per_pixel().unwrap_or(0.0);
+            mag = if wpp > 0.0 {
+                crate::entities::point::relative_world_size(0.0, wpp)
+            } else {
+                1.0
+            };
+            self.point_size_buf = format!("{mag:.4}");
+        }
+        let next = if self.point_size_relative { -mag } else { mag };
+        self.push_undo_snapshot(i, "PDSIZE");
+        self.tabs[i].scene.document.header.point_display_size = next;
+        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].dirty = true;
+    }
+
+    /// Replace the `mask` bits of PDMODE with `value`, rebuild the point glyphs
+    /// and mark the document dirty. Used by the Point Style (DDPTYPE) dialog.
+    pub(in crate::app) fn set_point_mode_bits(&mut self, mask: i16, value: i16) {
+        let i = self.active_tab;
+        let cur = self.tabs[i].scene.document.header.point_display_mode;
+        let next = (cur & !mask) | (value & mask);
+        if next == cur {
+            return;
+        }
+        self.push_undo_snapshot(i, "PDMODE");
+        self.tabs[i].scene.document.header.point_display_mode = next;
+        self.tabs[i].scene.bump_geometry();
+        self.tabs[i].dirty = true;
+    }
+
+    /// Mirror the live grid display + grid-snap toggles onto tab `i`'s active
+    /// model tile so a save writes them to that viewport's VPort entry (#121).
+    pub(in crate::app) fn sync_vport_display(&mut self, i: usize) {
+        let grid_on = self.show_grid;
+        let snap_on = self.snapper.grid_snap();
+        self.tabs[i].scene.set_active_tile_grid_snap(grid_on, snap_on);
+    }
+
+    /// Adopt the active viewport's grid *display* into the live toggle. Called
+    /// on load and whenever the active tab or viewport changes, so the grid
+    /// drawing follows the active viewport.
+    ///
+    /// Grid *snap* (`SnapType::Grid`) is deliberately NOT adopted here: it stays
+    /// off by default everywhere and is controlled solely by the user's snap
+    /// toggle, so it never silently leaks into object-snap when entering a
+    /// viewport whose stored `snap_on` flag happens to be set.
+    pub(in crate::app) fn adopt_view_display(&mut self, i: usize) {
+        if let Some((grid_on, _snap_on)) = self.tabs[i].scene.active_tile_grid_snap() {
+            self.show_grid = grid_on;
+        }
+    }
+
+    pub(in crate::app) fn sync_render_mode_to_active_tile(&mut self, i: usize) {
+        use acadrust::entities::ViewportRenderMode as M;
+        if self.tabs[i].scene.current_layout != "Model" {
+            return;
+        }
+        let mode = self.tabs[i].scene.active_model_tile_render_mode();
+        if self.tabs[i].render_mode == mode {
+            return;
+        }
+        let label = match mode {
+            M::Wireframe2D => "Wireframe 2D",
+            M::Wireframe3D => "Wireframe 3D",
+            M::HiddenLine => "Hidden Line",
+            M::FlatShaded => "Flat Shaded",
+            M::GouraudShaded => "Gouraud Shaded",
+            M::FlatShadedWithEdges => "Flat Shaded + Edges",
+            M::GouraudShadedWithEdges => "Gouraud Shaded + Edges",
+        };
+        self.tabs[i].render_mode = mode;
+        let wf = matches!(mode, M::Wireframe2D | M::Wireframe3D);
+        self.tabs[i].wireframe = wf;
+        self.ribbon.set_wireframe(wf);
+        self.tabs[i].visual_style = label.into();
+        self.tabs[i].scene.bump_geometry();
+    }
+
+    /// Project a pane-local cursor onto the active drawing plane and return a
+    /// **model-space** point. Inside a floating viewport `edit_cam` is the
+    /// viewport's own camera (a target-plane / UCS pick there already yields
+    /// model coords); otherwise the paper camera projects onto the sheet and
+    /// the result is mapped paper→model. Used by the readout, snap and click
+    /// paths so all three agree on the cursor's model location.
+
+    pub(in crate::app) fn cursor_model_point(
+        &self,
+        i: usize,
+        edit_cam: &Option<crate::scene::view::camera::Camera>,
+        p: iced::Point,
+        bounds: iced::Rectangle,
+    ) -> glam::DVec3 {
+        // Constrain to the UCS plane only where the UCS applies (model space or
+        // inside a viewport); plain paper space uses the target plane.
+        let plane = self
+            .tabs[i]
+            .active_ucs
+            .as_ref()
+            .filter(|_| self.tabs[i].editing_model_space())
+            .map(|ucs| {
+                (
+                    ucs_z_axis(ucs),
+                    glam::DVec3::new(ucs.origin.x, ucs.origin.y, ucs.origin.z),
+                )
+            });
+        let pick = |cam: &crate::scene::view::camera::Camera| match plane {
+            Some((normal, origin)) => cam.pick_on_plane(p, bounds, normal, origin),
+            None => cam.pick_on_target_plane(p, bounds),
+        };
+        match edit_cam {
+            Some(cam) => pick(cam),
+            None => {
+                let paper = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    pick(&c)
+                };
+                self.tabs[i].scene.paper_to_model(paper)
+            }
+        }
+    }
+
+    /// Projection + hit-test wires for the active pane. Inside a floating
+    /// viewport (`edit_cam` Some) it returns the viewport camera and the live
+    /// **model** wires, so wire / hatch picking lands on the entity under the
+    /// cursor exactly where the GPU draws it; otherwise the model/paper camera
+    /// and the normal hit-test wires. `bounds` is the pane-local rectangle.
+
+    pub(in crate::app) fn pick_view(
+        &self,
+        i: usize,
+        edit_cam: &Option<crate::scene::view::camera::Camera>,
+        bounds: iced::Rectangle,
+    ) -> (glam::Mat4, glam::DVec3, std::sync::Arc<Vec<crate::scene::WireModel>>) {
+        match edit_cam {
+            Some(cam) => {
+                let wires = match self.tabs[i].scene.active_viewport {
+                    Some(h) => self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height),
+                    None => self.tabs[i].scene.hit_test_wires(),
+                };
+                (cam.view_proj_rte(bounds), cam.eye(), wires)
+            }
+            None => {
+                let (view_rot, eye) = {
+                    let c = self.tabs[i].scene.camera.borrow();
+                    (c.view_proj_rte(bounds), c.eye())
+                };
+                (view_rot, eye, self.tabs[i].scene.hit_test_wires())
+            }
+        }
+    }
+
+
+    pub(in crate::app) fn update_grip_hover(&mut self, i: usize, p: iced::Point) {
+        const HOVER_OPEN_MS: u128 = 600;
+        const POPUP_DISMISS_PX: f32 = 80.0;
+        if self.tabs[i].active_cmd.is_some()
+            || self.tabs[i].active_grip.is_some()
+            || self.tabs[i].selected_grips.is_empty()
+        {
+            self.grip_hover = None;
+            self.grip_popup = None;
+            return;
+        }
+        let Some(handle) = self.tabs[i].selected_handle else {
+            self.grip_hover = None;
+            self.grip_popup = None;
+            return;
+        };
+        let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+        let bounds = iced::Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: vw,
+            height: vh,
+        };
+        let is_paper = self.tabs[i].scene.current_layout != "Model";
+        // In-viewport grips are model-space — project with the viewport camera
+        // at the viewport's own rect; the cursor is mapped into that rect.
+        let edit_frame = self.tabs[i].scene.viewport_edit_frame((vw, vh));
+        let hit = if let Some((cam, full)) = &edit_frame {
+            let local = iced::Rectangle {
+                x: 0.0,
+                y: 0.0,
+                width: full.width,
+                height: full.height,
+            };
+            let p_local = iced::Point::new(p.x - full.x, p.y - full.y);
+            find_hit_grip_rte(
+                p_local,
+                &self.tabs[i].selected_grips,
+                cam.view_proj_rte(local),
+                cam.eye(),
+                local,
+            )
+        } else if is_paper {
+            let cam = self.tabs[i].scene.camera.borrow();
+            let aspect = if vh > 0.0 { vw / vh } else { 1.0 };
+            let half_h = cam.ortho_size();
+            let half_w = half_h * aspect;
+            let tx = cam.target.x as f32;
+            let ty = cam.target.y as f32;
+            drop(cam);
+            find_hit_grip_paper(
+                p,
+                &self.tabs[i].selected_grips,
+                tx,
+                ty,
+                half_w,
+                half_h,
+                bounds,
+            )
+        } else {
+            let cam = self.tabs[i].scene.camera.borrow();
+            find_hit_grip(p, &self.tabs[i].selected_grips, &cam, bounds)
+        };
+        match hit {
+            Some((grip_id, _, _)) => {
+                let same = self
+                    .grip_hover
+                    .as_ref()
+                    .map_or(false, |h| h.handle == handle && h.grip_id == grip_id);
+                if !same {
+                    self.grip_hover = Some(crate::app::GripHover {
+                        handle,
+                        grip_id,
+                        screen: p,
+                        started: iced::time::Instant::now(),
+                    });
+                    self.grip_popup = None;
+                } else if let Some(h) = self.grip_hover.as_mut() {
+                    h.screen = p;
+                }
+                // Open popup once dwell crosses the threshold. The visibility
+                // grip has its own click-to-open dropdown, so it gets no
+                // hover grip-menu.
+                if self.grip_popup.is_none()
+                    && grip_id != crate::app::visibility::VIS_GRIP_ID
+                    && self
+                        .grip_hover
+                        .as_ref()
+                        .map_or(false, |h| h.started.elapsed().as_millis() >= HOVER_OPEN_MS)
+                {
+                    let entity_opt = self.tabs[i].scene.document.get_entity(handle);
+                    if let Some(e) = entity_opt {
+                        use crate::entities::traits::EntityTypeOps;
+                        let items = e.grip_menu(grip_id);
+                        if !items.is_empty() {
+                            self.grip_popup = Some(crate::app::GripPopup {
+                                handle,
+                                grip_id,
+                                anchor: p,
+                                items,
+                                selected: 0,
+                            });
+                        }
+                    }
+                }
+            }
+            None => {
+                self.grip_hover = None;
+                if let Some(popup) = &self.grip_popup {
+                    let dx = p.x - popup.anchor.x;
+                    let dy = p.y - popup.anchor.y;
+                    if (dx * dx + dy * dy).sqrt() > POPUP_DISMISS_PX {
+                        self.grip_popup = None;
+                    }
+                }
+            }
+        }
+    }
+
+pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
+                let i = self.active_tab;
+                self.tabs[i].scene.update(t - self.start);
+
+                // If the camera moved since we last synced, write it back to
+                // the document and mark the file dirty.
+                let gen = self.tabs[i].scene.camera_generation;
+                if gen != self.tabs[i].last_synced_camera_gen {
+                    self.tabs[i].last_synced_camera_gen = gen;
+                    if self.tabs[i].scene.sync_camera_to_document() {
+                        self.tabs[i].dirty = true;
+                    }
+                }
+
+                // Surface any plugin-guard panic messages that piled up since
+                // the last tick (the host singleton isn't reachable from inside
+                // the plugin hooks, so they queue and we flush here). (#145)
+                #[cfg(not(target_arch = "wasm32"))]
+                for msg in crate::plugin::drain_errors() {
+                    self.command_line.push_error(&msg);
+                }
+
+                Task::none()
+    }
+
+    pub(super) fn on_set_render_mode(&mut self, mode: acadrust::entities::ViewportRenderMode) -> Task<Message> {
+                use acadrust::entities::ViewportRenderMode as M;
+                let i = self.active_tab;
+                let label = match mode {
+                    M::Wireframe2D => "Wireframe 2D",
+                    M::Wireframe3D => "Wireframe 3D",
+                    M::HiddenLine => "Hidden Line",
+                    M::FlatShaded => "Flat Shaded",
+                    M::GouraudShaded => "Gouraud Shaded",
+                    M::FlatShadedWithEdges => "Flat Shaded + Edges",
+                    M::GouraudShadedWithEdges => "Gouraud Shaded + Edges",
+                };
+                // In a paper layout with an active (double-clicked)
+                // viewport, the picker drives that viewport entity's own
+                // render mode; the model-layout tab style is untouched.
+                if self.tabs[i].scene.set_active_viewport_render_mode(mode) {
+                    self.tabs[i].scene.bump_geometry();
+                    self.command_line
+                        .push_output(&format!("Viewport visual style: {label}"));
+                    return Task::none();
+                }
+                self.tabs[i].render_mode = mode;
+                // Write the style onto the active Model tile alone so it
+                // sticks when that tile loses focus and the other tiles keep
+                // their own styles.
+                self.tabs[i].scene.set_active_model_tile_render_mode(mode);
+                // Keep the legacy `wireframe` bool synced — both wireframe
+                // modes set it, everything else clears it.
+                let wf = matches!(mode, M::Wireframe2D | M::Wireframe3D);
+                self.tabs[i].wireframe = wf;
+                self.ribbon.set_wireframe(wf);
+                self.tabs[i].visual_style = label.into();
+                // Re-upload face3d fills on the next frame — the render
+                // pipeline keys its upload cache off `geometry_epoch`.
+                self.tabs[i].scene.bump_geometry();
+                self.command_line
+                    .push_output(&format!("Visual style: {label}"));
+                Task::none()
+    }
+
+    pub(super) fn on_cursor_moved(&mut self, p: Point) -> Task<Message> {
+                // `p` is relative to the ViewCube hit area's top-left. Map
+                // it back to full-canvas coordinates so ViewportClick's
+                // hit-test lines up. The hit area sits in the top-right of
+                // the full canvas in model space, or of the active
+                // viewport's screen rectangle in a paper layout.
+                let i = self.active_tab;
+                let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                let (ox, oy) = match self.tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (vw, vh)))
+                {
+                    Some(rect) => (
+                        rect.x + rect.width - VIEWCUBE_PAD - VIEWCUBE_HIT_SIZE,
+                        rect.y + VIEWCUBE_PAD,
+                    ),
+                    None => {
+                        // Model layout: the cube sits in the active tile's
+                        // top-right corner.
+                        let tb = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                        (
+                            tb.x + tb.width - VIEWCUBE_PAD - VIEWCUBE_HIT_SIZE,
+                            tb.y + VIEWCUBE_PAD,
+                        )
+                    }
+                };
+                self.cursor_pos = iced::Point::new(ox + p.x, oy + p.y);
+
+                // Drive the ViewCube hover highlight directly from this
+                // message — it fires whenever the cube's hit-area overlay
+                // sees motion, so we don't depend on the shader widget's
+                // `Program::update` receiving the same event (overlays sit
+                // above the shader and can mask it). Map the cursor into
+                // the active viewport's local box and use that box's size,
+                // since that's where the cube is actually drawn.
+                let tile = match self.tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (vw, vh)))
+                {
+                    Some(rect) => rect,
+                    None => self.tabs[i].scene.active_model_tile_bounds(vw, vh),
+                };
+                let cam_rot = self.tabs[i].scene.active_view_rotation_mat();
+                let hover = hover_id(
+                    self.cursor_pos.x - tile.x,
+                    self.cursor_pos.y - tile.y,
+                    tile.width,
+                    tile.height,
+                    cam_rot,
+                    VIEWCUBE_PX,
+                );
+                self.tabs[i].scene.viewcube_hover.set(hover);
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_move(&mut self, p: Point) -> Task<Message> {
+                let i = self.active_tab;
+
+                // A Model-tile divider drag short-circuits the rest of
+                // the move handling — the cursor neither pans the camera
+                // nor updates snap state while the user is resizing
+                // panes.
+                if let Some(drag) = self.tile_drag.as_mut() {
+                    let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                    if vw > 1.0 && vh > 1.0 {
+                        let new_coord = match drag.orient {
+                            TileEdgeOrient::Vertical => (p.x / vw).clamp(0.0, 1.0),
+                            TileEdgeOrient::Horizontal => (p.y / vh).clamp(0.0, 1.0),
+                        };
+                        let (min_w, min_h) = tile_min_norm(vw, vh);
+                        let min_size = match drag.orient {
+                            TileEdgeOrient::Vertical => min_w,
+                            TileEdgeOrient::Horizontal => min_h,
+                        };
+                        self.tabs[i].scene.move_model_tile_edge(
+                            drag.orient,
+                            drag.last_applied,
+                            new_coord,
+                            min_size,
+                        );
+                        drag.last_applied = new_coord;
+                        self.tabs[i].scene.camera_generation += 1;
+                    }
+                    return Task::none();
+                }
+
+                // Keep the ViewCube hover in sync as the cursor leaves the
+                // hit-area overlay and moves over the rest of the viewport.
+                // `hover_id` returns None outside the cube box, which clears
+                // any stale highlight from the previous `CursorMoved`.
+                let (svw, svh) = self.tabs[i].scene.selection.borrow().vp_size;
+                let cube_tile = match self.tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|h| self.tabs[i].scene.viewport_screen_rect(h, (svw, svh)))
+                {
+                    Some(rect) => rect,
+                    None => self.tabs[i].scene.active_model_tile_bounds(svw, svh),
+                };
+                let cam_rot = self.tabs[i].scene.active_view_rotation_mat();
+                self.tabs[i].scene.viewcube_hover.set(hover_id(
+                    p.x - cube_tile.x,
+                    p.y - cube_tile.y,
+                    cube_tile.width,
+                    cube_tile.height,
+                    cam_rot,
+                    VIEWCUBE_PX,
+                ));
+
+                // Multi-functional grip hover: detect cursor sitting on a
+                // selected entity's grip and, after a dwell, open the
+                // popup menu. See scene::model::object::GripMenuItem.
+                self.update_grip_hover(i, p);
+
+                let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                sel.last_move_pos = Some(p);
+
+                if sel.left_down {
+                    let press = sel.left_press_pos.unwrap_or(p);
+                    let dx = p.x - press.x;
+                    let dy = p.y - press.y;
+                    let dist2 = dx * dx + dy * dy;
+                    let elapsed_ms = sel
+                        .left_press_time
+                        .map(|t| Instant::now().duration_since(t).as_millis())
+                        .unwrap_or(u128::MAX);
+                    if !sel.left_dragging && elapsed_ms >= POLY_START_DELAY_MS && dist2 > 9.0 {
+                        sel.left_dragging = true;
+                        sel.poly_active = true;
+                        sel.poly_crossing = p.x < press.x;
+                        sel.poly_points.clear();
+                        sel.poly_points.push(press);
+                        sel.poly_points.push(p);
+                    } else if sel.left_dragging && sel.poly_active {
+                        if sel.poly_points.last().map_or(true, |lp| {
+                            let ddx = p.x - lp.x;
+                            let ddy = p.y - lp.y;
+                            ddx * ddx + ddy * ddy > 16.0
+                        }) {
+                            sel.poly_points.push(p);
+                        }
+                    }
+                } else if sel.box_anchor.is_some() {
+                    sel.box_current = Some(p);
+                    if let Some(a) = sel.box_anchor {
+                        sel.box_crossing = p.x < a.x;
+                    }
+                }
+
+                if sel.right_down {
+                    if let Some(press) = sel.right_press_pos {
+                        let dx = p.x - press.x;
+                        let dy = p.y - press.y;
+                        // 8 px (64 squared) threshold so normal hand jitter
+                        // between a right-button press and release doesn't
+                        // promote a click-and-release to an orbit drag, which
+                        // would suppress the context menu on release.
+                        if !sel.right_dragging && (dx * dx + dy * dy) > 64.0 {
+                            sel.right_dragging = true;
+                            sel.context_menu = None;
+                        }
+                    }
+                    if sel.right_dragging {
+                        if let Some(last) = sel.right_last_pos {
+                            let (dx, dy) = (p.x - last.x, p.y - last.y);
+                            if self.tabs[i].scene.active_viewport.is_some() {
+                                // Update position before dropping the borrow.
+                                sel.right_last_pos = Some(p);
+                                drop(sel);
+                                self.tabs[i].scene.orbit_active_viewport(dx, dy);
+                                // Bump so the GPU re-uploads the viewport's
+                                // re-culled wire set after the view rotates.
+                                self.tabs[i].scene.camera_generation += 1;
+                                return Task::none();
+                            } else if self.tabs[i].scene.current_layout == "Model" {
+                                sel.right_last_pos = Some(p);
+                                drop(sel);
+                                self.tabs[i].scene.camera.borrow_mut().orbit(dx, dy);
+                                self.tabs[i].scene.camera_generation += 1;
+                                return Task::none();
+                            } else {
+                                // Paper sheet is top-locked: right-drag never
+                                // orbits it (orbiting would corrupt the camera
+                                // frame and skew subsequent pans).
+                                sel.right_last_pos = Some(p);
+                                return Task::none();
+                            }
+                        } else {
+                            sel.right_last_pos = Some(p);
+                        }
+                    }
+                }
+
+                let (mid_down, mid_last, vp_size) =
+                    (sel.middle_down, sel.middle_last_pos, sel.vp_size);
+                if mid_down {
+                    if let Some(last) = mid_last {
+                        let (dx, dy) = (p.x - last.x, p.y - last.y);
+                        // Pan scale uses the active tile's size (ortho size
+                        // is relative to viewport height), so a tiled pane
+                        // pans at the correct rate.
+                        let bounds = self.tabs[i]
+                            .scene
+                            .active_model_tile_bounds(vp_size.0, vp_size.1);
+                        // Drop `sel` before calling mutable scene methods.
+                        drop(sel);
+                        if self.tabs[i].scene.active_viewport.is_some() {
+                            self.tabs[i].scene.pan_active_viewport(dx, dy, bounds);
+                            // Bump so the GPU re-uploads the viewport's re-culled
+                            // wire set — otherwise newly-revealed lines stay
+                            // invisible until MSPACE is exited.
+                            self.tabs[i].scene.camera_generation += 1;
+                        } else {
+                            // `bounds` is the active tile; pan by its height so
+                            // the point under the cursor tracks correctly.
+                            self.tabs[i].scene.camera.borrow_mut().pan_screen(
+                                dx,
+                                dy,
+                                bounds.height,
+                            );
+                            self.tabs[i].scene.camera_generation += 1;
+                        }
+                        self.tabs[i].scene.selection.borrow_mut().middle_last_pos = Some(p);
+                        return Task::none();
+                    }
+                    sel.middle_last_pos = Some(p);
+                }
+
+                let dragging = sel.left_down || sel.right_down || sel.middle_down;
+                let vp_size = sel.vp_size;
+                drop(sel);
+
+                // Hover (no button held): the tile under the cursor becomes
+                // active, so the camera + tile bounds used for picking below
+                // follow the pane the cursor is in. During a drag the active
+                // tile stays put so the operation finishes in its own pane.
+                if !dragging && vp_size.0 > 1.0 && vp_size.1 > 1.0 {
+                    if self.tabs[i]
+                        .scene
+                        .set_active_model_tile_at(p.x / vp_size.0, p.y / vp_size.1)
+                    {
+                        self.tabs[i].scene.camera_generation += 1;
+                        self.sync_render_mode_to_active_tile(i);
+                        // Grid/snap follow the newly active viewport.
+                        self.adopt_view_display(i);
+                    }
+                }
+
+                // Tile-relative picking: shadow `p` with the cursor mapped
+                // into the active Model tile and `vp_size` with the tile's
+                // size, so every pick / snap / view_proj below operates in
+                // the active pane. `p_full` keeps the canvas-space cursor
+                // for screen overlays (cursor marker, snap glyph).
+                let p_full = p;
+                // Inside a floating viewport (MSPACE) the active "pane" is the
+                // viewport's own screen rectangle and its own camera — the very
+                // camera the GPU draws the content with. Routing picking / snap
+                // / projection through it makes in-viewport editing behave like
+                // the main model view (model coords, no paper round-trip) and
+                // track the viewport's pan / zoom / twist exactly.
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame(vp_size);
+                let tile_b = match &edit_frame {
+                    Some((_, full)) => *full,
+                    None => self.tabs[i]
+                        .scene
+                        .active_model_tile_bounds(vp_size.0, vp_size.1),
+                };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
+                let p = iced::Point {
+                    x: p_full.x - tile_b.x,
+                    y: p_full.y - tile_b.y,
+                };
+                let vp_size = (tile_b.width, tile_b.height);
+
+                // ── Grip drag ─────────────────────────────────────────────
+                if let Some(grip) = self.tabs[i].active_grip.clone() {
+                    let (vw, vh) = vp_size;
+                    let bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vw,
+                        height: vh,
+                    };
+                    // In a viewport, pick the cursor's model point with the
+                    // viewport camera directly; otherwise project on the paper
+                    // sheet and map to model. Either way `raw` is model space.
+                    let raw = match &edit_cam {
+                        Some(cam) => cam.pick_on_target_plane(p, bounds),
+                        None => {
+                            let paper = self
+                                .tabs[i]
+                                .scene
+                                .camera
+                                .borrow()
+                                .pick_on_target_plane(p, bounds);
+                            self.tabs[i].scene.paper_to_model(paper)
+                        }
+                    };
+                    let (view_rot, eye) = match &edit_cam {
+                        Some(cam) => (cam.view_proj_rte(bounds), cam.eye()),
+                        None => {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            (cam.view_proj_rte(bounds), cam.eye())
+                        }
+                    };
+
+                    // First move of this drag: hide the edited entity from the
+                    // base tessellation (one re-tess) so subsequent moves only
+                    // refresh a cheap overlay preview instead of re-tessellating
+                    // the whole model on every move.
+                    if self.grip_preview_handle != Some(grip.handle) {
+                        if let Some(prev) = self.grip_preview_handle.take() {
+                            self.tabs[i].scene.hidden.remove(&prev);
+                        }
+                        // Back up the original geometry so Esc can cancel the drag.
+                        self.grip_original =
+                            self.tabs[i].scene.document.get_entity(grip.handle).cloned();
+                        self.tabs[i].scene.hidden.insert(grip.handle);
+                        // Grip drag never changes a block definition — keep the
+                        // block cache so the hide doesn't re-tessellate blocks.
+                        self.tabs[i].scene.bump_geometry_no_blocks();
+                        self.grip_preview_handle = Some(grip.handle);
+                    }
+
+                    // The edited entity is hidden, so it's already absent from
+                    // `hit_test_wires` — snap against the set directly, no clone
+                    // and no self-snap.
+                    let all_wires = if let (Some(_), Some(h)) =
+                        (&edit_cam, self.tabs[i].scene.active_viewport)
+                    {
+                        self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
+                    } else {
+                        self.tabs[i].scene.hit_test_wires()
+                    };
+                    // Grip drag has no single rubber-band origin for a perp foot.
+                    self.snapper.from_point = None;
+                    let (go, gr) = self.tabs[i].ucs_grid_basis();
+                    // `raw` is already model space (viewport camera or paper→model),
+                    // and the wires are model space, so the snap result is model.
+                    let snap_hit = self
+                        .snapper
+                        .snap(raw, p, &all_wires[..], view_rot, eye, bounds, go, gr);
+                    let mut snapped = snap_hit.map(|s| s.world).unwrap_or(raw);
+                    self.tabs[i].snap_result = snap_hit;
+                    if let Some(s) = self.tabs[i].snap_result.as_mut() {
+                        s.screen.x += tile_b.x;
+                        s.screen.y += tile_b.y;
+                    }
+
+                    if snap_hit.is_none() {
+                        let base = grip.origin_world.as_vec3();
+                        let ucs_xf = self.tabs[i].ucs_xform();
+                        if self.ortho_mode {
+                            snapped = ortho_constrain(snapped.as_vec3(), base, &ucs_xf).as_dvec3();
+                        } else if self.polar_mode {
+                            snapped = polar_constrain_near(
+                                snapped.as_vec3(),
+                                base,
+                                self.polar_increment_deg,
+                                view_rot,
+                                eye,
+                                bounds,
+                                self.snapper.osnap_radius_px,
+                                &ucs_xf,
+                            )
+                            .as_dvec3();
+                        }
+                    }
+
+                    let apply = if grip.is_translate {
+                        GripApply::Translate(snapped - grip.last_world)
+                    } else {
+                        GripApply::Absolute(snapped)
+                    };
+                    self.tabs[i]
+                        .scene
+                        .apply_grip(grip.handle, grip.grip_id, apply);
+                    self.tabs[i].dirty = true;
+                    self.tabs[i].active_grip.as_mut().unwrap().last_world = snapped;
+                    // Overlay the moved entity (hidden from the base) — no base
+                    // re-tessellation, just a one-entity preview tessellation.
+                    let preview = self.tabs[i].scene.wire_models_for(&[grip.handle]);
+                    self.tabs[i].scene.set_preview_wires(preview);
+                    self.refresh_selected_grips();
+                    self.refresh_properties();
+                    return Task::none();
+                }
+
+                // Keep the coordinate readout live on every move, even with no
+                // active command. When a command is running the snap path below
+                // overwrites this with the snapped point.
+                {
+                    let bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vp_size.0,
+                        height: vp_size.1,
+                    };
+                    let world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                    self.tabs[i].last_cursor_world = world.as_vec3();
+                }
+
+                // Rollover highlight: when idle (no active command, no
+                // drag), defer the pick until the cursor stops. The full
+                // pick (wires + hatches + block hatches + shaded meshes) is
+                // O(N) per frame and stalls the cursor on large drawings,
+                // so each move clears the current highlight and resets the
+                // dwell timer — `HoverDwellTick` runs the hit-test only
+                // once the cursor has been still for `HOVER_DWELL_MS`.
+                if !dragging && self.tabs[i].active_cmd.is_none() {
+                    self.tabs[i].scene.set_hover_highlight(None);
+                    self.hover_dwell = Some(crate::app::HoverDwell {
+                        last_move_at: Instant::now(),
+                        point: p,
+                        tile_size: vp_size,
+                        tab: i,
+                    });
+                } else {
+                    // Suppress the rollover during a command or a drag.
+                    self.tabs[i].scene.set_hover_highlight(None);
+                    self.hover_dwell = None;
+                }
+
+                if self.tabs[i].active_cmd.is_some() {
+                    let (vw, vh) = vp_size;
+                    let bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vw,
+                        height: vh,
+                    };
+                    // Inside a floating viewport the cursor, camera and wires are
+                    // all model-space (the viewport's own camera draws the
+                    // content), so snap / hit-test / preview run exactly like the
+                    // main model view — no paper projection, tracks pan/zoom/twist.
+                    let cursor_world = self.cursor_model_point(i, &edit_cam, p, bounds);
+                    let (view_rot, eye) = match &edit_cam {
+                        Some(cam) => (cam.view_proj_rte(bounds), cam.eye()),
+                        None => {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            (cam.view_proj_rte(bounds), cam.eye())
+                        }
+                    };
+                    // Sync grid-snap spacing to the adaptive spacing of the visible grid.
+                    self.snapper.grid_spacing =
+                        crate::ui::overlay::compute_grid_step(view_rot, bounds);
+                    // Cursor and wires are model-space; the snap result is model.
+                    let snap_cursor = cursor_world;
+
+                    let all_wires = if let (Some(_), Some(h)) =
+                        (&edit_cam, self.tabs[i].scene.active_viewport)
+                    {
+                        self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
+                    } else {
+                        self.tabs[i].scene.hit_test_wires()
+                    };
+                    let needs_entity = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_entity_pick())
+                        .unwrap_or(false);
+                    let needs_structure = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_structure_point_pick())
+                        .unwrap_or(false);
+                    let is_gathering = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.is_selection_gathering())
+                        .unwrap_or(false);
+                    let needs_tan = self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_tangent_pick())
+                        .unwrap_or(false);
+                    self.tabs[i].snap_result = if needs_entity || is_gathering || needs_structure {
+                        None
+                    } else if needs_tan {
+                        self.snapper.snap_tangent_only(
+                            snap_cursor.as_vec3(),
+                            p,
+                            &all_wires[..],
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                    } else {
+                        let (go, gr) = self.tabs[i].ucs_grid_basis();
+                        self.snapper.from_point = self.last_point;
+                        self.snapper
+                            .snap(snap_cursor, p, &all_wires[..], view_rot, eye, bounds, go, gr)
+                    };
+
+                    // Object Snap Tracking: update dwell, then align the cursor
+                    // to a tracking ray (and store the alignment so a typed
+                    // distance can place a point along it — issue #69).
+                    let otrack_hit = {
+                        let snap_world = self.tabs[i].snap_result.map(|s| s.world.as_vec3());
+                        self.snapper.update_otrack_dwell(
+                            snap_world,
+                            view_rot,
+                            eye,
+                            bounds,
+                            Instant::now(),
+                        );
+                        if self.tabs[i].snap_result.is_none() {
+                            let step = if self.polar_mode {
+                                Some(self.polar_increment_deg)
+                            } else {
+                                None
+                            };
+                            let ucs = self.tabs[i].scene.viewcube_ucs_mat();
+                            self.snapper.otrack_snap(
+                                cursor_world.as_vec3(),
+                                view_rot,
+                                eye,
+                                bounds,
+                                step,
+                                self.last_point,
+                                ucs,
+                            )
+                        } else {
+                            None
+                        }
+                    };
+                    self.otrack_active = otrack_hit.map(|h| (h.base, h.dir));
+
+                    let effective = {
+                        let mut pt: glam::DVec3 = if let Some(h) = otrack_hit {
+                            // Tracking alignment wins over the free cursor;
+                            // ortho/polar don't re-constrain it.
+                            h.aligned.as_dvec3()
+                        } else {
+                            // Snap runs in model space (viewport camera or the
+                            // model/paper view), so the result is already model.
+                            let mut pt = self.tabs[i]
+                                .snap_result
+                                .map(|s| s.world)
+                                .unwrap_or(cursor_world);
+                            // Object snap wins over ortho/polar: a snapped point
+                            // is taken as-is so it isn't pulled onto the ortho
+                            // axis. Grid snap is positional, not an object snap,
+                            // so it still combines with ortho/polar. (#132)
+                            let osnap_locked = self.tabs[i]
+                                .snap_result
+                                .is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid);
+                            if !osnap_locked {
+                                if let Some(base) = self.last_point {
+                                    let ucs_xf = self.tabs[i].ucs_xform();
+                                    if self.ortho_mode {
+                                        pt = ortho_constrain(pt.as_vec3(), base, &ucs_xf)
+                                            .as_dvec3();
+                                    } else if self.polar_mode {
+                                        pt = polar_constrain_near(
+                                            pt.as_vec3(),
+                                            base,
+                                            self.polar_increment_deg,
+                                            view_rot,
+                                            eye,
+                                            bounds,
+                                            self.snapper.osnap_radius_px,
+                                            &ucs_xf,
+                                        )
+                                        .as_dvec3();
+                                    }
+                                }
+                            }
+                            pt
+                        };
+                        // Clamp to world XY only when no UCS is active; with a
+                        // UCS the point already lies on the UCS XY plane.
+                        if self.tabs[i].active_cmd.is_some() && self.tabs[i].active_ucs.is_none() {
+                            pt.z = 0.0;
+                        }
+                        pt
+                    };
+                    self.tabs[i].last_cursor_world = effective.as_vec3();
+                    self.tabs[i].last_cursor_screen = p_full;
+                    // Project the step anchor (an explicit `dyn_anchor` or the
+                    // last point) so the dynamic-input overlay can place its
+                    // guide geometry and labels.
+                    // `proj` returns a pane-local pixel; shift by the active pane
+                    // origin (`tile_b`, the viewport rect inside a viewport) so
+                    // the DYN guide/labels share the canvas frame with
+                    // `last_cursor_screen` (= p_full, canvas space).
+                    let proj = |bp: glam::Vec3| {
+                        let ndc = view_rot.project_point3((bp.as_dvec3() - eye).as_vec3());
+                        iced::Point::new(
+                            (ndc.x + 1.0) * 0.5 * bounds.width + tile_b.x,
+                            (1.0 - ndc.y) * 0.5 * bounds.height + tile_b.y,
+                        )
+                    };
+                    // Anchors are stored in model coords and `proj` (view_rot /
+                    // eye) is the model→screen view — the viewport camera inside
+                    // a viewport, the model/paper camera otherwise — so feed them
+                    // straight through; no paper mapping needed.
+                    let anchor = self.tabs[i].dyn_anchor.or(self.last_point);
+                    let dyn_ref = self.tabs[i].dyn_ref;
+                    let lps = anchor.map(|a| proj(a));
+                    let drs = dyn_ref.map(|r| proj(r));
+                    self.tabs[i].last_point_screen = lps;
+                    self.tabs[i].dyn_ref_screen = drs;
+
+                    // Entity-pick previews (TRIM/EXTEND/FILLET…) compare the
+                    // cursor against WCS document entities and return WCS wires.
+                    // `effective` is offset-relative, so build a WCS copy for
+                    // the click and shift the returned wires back to the
+                    // offset-relative frame the renderer expects (model space
+                    // only; paper-space entities use sheet coordinates).
+                    let wo_local = if self.tabs[i].scene.current_layout == "Model" {
+                        [0.0_f64; 3]
+                    } else {
+                        [0.0; 3]
+                    };
+                    let wo_f = glam::DVec3::new(wo_local[0], wo_local[1], wo_local[2]);
+                    let effective_wcs = effective + wo_f;
+
+                    // Orange object snap (plugin commands implement resolve_object_pick).
+                    if needs_structure {
+                        use crate::snap::{SnapResult, SnapType};
+                        let pick = self.tabs[i].active_cmd.as_ref().and_then(|c| {
+                            c.resolve_object_pick(
+                                &self.tabs[i].scene,
+                                effective.x as f64,
+                                effective.y as f64,
+                            )
+                        });
+                        if let Some(pick) = pick {
+                            let world = glam::DVec3::new(pick.x, pick.y, effective.z);
+                            let ndc = view_rot.project_point3((world - eye).as_vec3());
+                            let screen = iced::Point::new(
+                                (ndc.x + 1.0) * 0.5 * bounds.width,
+                                (1.0 - ndc.y) * 0.5 * bounds.height,
+                            );
+                            self.tabs[i].snap_result = Some(SnapResult {
+                                world,
+                                screen,
+                                snap_type: SnapType::ObjectPick,
+                                tangent_obj: None,
+                            });
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                cmd.set_acquisition_hint(Some(pick.label));
+                            }
+                        } else if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                            cmd.set_acquisition_hint(None);
+                        }
+                    }
+
+                    // Snap glyph is positioned in canvas space; shift the
+                    // tile-local snap screen point back to the full canvas.
+                    if let Some(s) = self.tabs[i].snap_result.as_mut() {
+                        s.screen.x += tile_b.x;
+                        s.screen.y += tile_b.y;
+                    }
+
+                    // Give the command the current UCS before it builds its
+                    // rubber-band preview (and, by persistence, its commit).
+                    self.push_ucs_to_cmd(i);
+                    let mut previews = if needs_structure {
+                        let mut p = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|c| c.object_pick_hover_previews(&self.tabs[i].scene, effective))
+                            .unwrap_or_default();
+                        if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                            p.extend(cmd.on_preview_wires(effective));
+                        }
+                        p
+                    } else if needs_entity {
+                        let hover_handle =
+                            scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds)
+                                .and_then(|s| Scene::handle_from_wire_name(s))
+                                .unwrap_or(acadrust::Handle::NULL);
+                        let mut p = self.tabs[i]
+                            .active_cmd
+                            .as_mut()
+                            .map(|c| c.on_hover_entity(hover_handle, effective_wcs))
+                            .unwrap_or_default();
+                        // on_hover_entity returns WCS wires; shift to the
+                        // offset-relative frame so the preview lands on the
+                        // geometry on large-coordinate drawings.
+                        if wo_f != glam::DVec3::ZERO {
+                            for w in p.iter_mut() {
+                                for pt in w.points.iter_mut() {
+                                    pt[0] -= wo_f.x as f32;
+                                    pt[1] -= wo_f.y as f32;
+                                    pt[2] -= wo_f.z as f32;
+                                }
+                            }
+                        }
+                        if !hover_handle.is_null() {
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_ref() {
+                                p.extend(cmd.entity_pick_acquire_previews(
+                                    &self.tabs[i].scene,
+                                    hover_handle,
+                                ));
+                            }
+                            if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                if let Some(hint) = cmd.entity_pick_acquire_hint(hover_handle) {
+                                    cmd.set_acquisition_hint(Some(hint));
+                                }
+                            }
+                        }
+                        p
+                    } else {
+                        self.tabs[i]
+                            .active_cmd
+                            .as_mut()
+                            .map(|c| c.on_preview_wires(effective))
+                            .unwrap_or_default()
+                    };
+                    // Polar tracking guide line: dotted line from last_point along
+                    // the snapped angle direction, extending across the drawing.
+                    if self.polar_mode && !needs_entity {
+                        if let Some(base) = self.last_point {
+                            let effective = effective.as_vec3();
+                            let dx = effective.x - base.x;
+                            let dy = effective.y - base.y;
+                            // Only show the guide while POLAR is actually engaged
+                            // — i.e. the point is snapped onto a polar ray, not
+                            // floating free near no angle (issue #70).
+                            let step = self.polar_increment_deg.to_radians();
+                            let angle = dy.atan2(dx);
+                            let snapped =
+                                step > 1e-6 && ((angle / step).round() * step - angle).abs() < 1e-3;
+                            if snapped && (dx * dx + dy * dy).sqrt() > 1e-4 {
+                                let far = 1e5_f32;
+                                let dir = glam::Vec3::new(dx, dy, 0.0).normalize();
+                                let far_pos = base + dir * far;
+                                let far_neg = base - dir * far;
+                                let guide = crate::scene::WireModel {
+                                    name: "__polar_guide__".into(),
+                                    points: vec![
+                                        [far_neg.x, far_neg.y, far_neg.z],
+                                        [far_pos.x, far_pos.y, far_pos.z],
+                                    ],
+                                    points_low: Vec::new(),
+                                    color: [0.2, 0.7, 0.9, 0.6],
+                                    selected: false,
+                                    aci: 0,
+                                    pattern_length: 0.8,
+                                    pattern: [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                    line_weight_px: 1.0,
+                                    snap_pts: vec![],
+                                    tangent_geoms: vec![],
+                                    key_vertices: vec![],
+                                    aabb: crate::scene::WireModel::UNBOUNDED_AABB,
+                                    plinegen: true,
+                                    vp_scissor: None,
+                                    fill_tris: vec![],
+                                    fill_tris_low: Vec::new(),
+                                };
+                                previews.push(guide);
+                            }
+                        }
+                    }
+                    // OTRACK alignment guide: dashed ray through the tracking
+                    // point along the aligned direction (issue #69).
+                    if let Some(h) = otrack_hit {
+                        if !needs_entity {
+                            let far = 1e5_f32;
+                            let far_pos = h.base + h.dir * far;
+                            let far_neg = h.base - h.dir * far;
+                            previews.push(crate::scene::WireModel {
+                                name: "__otrack_guide__".into(),
+                                points: vec![
+                                    [far_neg.x, far_neg.y, far_neg.z],
+                                    [far_pos.x, far_pos.y, far_pos.z],
+                                ],
+                                points_low: Vec::new(),
+                                color: [0.2, 0.9, 0.5, 0.6],
+                                selected: false,
+                                aci: 0,
+                                pattern_length: 0.8,
+                                pattern: [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                                line_weight_px: 1.0,
+                                snap_pts: vec![],
+                                tangent_geoms: vec![],
+                                key_vertices: vec![],
+                                aabb: crate::scene::WireModel::UNBOUNDED_AABB,
+                                plinegen: true,
+                                vp_scissor: None,
+                                fill_tris: vec![],
+                                fill_tris_low: Vec::new(),
+                            });
+                        }
+                    }
+                    self.tabs[i].scene.set_preview_wires(previews);
+                } else {
+                    self.tabs[i].snap_result = None;
+                }
+
+                self.sync_dyn_fields();
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_exit(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+                let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                sel.left_down = false;
+                sel.left_press_pos = None;
+                sel.left_press_time = None;
+                sel.left_dragging = false;
+                sel.right_down = false;
+                sel.right_press_pos = None;
+                sel.right_last_pos = None;
+                sel.right_dragging = false;
+                sel.middle_down = false;
+                sel.middle_last_pos = None;
+                sel.box_anchor = None;
+                sel.box_current = None;
+                sel.box_crossing = false;
+                sel.poly_active = false;
+                sel.poly_points.clear();
+                sel.poly_crossing = false;
+                drop(sel);
+                // Clear the rollover highlight when the cursor leaves the
+                // viewport so it doesn't stick while the mouse is over the
+                // ribbon / panels.
+                self.tabs[i].scene.set_hover_highlight(None);
+                // Don't touch `context_menu` here. ViewportExit also fires
+                // when an upper overlay (the right-click menu panel) takes
+                // the cursor, so clearing the menu state on every exit
+                // would close the menu the moment it opens. Outside-click
+                // dismiss is handled in `ViewportLeftPress`.
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_left_press(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+                // A click in the viewport dismisses any open ribbon dropdown
+                // (e.g. the annotation style combo), which has no backdrop of
+                // its own to catch outside clicks.
+                self.ribbon.close_dropdown();
+                // Likewise dismiss the Properties color dropdowns — a viewport
+                // press starts a box selection, so without this they'd only
+                // close on the second click (issue #104).
+                self.tabs[i].properties.color_picker_open = false;
+                self.tabs[i].properties.color_palette_open = false;
+                // Click anywhere outside the popup dismisses it. The
+                // menu's own buttons live above this mouse_area, so a
+                // press that reaches here means the cursor is not on
+                // any menu item.
+                if self.grip_popup.take().is_some() {
+                    self.grip_hover = None;
+                    return Task::none();
+                }
+                // Outside-click dismiss for the visibility-state dropdown
+                // (its buttons sit above this mouse_area).
+                if self.visibility_popup.take().is_some() {
+                    return Task::none();
+                }
+                // Same dismiss-on-outside-click for the right-click
+                // context menu: its panel is opaque, so a press that
+                // reaches here is outside the menu.
+                {
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    if sel.context_menu.take().is_some() {
+                        return Task::none();
+                    }
+                }
+                let (p, vp_size) = {
+                    let sel = self.tabs[i].scene.selection.borrow();
+                    let p = match sel.last_move_pos {
+                        Some(p) => p,
+                        None => return Task::none(),
+                    };
+                    (p, sel.vp_size)
+                };
+                let (vw, vh) = vp_size;
+
+                // PAN mode: a left press begins a pan drag. Reuse the middle-
+                // button pan path (the move handler pans whenever `middle_down`),
+                // so no selection/pick logic runs while panning.
+                if self.tabs[i].pan_mode {
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    sel.middle_down = true;
+                    sel.middle_last_pos = Some(p);
+                    return Task::none();
+                }
+
+                if vw > 1.0 && vh > 1.0 {
+                    let rot = self.tabs[i].scene.active_view_rotation_mat();
+                    // Map the cursor into whichever area owns the cube (active
+                    // viewport rect in paper, active tile in model) so the
+                    // consume-check lines up with the gizmo — same framing as
+                    // ViewportClick's snap hit-test.
+                    let (cx, cy, w, h) = match self.tabs[i]
+                        .scene
+                        .active_viewport
+                        .and_then(|hndl| self.tabs[i].scene.viewport_screen_rect(hndl, (vw, vh)))
+                    {
+                        Some(rect) => (p.x - rect.x, p.y - rect.y, rect.width, rect.height),
+                        None => {
+                            let tb = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                            (p.x - tb.x, p.y - tb.y, tb.width, tb.height)
+                        }
+                    };
+                    if scene::hit_test(cx, cy, w, h, rot, VIEWCUBE_PX).is_some() {
+                        return Task::none();
+                    }
+                }
+
+                // Tiled Model layout: an inner divider near the cursor
+                // becomes a resize grip. Start the drag and short-circuit
+                // (no pick / select / camera swap). Released on
+                // `ViewportLeftRelease`.
+                if self.tabs[i].active_cmd.is_none()
+                    && self.tabs[i].scene.current_layout == "Model"
+                    && vw > 1.0
+                    && vh > 1.0
+                {
+                    let canvas_bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vw,
+                        height: vh,
+                    };
+                    if let Some(edge) =
+                        self.tabs[i]
+                            .scene
+                            .hit_model_tile_edge(p, canvas_bounds, TILE_EDGE_HIT_PX)
+                    {
+                        self.tile_drag = Some(crate::app::TileDrag {
+                            orient: edge.orient,
+                            last_applied: edge.coord,
+                        });
+                        return Task::none();
+                    }
+                }
+
+                // Tiled Model layout: clicking a non-active tile activates
+                // it (swapping in its camera) instead of selecting / drawing.
+                if self.tabs[i].active_cmd.is_none() && vw > 1.0 && vh > 1.0 {
+                    if self.tabs[i]
+                        .scene
+                        .set_active_model_tile_at(p.x / vw, p.y / vh)
+                    {
+                        self.tabs[i].scene.camera_generation += 1;
+                        self.sync_render_mode_to_active_tile(i);
+                        // Grid/snap follow the newly active viewport.
+                        self.adopt_view_display(i);
+                        return Task::none();
+                    }
+                }
+
+                // From here the click targets the active tile: map the
+                // cursor into it and use the tile's size for picking, so
+                // grip / selection hit-tests land in the right pane.
+                let p_full = p;
+                // Inside a floating viewport the pane is the viewport's own rect
+                // + camera (matches the GPU); otherwise the active model tile.
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame((vw, vh));
+                let tile_b = match &edit_frame {
+                    Some((_, full)) => *full,
+                    None => self.tabs[i].scene.active_model_tile_bounds(vw, vh),
+                };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
+                let p = iced::Point {
+                    x: p_full.x - tile_b.x,
+                    y: p_full.y - tile_b.y,
+                };
+                let (vw, vh) = (tile_b.width, tile_b.height);
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+
+                if self.tabs[i].active_cmd.is_none()
+                    && self.tabs[i].active_grip.is_none()
+                    && !self.tabs[i].selected_grips.is_empty()
+                {
+                    if let Some(handle) = self.tabs[i].selected_handle {
+                        let is_paper = self.tabs[i].scene.current_layout != "Model";
+                        // In-viewport grips are model-space; project them with the
+                        // viewport camera so they hit-test where the GPU draws
+                        // them. Paper-space entities use the 2-D paper transform;
+                        // the model tab uses the model camera.
+                        let grip_hit = if let Some(cam) = &edit_cam {
+                            find_hit_grip_rte(
+                                p,
+                                &self.tabs[i].selected_grips,
+                                cam.view_proj_rte(bounds),
+                                cam.eye(),
+                                bounds,
+                            )
+                        } else if is_paper {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            let aspect = if vh > 0.0 { vw / vh } else { 1.0 };
+                            let half_h = cam.ortho_size();
+                            let half_w = half_h * aspect;
+                            let tx = cam.target.x as f32;
+                            let ty = cam.target.y as f32;
+                            drop(cam);
+                            find_hit_grip_paper(
+                                p,
+                                &self.tabs[i].selected_grips,
+                                tx,
+                                ty,
+                                half_w,
+                                half_h,
+                                bounds,
+                            )
+                        } else {
+                            let cam = self.tabs[i].scene.camera.borrow();
+                            find_hit_grip(p, &self.tabs[i].selected_grips, &cam, bounds)
+                        };
+                        if let Some((grip_id, is_translate, world)) = grip_hit {
+                            // The visibility (lookup) grip opens a state
+                            // dropdown instead of starting a stretch drag.
+                            if grip_id == crate::app::visibility::VIS_GRIP_ID {
+                                self.open_visibility_popup(p);
+                                self.grip_hover = None;
+                                self.grip_popup = None;
+                                return Task::none();
+                            }
+                            self.tabs[i].active_grip = Some(GripEdit {
+                                handle,
+                                grip_id,
+                                is_translate,
+                                origin_world: world,
+                                last_world: world,
+                            });
+                            self.grip_hover = None;
+                            self.grip_popup = None;
+                            return Task::none();
+                        }
+                    }
+                }
+
+                let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                sel.left_down = true;
+                // Stored in full-canvas space (like ViewportMove's cursor and
+                // the overlay box / lasso drawing); release maps it into the
+                // active tile. Tile-local here would double-offset the anchor.
+                sel.left_press_pos = Some(p_full);
+                sel.left_press_time = Some(Instant::now());
+                sel.left_dragging = false;
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_left_release(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+
+                // PAN mode: end the pan drag but stay in pan mode for the next
+                // drag (exit is Esc / another command). Mirror of the press.
+                if self.tabs[i].pan_mode {
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    sel.middle_down = false;
+                    sel.middle_last_pos = None;
+                    return Task::none();
+                }
+
+                // End an in-flight tile-divider drag. The move clamps
+                // each side to its minimum, so panes never collapse from
+                // dragging — use the close button to remove a pane.
+                if self.tile_drag.take().is_some() {
+                    self.tabs[i].scene.camera_generation += 1;
+                    return Task::none();
+                }
+
+                let (p, is_click, is_down) = {
+                    let sel = self.tabs[i].scene.selection.borrow();
+                    let p = match sel.last_move_pos {
+                        Some(p) => p,
+                        None => return Task::none(),
+                    };
+                    (p, !sel.left_dragging, sel.left_down)
+                };
+
+                // Grip editing: click-move-click (plus legacy press-drag).
+                // The grip engages on press (active_grip set). This release
+                // commits only if the grip has actually moved, or if it was a
+                // press-drag. A bare engaging click (no movement yet) keeps the
+                // grip hot so the user can move the cursor and click again to
+                // place it. Escape cancels (handled elsewhere).
+                if let Some(grip) = self.tabs[i].active_grip.clone() {
+                    // Reset mouse state so the lingering press from the engaging
+                    // click doesn't read as an in-progress drag on later moves.
+                    {
+                        let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                        sel.left_down = false;
+                        sel.left_press_pos = None;
+                        sel.left_press_time = None;
+                        sel.left_dragging = false;
+                    }
+                    let moved = grip.last_world != grip.origin_world;
+                    if is_click && !moved {
+                        // Engaging click — stay hot, wait for the placement click.
+                        return Task::none();
+                    }
+                    self.tabs[i].active_grip = None;
+                    // Commit the grip drag: keep the doc's dragged geometry
+                    // (drop the cancel backup), un-hide the edited entity and
+                    // re-tessellate the base once, dropping the overlay preview.
+                    if let Some(h) = self.grip_preview_handle.take() {
+                        self.grip_original = None;
+                        self.tabs[i].scene.hidden.remove(&h);
+                        self.tabs[i].scene.clear_preview_wire();
+                        // Only the dragged entity changed — re-tessellate just it.
+                        self.tabs[i].scene.mark_entity_dirty(h);
+                        self.tabs[i].scene.bump_geometry_no_blocks();
+                    }
+                    // Placement confirmed — keep the just-added leader.
+                    self.grip_add_provisional = None;
+                    self.tabs[i].snap_result = None;
+                    self.refresh_properties();
+                    return Task::none();
+                }
+
+                // Map the release point into the active Model tile so the
+                // click's pick / on_point / selection use the active pane's
+                // camera + bounds. `p_full` keeps the canvas point for the
+                // box/poly selection rectangle (drawn in canvas space).
+                let p_full = p;
+                // Inside a floating viewport the pane is the viewport's own rect
+                // and camera (see the MoveCursor path); pick / snap then run in
+                // model space exactly where the GPU draws the content.
+                let canvas_sz = self.tabs[i].scene.selection.borrow().vp_size;
+                let edit_frame = self.tabs[i].scene.viewport_edit_frame(canvas_sz);
+                let (tile_vw, tile_vh, tile_off) = match &edit_frame {
+                    Some((_, full)) => (full.width, full.height, iced::Point::new(full.x, full.y)),
+                    None => {
+                        let tb = self
+                            .tabs[i]
+                            .scene
+                            .active_model_tile_bounds(canvas_sz.0, canvas_sz.1);
+                        (tb.width, tb.height, iced::Point::new(tb.x, tb.y))
+                    }
+                };
+                let edit_cam = edit_frame.map(|(cam, _)| cam);
+                let p = iced::Point {
+                    x: p_full.x - tile_off.x,
+                    y: p_full.y - tile_off.y,
+                };
+
+                let is_gathering = self.tabs[i]
+                    .active_cmd
+                    .as_ref()
+                    .map(|c| c.is_selection_gathering())
+                    .unwrap_or(false);
+
+                if is_down && is_click && self.tabs[i].active_cmd.is_some() && !is_gathering {
+                    let (vw, vh) = (tile_vw, tile_vh);
+                    let bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vw,
+                        height: vh,
+                    };
+
+                    let snap_taken = self.tabs[i].snap_result.take();
+                    let tangent_obj_at_click = snap_taken.and_then(|s| s.tangent_obj);
+
+                    let world_pt = {
+                        // Cursor → model point (viewport camera inside a viewport,
+                        // else paper sheet → model). Model space throughout.
+                        let raw = self.cursor_model_point(i, &edit_cam, p, bounds);
+                        let (view_rot, eye) = match &edit_cam {
+                            Some(cam) => (cam.view_proj_rte(bounds), cam.eye()),
+                            None => {
+                                let c = self.tabs[i].scene.camera.borrow();
+                                (c.view_proj_rte(bounds), c.eye())
+                            }
+                        };
+                        let snap_cursor = raw;
+                        let all_wires = if let (Some(_), Some(h)) =
+                            (&edit_cam, self.tabs[i].scene.active_viewport)
+                        {
+                            self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
+                        } else {
+                            self.tabs[i].scene.hit_test_wires()
+                        };
+                        let needs_tan = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|c| c.needs_tangent_pick())
+                            .unwrap_or(false);
+                        let needs_entity_click = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|c| c.needs_entity_pick())
+                            .unwrap_or(false);
+                        let snap_hit = if needs_entity_click {
+                            None
+                        } else if needs_tan {
+                            self.snapper
+                                .snap_tangent_only(snap_cursor.as_vec3(), p, &all_wires[..], view_rot, eye, bounds)
+                        } else {
+                            let (go, gr) = self.tabs[i].ucs_grid_basis();
+                            self.snapper.from_point = self.last_point;
+                            self.snapper.snap(snap_cursor, p, &all_wires[..], view_rot, eye, bounds, go, gr)
+                        };
+                        // Snap runs in model space; the result is already model.
+                        let mut pt = snap_hit.map(|s| s.world).unwrap_or(raw);
+                        // When no UCS is active clamp to world XY; with a UCS the point is
+                        // already constrained to that plane by the ray–plane intersection.
+                        if self.tabs[i].active_ucs.is_none() {
+                            pt.z = 0.0;
+                        }
+                        // OTRACK alignment wins over ortho/polar; otherwise apply
+                        // ortho/polar relative to the last point.
+                        let otrack = if snap_hit.is_none() {
+                            let step = if self.polar_mode {
+                                Some(self.polar_increment_deg)
+                            } else {
+                                None
+                            };
+                            let ucs = self.tabs[i].scene.viewcube_ucs_mat();
+                            self.snapper
+                                .otrack_snap(raw.as_vec3(), view_rot, eye, bounds, step, self.last_point, ucs)
+                        } else {
+                            None
+                        };
+                        if let Some(h) = otrack {
+                            pt = h.aligned.as_dvec3();
+                            if self.tabs[i].active_ucs.is_none() {
+                                pt.z = 0.0;
+                            }
+                        } else if !snap_hit
+                            .is_some_and(|s| s.snap_type != crate::snap::SnapType::Grid)
+                        {
+                            // Object snap wins over ortho/polar — a snapped point
+                            // commits as-is. Grid snap still combines. (#132)
+                            if let Some(base) = self.last_point {
+                                let ucs_xf = self.tabs[i].ucs_xform();
+                                if self.ortho_mode {
+                                    pt = ortho_constrain(pt.as_vec3(), base, &ucs_xf).as_dvec3();
+                                } else if self.polar_mode {
+                                    pt = polar_constrain_near(
+                                        pt.as_vec3(),
+                                        base,
+                                        self.polar_increment_deg,
+                                        view_rot,
+                                        eye,
+                                        bounds,
+                                        self.snapper.osnap_radius_px,
+                                        &ucs_xf,
+                                    )
+                                    .as_dvec3();
+                                }
+                            }
+                        }
+                        pt
+                    };
+
+                    // `world_pt` is in offset-relative (local) space, matching
+                    // the camera and the point-creation commands. Entity-pick /
+                    // tangent / structure-pick commands instead compare the
+                    // click against WCS document entities, so they need the
+                    // world_offset added back (model space only — paper-space
+                    // entities are already in sheet coordinates). Without this,
+                    // TRIM/EXTEND/FILLET pick the wrong side on UTM-scale files.
+                    let pick_wcs = {
+                        let wo = if self.tabs[i].scene.current_layout == "Model" {
+                            [0.0_f64; 3]
+                        } else {
+                            [0.0; 3]
+                        };
+                        world_pt + glam::DVec3::new(wo[0], wo[1], wo[2])
+                    };
+
+                    let result = if self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_structure_point_pick())
+                        .unwrap_or(false)
+                    {
+                        let pick = self.tabs[i].active_cmd.as_ref().and_then(|c| {
+                            c.resolve_object_pick(
+                                &self.tabs[i].scene,
+                                pick_wcs.x as f64,
+                                pick_wcs.y as f64,
+                            )
+                        });
+                        if let Some(pick) = pick {
+                            let center = glam::DVec3::new(pick.x, pick.y, pick_wcs.z);
+                            let result = self.tabs[i]
+                                .active_cmd
+                                .as_mut()
+                                .map(|c| c.on_structure_pick(pick.handle, center));
+                            self.command_line
+                                .push_info(&format!("{} acquired.", pick.label));
+                            result
+                        } else {
+                            let msg = self.tabs[i]
+                                .active_cmd
+                                .as_ref()
+                                .map(|c| c.object_pick_miss_message())
+                                .unwrap_or("No object near click.");
+                            self.command_line.push_error(msg);
+                            None
+                        }
+                    } else if self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_entity_pick())
+                        .unwrap_or(false)
+                    {
+                        let (view_rot2, eye2, all_wires2) = self.pick_view(i, &edit_cam, bounds);
+                        let hit = scene::pick::hit_test::click_hit(p, &all_wires2[..], view_rot2, eye2, bounds)
+                            .and_then(|s| Scene::handle_from_wire_name(s));
+                        if let Some(handle) = hit {
+                            // Some commands (e.g. SS_CATCHMENT) need the entity
+                            // body before `on_entity_pick` can advance.
+                            let inject_first = self.tabs[i]
+                                .active_cmd
+                                .as_ref()
+                                .map(|c| c.inject_before_entity_pick())
+                                .unwrap_or(false);
+                            if inject_first {
+                                if let Some(entity) =
+                                    self.tabs[i].scene.document.get_entity(handle).cloned()
+                                {
+                                    if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                        cmd.inject_picked_entity(entity);
+                                    }
+                                }
+                            }
+
+                            let result = self.tabs[i]
+                                .active_cmd
+                                .as_mut()
+                                .map(|c| c.on_entity_pick(handle, pick_wcs));
+                            // HATCHEDIT: after pick, inject hatch model data into the command.
+                            if self.tabs[i]
+                                .active_cmd
+                                .as_ref()
+                                .map(|c| c.name() == "HATCHEDIT")
+                                .unwrap_or(false)
+                            {
+                                if let Some(model) =
+                                    self.tabs[i].scene.hatches.get(&handle).cloned()
+                                {
+                                    use crate::command::CadCommand;
+                                    use crate::modules::draw::draw::hatchedit::HatcheditCommand;
+                                    let cmd: Box<dyn CadCommand> =
+                                        Box::new(HatcheditCommand::with_handle(
+                                            handle,
+                                            model.name.clone(),
+                                            model.scale,
+                                            model.angle_offset,
+                                        ));
+                                    self.command_line.push_info(&cmd.prompt());
+                                    self.tabs[i].active_cmd = Some(cmd);
+                                } else {
+                                    self.command_line
+                                        .push_error("HATCHEDIT: not a hatch entity.");
+                                    self.tabs[i].active_cmd = None;
+                                }
+                            }
+                            // DIMTEDIT / MLEADERADD / MLEADERREMOVE: inject cloned entity via trait.
+                            {
+                                let needs_inject = self.tabs[i]
+                                    .active_cmd
+                                    .as_ref()
+                                    .map(|c| {
+                                        matches!(
+                                            c.name(),
+                                            "DIMTEDIT" | "MLEADERADD" | "MLEADERREMOVE"
+                                        )
+                                    })
+                                    .unwrap_or(false);
+                                if needs_inject {
+                                    if let Some(entity) =
+                                        self.tabs[i].scene.document.get_entity(handle).cloned()
+                                    {
+                                        if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                                            cmd.inject_picked_entity(entity);
+                                            let prompt = cmd.prompt();
+                                            self.command_line.push_info(&prompt);
+                                        }
+                                    }
+                                }
+                            }
+                            result
+                        } else {
+                            self.command_line.push_info("Nothing found at that point.");
+                            None
+                        }
+                    } else if self.tabs[i]
+                        .active_cmd
+                        .as_ref()
+                        .map(|c| c.needs_tangent_pick())
+                        .unwrap_or(false)
+                    {
+                        if let Some(obj) = tangent_obj_at_click {
+                            self.tabs[i]
+                                .active_cmd
+                                .as_mut()
+                                .map(|c| c.on_tangent_point(obj, pick_wcs))
+                        } else {
+                            self.command_line.push_info("Select a tangent object.");
+                            None
+                        }
+                    } else {
+                        // A scalar typed into the dynamic-input box but not
+                        // yet confirmed with Enter is applied before the
+                        // point pick — e.g. an OFFSET distance typed and then
+                        // clicked takes effect rather than being discarded.
+                        let wants_text = self.tabs[i]
+                            .active_cmd
+                            .as_ref()
+                            .map(|c| c.wants_text_input())
+                            .unwrap_or(false);
+                        if wants_text {
+                            if let Some(text) = self.tabs[i]
+                                .dyn_fields
+                                .iter()
+                                .find_map(|f| f.buffer.clone())
+                            {
+                                let text = crate::app::expr_eval::eval_to_string(text.trim());
+                                if let Some(c) = self.tabs[i].active_cmd.as_mut() {
+                                    c.on_text_input(&text);
+                                }
+                                for f in self.tabs[i].dyn_fields.iter_mut() {
+                                    f.buffer = None;
+                                }
+                                self.tabs[i].dyn_active = 0;
+                            }
+                        }
+                        self.last_point = Some(world_pt.as_vec3());
+                        self.dyn_user_reshaped = false;
+                        self.sync_dyn_fields();
+                        self.reset_tracking_after_point();
+                        self.tabs[i]
+                            .active_cmd
+                            .as_mut()
+                            .map(|c| c.on_point(world_pt))
+                    };
+
+                    if let Some(r) = result {
+                        let task = self.apply_cmd_result(r);
+                        let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                        sel.left_down = false;
+                        sel.left_press_pos = None;
+                        sel.left_press_time = None;
+                        sel.left_dragging = false;
+                        return task;
+                    }
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    sel.left_down = false;
+                    sel.left_press_pos = None;
+                    sel.left_press_time = None;
+                    sel.left_dragging = false;
+                    return Task::none();
+                }
+
+                let (is_down2, is_dragging, box_anchor, box_crossing, _vp_size, elapsed_ms) = {
+                    let sel = self.tabs[i].scene.selection.borrow();
+                    let elapsed = sel
+                        .left_press_time
+                        .map(|t| Instant::now().duration_since(t).as_millis())
+                        .unwrap_or(u128::MAX);
+                    (
+                        sel.left_down,
+                        sel.left_dragging,
+                        sel.box_anchor,
+                        sel.box_crossing,
+                        sel.vp_size,
+                        elapsed,
+                    )
+                };
+
+                let mut selection_just_completed = false;
+
+                // Active-tile-local selection: tile-sized bounds and the box
+                // anchor mapped into the tile, so box / crossing selection
+                // matches the active pane (p is already tile-local).
+                let vp_size = (tile_vw, tile_vh);
+                let box_anchor = box_anchor.map(|a| iced::Point {
+                    x: a.x - tile_off.x,
+                    y: a.y - tile_off.y,
+                });
+
+                if is_down2 {
+                    let bounds = iced::Rectangle {
+                        x: 0.0,
+                        y: 0.0,
+                        width: vp_size.0,
+                        height: vp_size.1,
+                    };
+
+                    if is_dragging {
+                        if elapsed_ms < POLY_START_DELAY_MS {
+                            if let Some(a) = box_anchor {
+                                let crossing = box_crossing;
+                                let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+                                let mut handles: Vec<Handle> = scene::pick::hit_test::box_hit(
+                                    a,
+                                    p,
+                                    crossing,
+                                    &all_wires[..],
+                                    view_rot,
+                                    eye,
+                                    bounds,
+                                )
+                                .into_iter()
+                                .filter_map(|s| Scene::handle_from_wire_name(s))
+                                .collect();
+                                handles.extend(scene::pick::hit_test::box_hit_hatch(
+                                    a,
+                                    p,
+                                    crossing,
+                                    &self.tabs[i].scene.visible_hatches_for_click(),
+                                    view_rot,
+                                    eye,
+                                    bounds,
+                                ));
+                                handles.extend(
+                                    self.tabs[i].scene.mesh_box_hit(a, p, crossing, view_rot, eye, bounds),
+                                );
+                                handles.extend(self.tabs[i].scene.block_mesh_box_hit(
+                                    a, p, crossing, view_rot, eye, bounds,
+                                ));
+                                // Box/lasso accumulates like individual picks
+                                // (issue #83): a plain box adds to the current
+                                // selection, Shift+box removes the boxed
+                                // entities. Esc / empty-space click still clears.
+                                if self.shift_down {
+                                    for h in &handles {
+                                        self.tabs[i].scene.deselect_entity(*h);
+                                    }
+                                } else {
+                                    for h in &handles {
+                                        self.tabs[i].scene.select_entity(*h, false);
+                                    }
+                                    self.tabs[i].scene.expand_selection_for_groups(&handles);
+                                }
+                                self.refresh_properties();
+                                selection_just_completed = true;
+                            }
+                        } else {
+                            let (poly_pts, crossing) = {
+                                let sel = self.tabs[i].scene.selection.borrow();
+                                // Map lasso points into the active tile.
+                                let pts: Vec<iced::Point> = sel
+                                    .poly_points
+                                    .iter()
+                                    .map(|pp| iced::Point {
+                                        x: pp.x - tile_off.x,
+                                        y: pp.y - tile_off.y,
+                                    })
+                                    .collect();
+                                (pts, sel.poly_crossing)
+                            };
+                            self.tabs[i].scene.selection.borrow_mut().poly_last_crossing = crossing;
+                            let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+                            let mut handles: Vec<Handle> = scene::pick::hit_test::poly_hit(
+                                &poly_pts,
+                                crossing,
+                                &all_wires[..],
+                                view_rot,
+                                eye,
+                                bounds,
+                            )
+                            .into_iter()
+                            .filter_map(|s| Scene::handle_from_wire_name(s))
+                            .collect();
+                            handles.extend(scene::pick::hit_test::poly_hit_hatch(
+                                &poly_pts,
+                                crossing,
+                                &self.tabs[i].scene.visible_hatches_for_click(),
+                                view_rot,
+                                eye,
+                                bounds,
+                            ));
+                            handles.extend(
+                                self.tabs[i].scene.mesh_poly_hit(&poly_pts, crossing, view_rot, eye, bounds),
+                            );
+                            handles.extend(self.tabs[i].scene.block_mesh_poly_hit(
+                                &poly_pts, crossing, view_rot, eye, bounds,
+                            ));
+                            // Selection filter: keep only allowed types.
+                            handles.retain(|&h| self.tabs[i].scene.passes_selection_filter(h));
+                            // Accumulate like the box path (issue #83): plain
+                            // lasso adds, Shift+lasso removes. An empty lasso
+                            // leaves the current selection untouched so a stray
+                            // drag never discards hard-won picks.
+                            if self.shift_down {
+                                for h in &handles {
+                                    self.tabs[i].scene.deselect_entity(*h);
+                                }
+                            } else {
+                                for h in &handles {
+                                    self.tabs[i].scene.select_entity(*h, false);
+                                }
+                                self.tabs[i].scene.expand_selection_for_groups(&handles);
+                            }
+                            self.refresh_properties();
+                            selection_just_completed = true;
+                        }
+                        let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                        sel.poly_active = false;
+                        sel.poly_points.clear();
+                        sel.poly_crossing = false;
+                        sel.box_anchor = None;
+                        sel.box_current = None;
+                    } else {
+                        if box_anchor.is_none() {
+                            let (view_rot, eye, all_wires) =
+                                self.pick_view(i, &edit_cam, bounds);
+
+                            // Selection cycling: where two or more objects
+                            // overlap, open a list box to pick which one; a
+                            // single object falls through to the normal click.
+                            // Gated behind the toggle, so default picking is
+                            // unchanged when off.
+                            let mut handled_by_cycling = false;
+                            if self.selection_cycling {
+                                let cands: Vec<Handle> = scene::pick::hit_test::click_hits_all(
+                                    p,
+                                    &all_wires[..],
+                                    view_rot,
+                                    eye,
+                                    bounds,
+                                )
+                                .into_iter()
+                                .filter_map(|s| Scene::handle_from_wire_name(s))
+                                .filter(|&h| self.tabs[i].scene.passes_selection_filter(h))
+                                .collect();
+                                if cands.len() >= 2 {
+                                    // Overlap: open the list box at the cursor.
+                                    self.cycle_candidates = Some((p_full, cands));
+                                    handled_by_cycling = true;
+                                }
+                            }
+
+                            if !handled_by_cycling {
+                                let hit =
+                                    scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds)
+                                        .and_then(|s| Scene::handle_from_wire_name(s))
+                                        .or_else(|| {
+                                            scene::pick::hit_test::click_hit_hatch(
+                                                p,
+                                                &self.tabs[i].scene.visible_hatches_for_click(),
+                                                view_rot,
+                                                eye,
+                                                bounds,
+                                            )
+                                        })
+                                        .or_else(|| {
+                                            // Block-internal hatch: resolve to the
+                                            // parent Insert (AutoCAD behaviour).
+                                            scene::pick::hit_test::click_hit_insert_hatch(
+                                                p,
+                                                &self.tabs[i].scene.insert_hatches_for_click(),
+                                                view_rot,
+                                                eye,
+                                                bounds,
+                                            )
+                                        })
+                                        .or_else(|| {
+                                            // 3D solids: click anywhere on the shaded
+                                            // body — top-level solids and block-internal
+                                            // ones together, front-most wins (a block in
+                                            // front of a solid resolves to the block).
+                                            self.tabs[i].scene.solid_click_hit(p, view_rot, eye, bounds)
+                                        });
+                                // Selection filter: drop a pick whose type is excluded.
+                                let hit =
+                                    hit.filter(|&h| self.tabs[i].scene.passes_selection_filter(h));
+                                if let Some(handle) = hit {
+                                    // Individual picks accumulate (issue #47):
+                                    // each plain click adds to the selection,
+                                    // Shift+click removes the picked entity.
+                                    // Esc / empty-space click clears.
+                                    if self.shift_down {
+                                        self.tabs[i].scene.deselect_entity(handle);
+                                    } else {
+                                        self.tabs[i].scene.select_entity(handle, false);
+                                        self.tabs[i].scene.expand_selection_for_groups(&[handle]);
+                                    }
+                                    self.refresh_properties();
+                                    selection_just_completed = true;
+                                } else {
+                                    // Empty-space click only ARMS a box here; it
+                                    // no longer clears the selection, so a box can
+                                    // add to it (issue #83). The box completion
+                                    // (or Esc) decides what happens to the
+                                    // selection.
+                                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                                    // Full-canvas space: ViewportMove updates
+                                    // box_current in canvas coords and the overlay
+                                    // draws there; release maps back into the tile.
+                                    sel.box_anchor = Some(p_full);
+                                    sel.box_current = Some(p_full);
+                                    sel.box_crossing = false;
+                                }
+                            }
+                        } else {
+                            let a = box_anchor.unwrap();
+                            let crossing = box_crossing;
+                            let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+                            let mut handles: Vec<Handle> = scene::pick::hit_test::box_hit(
+                                a,
+                                p,
+                                crossing,
+                                &all_wires[..],
+                                view_rot,
+                                eye,
+                                bounds,
+                            )
+                            .into_iter()
+                            .filter_map(|s| Scene::handle_from_wire_name(s))
+                            .collect();
+                            handles.extend(scene::pick::hit_test::box_hit_hatch(
+                                a,
+                                p,
+                                crossing,
+                                &self.tabs[i].scene.visible_hatches_for_click(),
+                                view_rot,
+                                eye,
+                                bounds,
+                            ));
+                            handles.extend(
+                                self.tabs[i].scene.mesh_box_hit(a, p, crossing, view_rot, eye, bounds),
+                            );
+                            handles.extend(self.tabs[i].scene.block_mesh_box_hit(
+                                a, p, crossing, view_rot, eye, bounds,
+                            ));
+                            // Selection filter: keep only allowed types.
+                            handles.retain(|&h| self.tabs[i].scene.passes_selection_filter(h));
+                            // Accumulate (issue #83): a plain box adds to the
+                            // current selection, Shift+box removes the boxed
+                            // entities. An empty box leaves the selection alone
+                            // so an accidental empty drag never discards it.
+                            if self.shift_down {
+                                for h in &handles {
+                                    self.tabs[i].scene.deselect_entity(*h);
+                                }
+                            } else {
+                                for h in &handles {
+                                    self.tabs[i].scene.select_entity(*h, false);
+                                }
+                                self.tabs[i].scene.expand_selection_for_groups(&handles);
+                            }
+                            self.refresh_properties();
+                            let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                            sel.box_last = Some((a, p));
+                            sel.box_last_crossing = crossing;
+                            sel.box_anchor = None;
+                            sel.box_current = None;
+                            sel.box_crossing = false;
+                            selection_just_completed = true;
+                        }
+                    }
+
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    sel.left_down = false;
+                    sel.left_press_pos = None;
+                    sel.left_press_time = None;
+                    sel.left_dragging = false;
+                }
+
+                if is_gathering && selection_just_completed {
+                    let handles: Vec<Handle> = self.tabs[i]
+                        .scene
+                        .selected_entities()
+                        .into_iter()
+                        .map(|(h, _)| h)
+                        .collect();
+                    if let Some(cmd) = self.tabs[i].active_cmd.as_mut() {
+                        let result = cmd.on_selection_complete(handles);
+                        return self.apply_cmd_result(result);
+                    }
+                }
+
+                // ── Double-click in Model Space: DDEDIT for Text/MText ────
+                if is_click
+                    && is_down
+                    && self.tabs[i].active_cmd.is_none()
+                    && self.tabs[i].scene.current_layout == "Model"
+                {
+                    let now = Instant::now();
+                    let is_double_model = self
+                        .last_vp_click_time
+                        .map(|t| {
+                            let dt = now.duration_since(t).as_millis();
+                            let last = self.last_vp_click_pos.unwrap_or(p);
+                            let d = (p.x - last.x).hypot(p.y - last.y);
+                            dt < 400 && d < 8.0
+                        })
+                        .unwrap_or(false);
+
+                    self.last_vp_click_time = Some(now);
+                    self.last_vp_click_pos = Some(p);
+
+                    if is_double_model {
+                        let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                        let bounds = iced::Rectangle {
+                            x: 0.0,
+                            y: 0.0,
+                            width: vw,
+                            height: vh,
+                        };
+                        let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye()) };
+                        let all_wires = self.tabs[i].scene.hit_test_wires();
+                        // Resolve the double-clicked object — its wire, or (for a
+                        // block/solid with no wire under the cursor) its shaded
+                        // body, which maps to the parent INSERT.
+                        let hit = scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds)
+                            .and_then(|s| Scene::handle_from_wire_name(s))
+                            .or_else(|| self.tabs[i].scene.solid_click_hit(p, view_rot, eye, bounds));
+                        if let Some(handle) = hit {
+                            // Any text-bearing entity opens its in-place editor
+                            // (plain box or rich MText editor, per type). A
+                            // Leader resolves to the entity it annotates.
+                            let is_editable_text = self.tabs[i]
+                                .scene
+                                .document
+                                .get_entity(handle)
+                                .is_some_and(|e| {
+                                    crate::app::text_inline::read_text_field(e).is_some()
+                                        || matches!(e, AcadEntityType::Leader(_))
+                                });
+                            if is_editable_text {
+                                return self.begin_text_edit(handle);
+                            }
+                            // Double-clicking a block reference enters in-place
+                            // block edit (REFEDIT), so its geometry can be edited
+                            // and the change reflects in every instance. (#136)
+                            let is_insert = matches!(
+                                self.tabs[i].scene.document.get_entity(handle),
+                                Some(AcadEntityType::Insert(_))
+                            );
+                            if is_insert && self.tabs[i].refedit_session.is_none() {
+                                return Task::done(Message::Command(format!(
+                                    "REFEDIT_BEGIN:{}",
+                                    handle.value()
+                                )));
+                            }
+                        }
+                    }
+                }
+
+                // ── Double-click: enter/exit MSPACE ───────────────────────
+                // Only when no command is running, no drag, and we're in paper space.
+                if is_click
+                    && is_down   // ensures there was a matching left-press
+                    && self.tabs[i].active_cmd.is_none()
+                    && self.tabs[i].scene.current_layout != "Model"
+                {
+                    let now = Instant::now();
+                    let is_double = self
+                        .last_vp_click_time
+                        .map(|t| {
+                            let dt = now.duration_since(t).as_millis();
+                            let last = self.last_vp_click_pos.unwrap_or(p);
+                            let d = (p.x - last.x).hypot(p.y - last.y);
+                            dt < 400 && d < 8.0
+                        })
+                        .unwrap_or(false);
+
+                    self.last_vp_click_time = Some(now);
+                    self.last_vp_click_pos = Some(p);
+
+                    if is_double {
+                        let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                        let bounds = iced::Rectangle {
+                            x: 0.0,
+                            y: 0.0,
+                            width: vw,
+                            height: vh,
+                        };
+
+                        // 1) Try direct wire hit — works when the border is clicked.
+                        let wire_hit: Option<acadrust::Handle> = {
+                            let (view_rot, eye) = { let c = self.tabs[i].scene.camera.borrow(); (c.view_proj_rte(bounds), c.eye()) };
+                            let all_wires = self.tabs[i].scene.hit_test_wires();
+                            scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds)
+                                .and_then(|s| Scene::handle_from_wire_name(s))
+                                .and_then(|h| {
+                                    if let Some(AcadEntityType::Viewport(vp)) =
+                                        self.tabs[i].scene.document.get_entity(h)
+                                    {
+                                        if Scene::is_content_viewport(vp) {
+                                            Some(h)
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        None
+                                    }
+                                })
+                        };
+
+                        // 2) Decide which viewport (if any) the click enters,
+                        //    keyed on the *visible* on-screen rectangle. Screen-space
+                        //    (not the full paper rect) so a click on the empty area
+                        //    beside an off-screen viewport doesn't match its
+                        //    partly-off-canvas rect and switch to it by mistake.
+                        //    The wire hit only refines *which* visible viewport
+                        //    (border precision / overlap), and only when the click
+                        //    actually lands inside THAT viewport's visible rect —
+                        //    otherwise its border-wire pick tolerance could match a
+                        //    far viewport whose edge merely passes near the cursor
+                        //    (e.g. clicking the overlap of two viewports while a
+                        //    third's border runs nearby) and enter the wrong one.
+                        let screen_hit = self
+                            .tabs[i]
+                            .scene
+                            .viewport_at_screen_point(p.x, p.y, (vw, vh));
+                        let wire_in_visible = wire_hit.filter(|&h| {
+                            self.tabs[i]
+                                .scene
+                                .viewport_screen_rect(h, (vw, vh))
+                                .is_some_and(|r| {
+                                    let x0 = r.x.max(0.0);
+                                    let y0 = r.y.max(0.0);
+                                    let x1 = (r.x + r.width).min(vw);
+                                    let y1 = (r.y + r.height).min(vh);
+                                    p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1
+                                })
+                        });
+                        let hit_vp = wire_in_visible.or(screen_hit);
+
+                        if let Some(handle) = hit_vp {
+                            return Task::done(Message::EnterViewport(handle));
+                        } else if self.tabs[i].scene.active_viewport.is_some() {
+                            // Double-clicked outside all viewports while in MSPACE → exit.
+                            return Task::done(Message::ExitViewport);
+                        }
+                    }
+                }
+
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_middle_press(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+                self.ribbon.close_dropdown();
+                let now = Instant::now();
+                let is_double = {
+                    let sel = self.tabs[i].scene.selection.borrow();
+                    sel.middle_last_press_time
+                        .map(|t| now.duration_since(t).as_millis() < 300)
+                        .unwrap_or(false)
+                };
+                {
+                    let mut sel = self.tabs[i].scene.selection.borrow_mut();
+                    let Some(p) = sel.last_move_pos else {
+                        return Task::none();
+                    };
+                    sel.middle_down = true;
+                    sel.middle_last_pos = Some(p);
+                    sel.middle_last_press_time = Some(now);
+                }
+                if is_double {
+                    self.tabs[i].scene.fit_all();
+                    self.command_line.push_output("Zoom Extents");
+                }
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_scroll(&mut self, delta: mouse::ScrollDelta) -> Task<Message> {
+                let s = match delta {
+                    mouse::ScrollDelta::Lines { y, .. } => y,
+                    mouse::ScrollDelta::Pixels { y, .. } => y * 0.01,
+                };
+                let i = self.active_tab;
+                let cursor = self.tabs[i].scene.selection.borrow().last_move_pos;
+                let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: vw,
+                    height: vh,
+                };
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    // In MSPACE: zoom the active viewport's model-space view,
+                    // keeping the model point under the cursor stationary.
+                    let cursor_paper = cursor.map(|cp| {
+                        let pt = self.tabs[i]
+                            .scene
+                            .camera
+                            .borrow()
+                            .pick_on_target_plane(cp, bounds);
+                        glam::Vec2::new(pt.x as f32, pt.y as f32)
+                    });
+                    self.tabs[i].scene.zoom_active_viewport(s, cursor_paper);
+                    // Bump so the GPU re-uploads the viewport's re-culled wire
+                    // set after zooming inside it.
+                    self.tabs[i].scene.camera_generation += 1;
+                } else {
+                    // Model space: zoom about the cursor within the active
+                    // tile so the point under it stays put in that pane.
+                    let tile_b = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                    let mut cam = self.tabs[i].scene.camera.borrow_mut();
+                    if let Some(cursor) = cursor {
+                        let local = iced::Point {
+                            x: cursor.x - tile_b.x,
+                            y: cursor.y - tile_b.y,
+                        };
+                        let tb = iced::Rectangle {
+                            x: 0.0,
+                            y: 0.0,
+                            width: tile_b.width,
+                            height: tile_b.height,
+                        };
+                        cam.zoom_about_point(local, tb, s);
+                    } else {
+                        cam.zoom(s);
+                    }
+                    drop(cam);
+                    self.tabs[i].scene.camera_generation += 1;
+                }
+                Task::none()
+    }
+
+    pub(super) fn on_viewport_click(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+                let rot = self.tabs[i].scene.active_view_rotation_mat();
+                let (vw, vh) = self.tabs[i].scene.selection.borrow().vp_size;
+                // The ViewCube draws in the top-right of whichever area
+                // owns it: the full canvas in model space, or the active
+                // viewport's screen rectangle in a paper layout. Map the
+                // cursor into that area before hit-testing so paper-space
+                // picks line up with the gizmo.
+                let (cx, cy, w, h) = match self.tabs[i]
+                    .scene
+                    .active_viewport
+                    .and_then(|hndl| self.tabs[i].scene.viewport_screen_rect(hndl, (vw, vh)))
+                {
+                    Some(rect) => (
+                        self.cursor_pos.x - rect.x,
+                        self.cursor_pos.y - rect.y,
+                        rect.width,
+                        rect.height,
+                    ),
+                    None => {
+                        // Model layout: hit-test within the active tile.
+                        let tb = self.tabs[i].scene.active_model_tile_bounds(vw, vh);
+                        (
+                            self.cursor_pos.x - tb.x,
+                            self.cursor_pos.y - tb.y,
+                            tb.width,
+                            tb.height,
+                        )
+                    }
+                };
+                // Prefer the currently-highlighted region: hover is recomputed
+                // on every move straight from the cube's own overlay, so it is
+                // immune to `cursor_pos` being overwritten by the viewport's
+                // move handler between the last move and this press.
+                if let Some(id) = self.tabs[i].scene.viewcube_hover.get() {
+                    let region = if id < 6 {
+                        scene::CubeRegion::Face(id)
+                    } else if id < 18 {
+                        scene::CubeRegion::Edge(id)
+                    } else {
+                        scene::CubeRegion::Corner(id)
+                    };
+                    return Task::done(Message::ViewCubeSnap(region));
+                }
+                if let Some(region) = scene::hit_test(cx, cy, w, h, rot, VIEWCUBE_PX) {
+                    return Task::done(Message::ViewCubeSnap(region));
+                }
+                if let Some(card) = scene::hit_test_cardinal(cx, cy, w, h, rot, VIEWCUBE_PX) {
+                    return Task::done(Message::ViewCubeSnap(card.face_region()));
+                }
+                Task::none()
+    }
+
+    pub(super) fn on_view_cube_snap(&mut self, region: CubeRegion) -> Task<Message> {
+                let i = self.active_tab;
+                let mut region = region;
+                // The cube is oriented in the active UCS, so its face directions
+                // are UCS-frame — rotate them into world before comparing /
+                // snapping (identity outside model space).
+                let r_ucs = self.tabs[i].scene.viewcube_ucs_mat();
+                // "Already there → flip to opposite" check: compare the
+                // current gaze direction with the region's target gaze.
+                let target_dir = r_ucs.transform_vector3(region.snap_direction());
+                let cur_dir = self.tabs[i].scene.active_gaze_dir();
+                if cur_dir.dot(target_dir) > 0.9999 {
+                    region = region.opposite();
+                }
+                let eye_dir = r_ucs.transform_vector3(region.snap_direction());
+
+                // Faces snap to a canonical upright orientation (never upside
+                // down); edges/corners keep the current up-sense so they spin
+                // smoothly around the clicked feature.
+                let is_face = matches!(region, scene::CubeRegion::Face(_));
+                if self.tabs[i].scene.active_viewport.is_some() {
+                    if is_face {
+                        self.tabs[i]
+                            .scene
+                            .mutate_active_viewport_camera(|c| c.snap_to_face(eye_dir, r_ucs));
+                    } else {
+                        self.tabs[i]
+                            .scene
+                            .snap_active_viewport_to_direction(eye_dir, r_ucs);
+                    }
+                } else {
+                    let mut cam = self.tabs[i].scene.camera.borrow_mut();
+                    if is_face {
+                        cam.snap_to_face(eye_dir, r_ucs);
+                    } else {
+                        cam.snap_to_direction(eye_dir, r_ucs);
+                    }
+                }
+                self.tabs[i].scene.camera_generation += 1;
+                self.command_line
+                    .push_output(&format!("View: {}", region.label()));
+                Task::none()
+    }
+
+    pub(super) fn on_hover_dwell_tick(&mut self) -> Task<Message> {
+                let Some(dwell) = self.hover_dwell.clone() else {
+                    return Task::none();
+                };
+                if Instant::now()
+                    .duration_since(dwell.last_move_at)
+                    .as_millis()
+                    < crate::app::HOVER_DWELL_MS
+                {
+                    return Task::none();
+                }
+                let i = dwell.tab;
+                // Re-check the gate — drag / command may have started
+                // between the move that armed the dwell and this tick.
+                if i >= self.tabs.len() || self.tabs[i].active_cmd.is_some() {
+                    self.hover_dwell = None;
+                    return Task::none();
+                }
+                let bounds = iced::Rectangle {
+                    x: 0.0,
+                    y: 0.0,
+                    width: dwell.tile_size.0,
+                    height: dwell.tile_size.1,
+                };
+                let p = dwell.point;
+                // Inside a viewport, hover-pick through the viewport camera +
+                // model wires so the rollover highlights the entity under the
+                // cursor (dwell.point / dwell.tile_size are already pane-local).
+                let canvas_sz = self.tabs[i].scene.selection.borrow().vp_size;
+                let edit_cam = self
+                    .tabs[i]
+                    .scene
+                    .viewport_edit_frame(canvas_sz)
+                    .map(|(cam, _)| cam);
+                let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
+                // Mirror the click-selection pick order so the rollover
+                // highlights every selectable object: wire → hatch →
+                // block-internal hatch → shaded 3D solid body.
+                let hovered = scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds)
+                    .and_then(|s| Scene::handle_from_wire_name(s))
+                    .or_else(|| {
+                        scene::pick::hit_test::click_hit_hatch(
+                            p,
+                            &self.tabs[i].scene.visible_hatches_for_click(),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                    })
+                    .or_else(|| {
+                        scene::pick::hit_test::click_hit_insert_hatch(
+                            p,
+                            &self.tabs[i].scene.insert_hatches_for_click(),
+                            view_rot,
+                            eye,
+                            bounds,
+                        )
+                    })
+                    .or_else(|| self.tabs[i].scene.solid_click_hit(p, view_rot, eye, bounds));
+                self.tabs[i].scene.set_hover_highlight(hovered);
+                self.hover_dwell = None;
+                Task::none()
+    }
+
+    pub(super) fn on_layout_switch(&mut self, name: String) -> Task<Message> {
+                let i = self.active_tab;
+                let going_to_paper = name != "Model";
+                // Persist the camera of the layout we're leaving BEFORE switching
+                // so returning to it restores where the user left off (the
+                // periodic sync only fires on a tick, which may not have run
+                // since the last pan/zoom).
+                self.tabs[i].scene.sync_camera_to_document();
+                self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+                // Cancel any pending rename/context-menu and active viewport when switching.
+                self.layout_rename_state = None;
+                self.layout_context_menu = None;
+                self.tabs[i].scene.active_viewport = None;
+                self.tabs[i].scene.set_current_layout(name);
+                self.tabs[i].scene.deselect_all();
+                // UCS follows the pane: model header UCS in the Model tab, none
+                // in plain paper space (a viewport's UCS is adopted on entry).
+                self.tabs[i].refresh_active_ucs();
+                self.tabs[i].scene.restore_saved_camera();
+                self.tabs[i].last_synced_camera_gen = self.tabs[i].scene.camera_generation;
+                // Grid/snap are per-view: load the layout we just entered (its
+                // sheet viewport in paper space, the model tile in model space)
+                // so model and each layout keep independent grid state.
+                self.adopt_view_display(i);
+                // Paper-space tools live in the right-edge side toolbar now, so
+                // entering/leaving a layout no longer hijacks the ribbon tab.
+                let _ = going_to_paper;
+                // Refresh VP freeze columns for the new layout.
+                let doc_layers = self.tabs[i].scene.document.layers.clone();
+                let vp_info = self.tabs[i].scene.viewport_list();
+                self.tabs[i]
+                    .layers
+                    .sync_with_viewports(&doc_layers, vp_info);
+                Task::none()
+    }
+
+    pub(super) fn on_layout_create(&mut self) -> Task<Message> {
+                let i = self.active_tab;
+                // Find a unique name (e.g. Layout2, Layout3, ...).
+                let existing = self.tabs[i].scene.layout_names();
+                let mut idx = existing.len();
+                let new_name = loop {
+                    let candidate = format!("Layout{}", idx);
+                    if !existing.contains(&candidate) {
+                        break candidate;
+                    }
+                    idx += 1;
+                };
+                self.push_undo_snapshot(i, "LAYOUT");
+                match self.tabs[i].scene.document.add_layout(&new_name) {
+                    Ok(_) => {
+                        // Override the acadrust default limits (12×9 imperial) with A4 landscape.
+                        for obj in self.tabs[i].scene.document.objects.values_mut() {
+                            if let acadrust::objects::ObjectType::Layout(l) = obj {
+                                if l.name == new_name {
+                                    l.min_limits = (0.0, 0.0);
+                                    l.max_limits = (297.0, 210.0);
+                                    l.min_extents = (0.0, 0.0, 0.0);
+                                    l.max_extents = (297.0, 210.0, 0.0);
+                                    break;
+                                }
+                            }
+                        }
+                        self.tabs[i].scene.current_layout = new_name.clone();
+                        // Safety net — `add_layout` already creates the overall
+                        // sheet viewport; this covers any path that doesn't.
+                        self.tabs[i].scene.ensure_sheet_viewport(&new_name);
+                        self.tabs[i].scene.deselect_all();
+                        self.tabs[i].scene.fit_all();
+                        self.command_line.push_output(&format!(
+                            "Layout \"{new_name}\" created — use MVIEW to add a viewport"
+                        ));
+                        self.tabs[i].dirty = true;
+                    }
+                    Err(e) => self
+                        .command_line
+                        .push_error(&format!("Failed to create layout: {e}")),
+                }
+                Task::none()
+    }
+
+    pub(super) fn on_layout_rename_commit(&mut self) -> Task<Message> {
+                if let Some((orig, new_name)) = self.layout_rename_state.take() {
+                    let new_name = new_name.trim().to_string();
+                    if !new_name.is_empty() && new_name != orig {
+                        let i = self.active_tab;
+                        let exists = self.tabs[i]
+                            .scene
+                            .layout_names()
+                            .iter()
+                            .any(|n| *n == new_name);
+                        if exists {
+                            self.command_line
+                                .push_error(&format!("\"{}\" name already in use", new_name));
+                        } else {
+                            self.push_undo_snapshot(i, "LAYOUT RENAME");
+                            self.tabs[i].scene.rename_layout(&orig, &new_name);
+                            if self.tabs[i].scene.current_layout == orig {
+                                self.tabs[i].scene.current_layout = new_name.clone();
+                            }
+                            self.tabs[i].dirty = true;
+                            self.command_line
+                                .push_output(&format!("Layout \"{orig}\" → \"{new_name}\""));
+                        }
+                    }
+                }
+                Task::none()
+    }
+}
