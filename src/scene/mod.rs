@@ -1968,7 +1968,39 @@ impl Scene {
                 if (dx * dx + dy * dy).sqrt() > 1e-2 {
                     return None;
                 }
-                Some(pts.iter().map(|p| [p[0], p[1]]).collect())
+                // Segment-list wires (e.g. LwPolyline) store each segment as an
+                // independent NaN-separated pair, so every shared corner repeats
+                // (`A B | B C | C D | D A`). Collapse that back into a clean ring:
+                // skip the NaN separators and any vertex coincident with the
+                // previous one, so consumers (point-in-polygon, the hatch /
+                // boundary commands) see one vertex per corner — not the doubled
+                // ring that otherwise shows two grips at every corner.
+                let mut ring: Vec<[f32; 2]> = Vec::with_capacity(pts.len());
+                for p in &pts {
+                    if !p[0].is_finite() || !p[1].is_finite() {
+                        continue;
+                    }
+                    let q = [p[0], p[1]];
+                    if let Some(&last) = ring.last() {
+                        if (last[0] - q[0]).abs() < 1e-4 && (last[1] - q[1]).abs() < 1e-4 {
+                            continue;
+                        }
+                    }
+                    ring.push(q);
+                }
+                // Drop a trailing vertex equal to the first — the ring is closed
+                // implicitly, so keeping it would be a duplicate corner.
+                if ring.len() > 1 {
+                    let first = ring[0];
+                    let last = *ring.last().unwrap();
+                    if (first[0] - last[0]).abs() < 1e-4 && (first[1] - last[1]).abs() < 1e-4 {
+                        ring.pop();
+                    }
+                }
+                if ring.len() < 3 {
+                    return None;
+                }
+                Some(ring)
             })
             .collect()
     }
@@ -5486,13 +5518,48 @@ impl Scene {
         handles
             .iter()
             .flat_map(|h| {
-                self.document
-                    .entities()
-                    .find(|e| e.common().handle == *h)
-                    .map(|e| self.tessellate_one(e))
-                    .unwrap_or_default()
+                match self.document.entities().find(|e| e.common().handle == *h) {
+                    // Hatches carry no outline in the normal wire set, but an
+                    // edit preview (move / copy / array / grip-drag) needs to
+                    // show the shape following the cursor. Build a live boundary
+                    // from the current HatchModel — `apply_grip` keeps it in
+                    // step, so the preview tracks a dragged grip in real time.
+                    Some(EntityType::Hatch(_)) => {
+                        self.hatch_outline_wire(*h).into_iter().collect()
+                    }
+                    Some(e) => self.tessellate_one(e),
+                    None => Vec::new(),
+                }
             })
             .collect()
+    }
+
+    /// Boundary outline wire for a hatch, reconstructed from its cached
+    /// `HatchModel` (offsets from `world_origin`). Used only for edit previews —
+    /// the normal render shows the fill, not this outline.
+    fn hatch_outline_wire(&self, handle: Handle) -> Option<WireModel> {
+        let m = self.hatches.get(&handle)?;
+        let (wx, wy) = (m.world_origin[0], m.world_origin[1]);
+        let pts: Vec<[f64; 3]> = m
+            .boundary
+            .iter()
+            .map(|&[x, y]| {
+                if x.is_finite() && y.is_finite() {
+                    [wx + x as f64, wy + y as f64, 0.0]
+                } else {
+                    [f64::NAN; 3]
+                }
+            })
+            .collect();
+        if pts.len() < 2 {
+            return None;
+        }
+        Some(WireModel::solid_f64(
+            handle.value().to_string(),
+            pts,
+            m.color,
+            false,
+        ))
     }
 
     /// Build wire models for an arbitrary slice of entities (e.g. clipboard contents).
