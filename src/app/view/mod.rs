@@ -1997,44 +1997,76 @@ pub(super) fn start_page_view<'a>() -> Element<'a, Message> {
     }
     let secondary_row = secondary_row.spacing(12).align_y(iced::Center);
 
-    let card_section = |heading: &'static str, sub: &'static str, body: &'static str| {
-        container(
-            column![
-                text(heading).size(20).color(TEXT),
-                text(sub).size(13).color(MUTED),
-                Space::new().height(iced::Length::Fixed(10.0)),
-                text(body).size(12).color(MUTED),
-            ]
-            .spacing(6),
-        )
-        .padding(20)
-        .width(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(CARD_BG)),
-            border: Border {
-                color: CARD_BORDER,
-                width: 1.0,
-                radius: 8.0.into(),
-            },
-            ..Default::default()
+    // Intro video: a clickable thumbnail with a play badge. Native iced has no
+    // embedded web player, so a click opens the video in the system browser.
+    const INTRO_VIDEO_URL: &str = "https://youtu.be/uN9zxM7p_fc";
+    // Build the image Handle ONCE — `Handle::from_bytes` mints a fresh unique id
+    // on every call, so doing it per-view re-decodes + re-uploads the JPEG each
+    // frame (the thumbnail appeared only after a long delay). A cached Handle
+    // decodes once; cloning it per view shares the id + bytes.
+    let thumb_handle = {
+        use std::sync::OnceLock;
+        static H: OnceLock<iced::widget::image::Handle> = OnceLock::new();
+        H.get_or_init(|| {
+            iced::widget::image::Handle::from_bytes(
+                include_bytes!("../../../assets/intro_thumb.jpg").to_vec(),
+            )
         })
+        .clone()
     };
-
-    let cards = row![
-        card_section(
-            "Free and open source",
-            "Open CAD Studio belongs to its users.",
-            "Source is openly developed and distributed under a permissive licence. \
-             You are free to use, study, modify, and share Open CAD Studio.",
-        ),
-        card_section(
-            "Community driven",
-            "Be part of the story.",
-            "Anyone can contribute — translations, bug reports, feature ideas, code, \
-             or simply spreading the word. Your involvement shapes the project.",
-        ),
-    ]
-    .spacing(16);
+    let thumb = iced::widget::image(thumb_handle)
+        .width(Fill)
+        .height(Fill)
+        .content_fit(iced::ContentFit::Cover);
+    // White play triangle on a translucent dark disc, centred over the thumb.
+    let play_badge = container(
+        container(crate::ui::icons::arrow_right(30.0, Color::WHITE))
+            .width(iced::Length::Fixed(72.0))
+            .height(iced::Length::Fixed(72.0))
+            .center_x(iced::Length::Fixed(72.0))
+            .center_y(iced::Length::Fixed(72.0))
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(Color {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.55,
+                })),
+                border: Border {
+                    color: Color {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.85,
+                    },
+                    width: 2.0,
+                    radius: 36.0.into(),
+                },
+                ..Default::default()
+            }),
+    )
+    .center_x(Fill)
+    .center_y(Fill);
+    let cards = container(
+        mouse_area(
+            container(iced::widget::stack![thumb, play_badge])
+                .width(iced::Length::Fixed(720.0))
+                .height(iced::Length::Fixed(405.0))
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(CARD_BG)),
+                    border: Border {
+                        color: CARD_BORDER,
+                        width: 1.0,
+                        radius: 8.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .clip(true),
+        )
+        .interaction(iced::mouse::Interaction::Pointer)
+        .on_press(Message::OpenUrl(INTRO_VIDEO_URL.to_string())),
+    )
+    .center_x(Fill);
 
     // Buttons sit on a transparent container with a large, brand-tinted
     // ambient shadow (offset = 0, big blur) — produces a soft halo behind

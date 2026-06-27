@@ -208,6 +208,11 @@ impl OpenCADStudio {
 
             Message::OpenPathPicked(None) => Task::none(),
 
+            Message::OpenUrl(url) => {
+                crate::sys::open_url(&url);
+                Task::none()
+            }
+
             Message::OpenRecent(path) => {
                 // Recents are read from disk every save → the path may be
                 // stale. Skip silently if the file no longer exists; the

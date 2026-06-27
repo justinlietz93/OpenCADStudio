@@ -1009,6 +1009,8 @@ pub enum Message {
     /// Open a path from the Start tab's recent-documents list (skips the
     /// file picker; the path is already known).
     OpenRecent(PathBuf),
+    /// Open a URL in the system browser (start-page intro video, links).
+    OpenUrl(String),
     /// Drop a path from the recent-documents list.
     RecentRemove(PathBuf),
     /// User clicked Cancel on the loading overlay. The parser thread keeps
