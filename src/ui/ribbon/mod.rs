@@ -452,6 +452,7 @@ impl Ribbon {
                             tools_el,
                             container(text(group.title).size(9).color(GROUP_LABEL)).padding([1, 4]),
                         ]
+                        .align_x(iced::Center)
                         .spacing(0)
                         .padding([3u16, 4])
                         .height(Length::Fill)
