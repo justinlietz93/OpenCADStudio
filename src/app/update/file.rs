@@ -552,6 +552,23 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
     pub(super) fn on_save_dialog_confirm(&mut self) -> Task<Message> {
                 let (ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
+                // Warn before a lossy Save-As that would drop unsupported
+                // (AEC / application) objects kept only as verbatim
+                // source-version bytes — let the user keep them by saving in the
+                // source version, or proceed and drop them.
+                if !self.aec_drop_acknowledged {
+                    let is_dxf = ext.eq_ignore_ascii_case("dxf");
+                    let n = crate::io::dropped_on_save_count(
+                        &self.tabs[self.active_tab].scene.document,
+                        version,
+                        is_dxf,
+                    );
+                    if n > 0 {
+                        self.aec_drop_count = n;
+                        self.active_modal = Some(crate::app::ModalKind::AecDropWarning);
+                        return Task::none();
+                    }
+                }
                 // The user need not type an extension: append the selected
                 // format's one when the entered name carries none.
                 let name = self.save_dialog_filename.trim();
@@ -563,7 +580,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     name.to_string()
                 };
                 self.save_dialog_filename = filename.clone();
-                self.save_dialog_filename = filename.clone();
+                // Confirm before overwriting an existing file in the folder.
+                #[cfg(not(target_arch = "wasm32"))]
+                if !self.overwrite_acknowledged
+                    && self.save_dialog_folder.join(&filename).exists()
+                {
+                    self.active_modal = Some(crate::app::ModalKind::OverwriteWarning);
+                    return Task::none();
+                }
                 let close = self.close_save_dialog_window();
                 let i = self.active_tab;
                 sync_annotation_scale_header(&mut self.tabs[i].scene);
@@ -607,6 +631,38 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     }
                     close
                 }
+    }
+
+    /// AEC-drop warning → "Save anyway": accept the loss and proceed with the
+    /// format the user already chose.
+    pub(super) fn on_aec_drop_proceed(&mut self) -> Task<Message> {
+        self.aec_drop_acknowledged = true;
+        self.active_modal = Some(crate::app::ModalKind::SaveDialog);
+        self.on_save_dialog_confirm()
+    }
+
+    /// AEC-drop warning → "Save in source version": switch the target to the
+    /// document's own DWG version (where the unsupported objects round-trip as
+    /// verbatim bytes), then save.
+    pub(super) fn on_aec_drop_same_version(&mut self) -> Task<Message> {
+        let src = self.tabs[self.active_tab].scene.document.version;
+        self.save_dialog_format = crate::io::format_for_version(src, false);
+        // Strip any extension (e.g. .dxf) so the confirm path appends .dwg.
+        let stem = std::path::Path::new(&self.save_dialog_filename)
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_else(|| self.save_dialog_filename.clone());
+        self.save_dialog_filename = stem;
+        self.aec_drop_acknowledged = true;
+        self.active_modal = Some(crate::app::ModalKind::SaveDialog);
+        self.on_save_dialog_confirm()
+    }
+
+    /// Overwrite warning → "Replace": save over the existing file.
+    pub(super) fn on_overwrite_confirm(&mut self) -> Task<Message> {
+        self.overwrite_acknowledged = true;
+        self.active_modal = Some(crate::app::ModalKind::SaveDialog);
+        self.on_save_dialog_confirm()
     }
 
     pub(super) fn on_page_setup_commit(&mut self) -> Task<Message> {

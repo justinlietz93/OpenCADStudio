@@ -332,6 +332,13 @@ pub(super) struct OpenCADStudio {
     /// The open in-canvas modal dialog, if any (Plan B: shared overlay instead
     /// of OS windows).
     active_modal: Option<ModalKind>,
+    /// Set once the user acknowledges the AEC-drop warning, so re-entering the
+    /// save path proceeds instead of re-showing the warning.
+    aec_drop_acknowledged: bool,
+    /// Number of unsupported objects shown in the AEC-drop warning modal.
+    aec_drop_count: usize,
+    /// Set once the user confirms overwriting an existing file on Save-As.
+    overwrite_acknowledged: bool,
     /// Pixel offset of the active modal from screen-centre (drag-to-move).
     /// Reset to zero whenever a modal closes so each dialog opens centred.
     modal_offset: iced::Vector,
@@ -923,6 +930,8 @@ pub enum ModalKind {
     DimStyle,
     Unsaved,
     SaveDialog,
+    AecDropWarning,
+    OverwriteWarning,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     AssocPrompt,
     PointStyle,
@@ -1093,6 +1102,18 @@ pub enum Message {
     UnsavedDialogDiscard,
     /// User clicked "Cancel" in the unsaved-changes dialog.
     UnsavedDialogCancel,
+    // ── AEC / unsupported-object drop warning (lossy Save-As) ──────────────
+    /// Save as the source DWG version so the unsupported objects survive.
+    AecDropSameVersion,
+    /// Proceed with the chosen target format, dropping the unsupported objects.
+    AecDropProceed,
+    /// Go back to the Save dialog from the AEC-drop warning.
+    AecDropBack,
+    // ── Overwrite confirmation (Save-As over an existing file) ────────────
+    /// Replace the existing file and save.
+    OverwriteConfirm,
+    /// Go back to the Save dialog from the overwrite warning.
+    OverwriteCancel,
     /// Save-as path picked for the unsaved-changes → save → close flow.
     UnsavedPickedSavePath(Option<std::path::PathBuf>),
     // ─────────────────────────────────────────────────────────────────────
@@ -1868,6 +1889,9 @@ impl OpenCADStudio {
             main_window: None,
             color_pick_target: None,
             active_modal: None,
+            aec_drop_acknowledged: false,
+            aec_drop_count: 0,
+            overwrite_acknowledged: false,
             modal_offset: iced::Vector::ZERO,
             modal_drag_last: None,
             modal_dragging: false,

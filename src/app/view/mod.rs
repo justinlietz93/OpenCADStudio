@@ -1358,6 +1358,8 @@ impl OpenCADStudio {
             DimStyle => (720, 560),
             AssocPrompt => (440, 210),
             Unsaved => (420, 160),
+            AecDropWarning => (480, 230),
+            OverwriteWarning => (420, 180),
             SaveDialog => (560, 480),
             PointStyle => (360, 470),
         };

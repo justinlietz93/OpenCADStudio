@@ -2527,6 +2527,19 @@ impl OpenCADStudio {
 
             Message::UnsavedDialogSave => self.on_unsaved_dialog_save(),
 
+            Message::AecDropSameVersion => self.on_aec_drop_same_version(),
+            Message::AecDropProceed => self.on_aec_drop_proceed(),
+            Message::AecDropBack => {
+                self.active_modal = Some(crate::app::ModalKind::SaveDialog);
+                Task::none()
+            }
+
+            Message::OverwriteConfirm => self.on_overwrite_confirm(),
+            Message::OverwriteCancel => {
+                self.active_modal = Some(crate::app::ModalKind::SaveDialog);
+                Task::none()
+            }
+
             Message::UnsavedPickedSavePath(Some(path)) => {
                 self.on_unsaved_picked_save_path_some(path)
             }

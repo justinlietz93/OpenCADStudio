@@ -442,6 +442,37 @@ pub fn format_for_version(version: acadrust::DxfVersion, is_dxf: bool) -> String
     format!("{} {}", if is_dxf { "DXF" } else { "DWG" }, year)
 }
 
+/// Count of unsupported "raw passthrough" objects/entities — AEC / application
+/// objects with no native representation, kept only as verbatim source-version
+/// bytes — that would be DROPPED when saving `doc` to `target_version` (or to
+/// DXF). Returns 0 for a same-version DWG save, where they round-trip verbatim.
+/// Used to warn the user before a lossy Save-As.
+pub fn dropped_on_save_count(
+    doc: &acadrust::CadDocument,
+    target_version: acadrust::DxfVersion,
+    is_dxf: bool,
+) -> usize {
+    if !is_dxf && target_version == doc.version {
+        return 0;
+    }
+    let mut n = doc
+        .objects
+        .values()
+        .filter(|o| {
+            matches!(
+                o,
+                acadrust::objects::ObjectType::Unknown { raw_dwg_data: Some(_), .. }
+            )
+        })
+        .count();
+    for e in doc.entities() {
+        if matches!(e, acadrust::EntityType::Unknown(_)) {
+            n += 1;
+        }
+    }
+    n
+}
+
 // ── Plot Style Table ──────────────────────────────────────────────────────
 
 /// Show a file-open dialog and load the selected CTB or STB file.

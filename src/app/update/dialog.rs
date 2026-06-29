@@ -49,12 +49,16 @@ impl OpenCADStudio {
             self.save_dialog_filename = format!("{}.{ext}", self.tabs[tab_idx].tab_display_name());
         }
         self.save_dialog_entries = crate::io::read_dir_entries(&self.save_dialog_folder.clone());
+        self.aec_drop_acknowledged = false;
+        self.overwrite_acknowledged = false;
         self.active_modal = Some(crate::app::ModalKind::SaveDialog);
         Task::none()
     }
 
 
     pub(in crate::app) fn close_save_dialog_window(&mut self) -> Task<Message> {
+        self.aec_drop_acknowledged = false;
+        self.overwrite_acknowledged = false;
         if self.active_modal == Some(crate::app::ModalKind::SaveDialog) {
             self.active_modal = None;
         }

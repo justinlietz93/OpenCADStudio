@@ -466,6 +466,25 @@ impl OpenCADStudio {
             ), 720, 560)
             }
             super::super::ModalKind::AssocPrompt => sized(default_assoc_dialog_window(), 440, 210),
+            super::super::ModalKind::AecDropWarning => {
+                let src_label = self
+                    .tabs
+                    .get(self.active_tab)
+                    .map(|t| crate::io::format_for_version(t.scene.document.version, false))
+                    .unwrap_or_else(|| "DWG".to_string());
+                sized(
+                    aec_drop_dialog_window(
+                        self.aec_drop_count,
+                        &self.save_dialog_format,
+                        &src_label,
+                    ),
+                    480,
+                    230,
+                )
+            }
+            super::super::ModalKind::OverwriteWarning => {
+                sized(overwrite_dialog_window(&self.save_dialog_filename), 420, 180)
+            }
             super::super::ModalKind::Unsaved => {
                 let tab_name = match &self.pending_close {
                     Some(super::super::PendingClose::Tab(idx)) => self
@@ -867,6 +886,123 @@ fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
                 btn("Discard", Message::UnsavedDialogDiscard, BTN_DISC, BTN_DHOV),
                 iced::widget::Space::new().width(8),
                 btn("Cancel", Message::UnsavedDialogCancel, BTN_DISC, BTN_DHOV),
+            ],
+        ]
+        .spacing(0),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .center(Fill)
+    .padding([24, 28])
+    .into()
+}
+
+/// Warning shown before a lossy Save-As: the drawing carries unsupported
+/// (AEC / application) objects that survive only as verbatim source-version
+/// bytes, so saving to a different version or to DXF would drop them. Offers to
+/// save in the source version (keep them) or proceed (drop them).
+fn aec_drop_dialog_window(count: usize, target: &str, src_version: &str) -> Element<'static, Message> {
+    const BG: Color = Color { r: 0.18, g: 0.18, b: 0.20, a: 1.0 };
+    const BORDER_COL: Color = Color { r: 0.38, g: 0.38, b: 0.42, a: 1.0 };
+    const TEXT_COL: Color = Color { r: 0.90, g: 0.90, b: 0.90, a: 1.0 };
+    const BTN_SAVE: Color = Color { r: 0.20, g: 0.46, b: 0.80, a: 1.0 };
+    const BTN_HOVER: Color = Color { r: 0.26, g: 0.55, b: 0.92, a: 1.0 };
+    const BTN_DISC: Color = Color { r: 0.28, g: 0.28, b: 0.30, a: 1.0 };
+    const BTN_DHOV: Color = Color { r: 0.36, g: 0.36, b: 0.40, a: 1.0 };
+
+    let body_text = format!(
+        "This drawing contains {count} AEC/Civil objects that \"{target}\" \
+         cannot store, so they will not be saved.\n\n\
+         To keep them, save in the source version ({src_version})."
+    );
+
+    let btn = |label: &'static str, msg: Message, base: Color, hov: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hov,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border {
+                    color: BORDER_COL,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            })
+            .padding([6, 14])
+    };
+
+    container(
+        column![
+            text(body_text).size(13).color(TEXT_COL),
+            iced::widget::Space::new().height(20),
+            row![
+                btn("Save in source version", Message::AecDropSameVersion, BTN_SAVE, BTN_HOVER),
+                iced::widget::Space::new().width(8),
+                btn("Save anyway", Message::AecDropProceed, BTN_DISC, BTN_DHOV),
+                iced::widget::Space::new().width(8),
+                btn("Back", Message::AecDropBack, BTN_DISC, BTN_DHOV),
+            ],
+        ]
+        .spacing(0),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .center(Fill)
+    .padding([24, 28])
+    .into()
+}
+
+/// Confirmation shown when the chosen Save-As filename already exists in the
+/// target folder. "Replace" overwrites; "Cancel" returns to the Save dialog.
+fn overwrite_dialog_window(filename: &str) -> Element<'static, Message> {
+    const BG: Color = Color { r: 0.18, g: 0.18, b: 0.20, a: 1.0 };
+    const BORDER_COL: Color = Color { r: 0.38, g: 0.38, b: 0.42, a: 1.0 };
+    const TEXT_COL: Color = Color { r: 0.90, g: 0.90, b: 0.90, a: 1.0 };
+    const BTN_SAVE: Color = Color { r: 0.20, g: 0.46, b: 0.80, a: 1.0 };
+    const BTN_HOVER: Color = Color { r: 0.26, g: 0.55, b: 0.92, a: 1.0 };
+    const BTN_DISC: Color = Color { r: 0.28, g: 0.28, b: 0.30, a: 1.0 };
+    const BTN_DHOV: Color = Color { r: 0.36, g: 0.36, b: 0.40, a: 1.0 };
+
+    let body_text =
+        format!("\"{filename}\" already exists in this folder.\n\nDo you want to replace it?");
+
+    let btn = |label: &'static str, msg: Message, base: Color, hov: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hov,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border {
+                    color: BORDER_COL,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            })
+            .padding([6, 18])
+    };
+
+    container(
+        column![
+            text(body_text).size(13).color(TEXT_COL),
+            iced::widget::Space::new().height(20),
+            row![
+                btn("Replace", Message::OverwriteConfirm, BTN_SAVE, BTN_HOVER),
+                iced::widget::Space::new().width(8),
+                btn("Cancel", Message::OverwriteCancel, BTN_DISC, BTN_DHOV),
             ],
         ]
         .spacing(0),
