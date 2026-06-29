@@ -724,6 +724,64 @@ impl OpenCADStudio {
                 return Some(self.fit_spline());
             }
 
+            // REGION — convert selected closed boundaries (closed polylines /
+            // circles) into Region entities (one wire loop each).
+            "REGION" | "REG" => {
+                use acadrust::entities::{Region, Wire};
+                use acadrust::types::Vector3;
+                let mut loops: Vec<Vec<Vector3>> = Vec::new();
+                for (_, e) in self.tabs[i].scene.selected_entities().iter() {
+                    match e {
+                        acadrust::EntityType::LwPolyline(pl)
+                            if pl.is_closed && pl.vertices.len() >= 3 =>
+                        {
+                            loops.push(
+                                pl.vertices
+                                    .iter()
+                                    .map(|v| Vector3::new(v.location.x, v.location.y, 0.0))
+                                    .collect(),
+                            );
+                        }
+                        acadrust::EntityType::Circle(c) => {
+                            let n = 64;
+                            loops.push(
+                                (0..n)
+                                    .map(|k| {
+                                        let a = std::f64::consts::TAU * k as f64 / n as f64;
+                                        Vector3::new(
+                                            c.center.x + c.radius * a.cos(),
+                                            c.center.y + c.radius * a.sin(),
+                                            c.center.z,
+                                        )
+                                    })
+                                    .collect(),
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+                if loops.is_empty() {
+                    self.command_line
+                        .push_error("REGION: select closed polylines or circles.");
+                } else {
+                    self.push_undo_snapshot(i, "REGION");
+                    let count = loops.len();
+                    for pts in loops {
+                        let mut w = Wire::new();
+                        let first = pts.first().copied().unwrap_or(Vector3::new(0.0, 0.0, 0.0));
+                        w.points = pts;
+                        let mut r = Region::new();
+                        r.point_of_reference = first;
+                        r.wires = vec![w];
+                        r.common.layer = self.tabs[i].active_layer.clone();
+                        self.tabs[i].scene.add_entity(acadrust::EntityType::Region(r));
+                    }
+                    self.tabs[i].dirty = true;
+                    self.command_line
+                        .push_output(&format!("REGION: created {count} region(s)."));
+                }
+            }
+
             // PYRAMID <radius> <height> [sides] — create an n-sided pyramid mesh.
             cmd if cmd == "PYRAMID"
                 || cmd.starts_with("PYRAMID ")

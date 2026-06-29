@@ -42,7 +42,7 @@ Status of every standard CAD command in Open CAD Studio:
 | `SKETCH` | — | Freehand sketch | ✅ |
 | `SOLID` | SO | Filled 2D shape (legacy) | ✅ |
 | `MINSERT` | — | Matrix block insert | ✅ |
-| `REGION` | REG | 2D closed region | ❌ |
+| `REGION` | REG | 2D closed region | ✅ |
 | `FIELD` | — | Auto-updating text field | ❌ |
 
 ---
@@ -351,7 +351,7 @@ Status of every standard CAD command in Open CAD Studio:
 
 | Category | Total | ✅ Done | 🔶 Partial | ❌ Missing |
 |---|---|---|---|---|
-| Draw | 32 | 30 | 0 | 2 |
+| Draw | 32 | 31 | 0 | 1 |
 | Modify | 42 | 39 | 1 | 2 |
 | Dimension | 26 | 26 | 0 | 0 |
 | Text & Table | 10 | 7 | 1 | 2 |
@@ -362,7 +362,7 @@ Status of every standard CAD command in Open CAD Studio:
 | Inquiry | 12 | 12 | 0 | 0 |
 | File & Plot | 17 | 14 | 0 | 3 |
 | Manage & Customize | 22 | 13 | 3 | 6 |
-| **Total** | **262** | **214** | **15** | **33** |
+| **Total** | **262** | **215** | **15** | **32** |
 
 > Counts include commands listed under more than one category (e.g. `SLICE`, `HELIX`,
 > `MINSERT`, `SUBTRACT`/`UNION`/`INTERSECT` appear in both their 2D and 3D groups).
