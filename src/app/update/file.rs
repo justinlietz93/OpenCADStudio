@@ -615,9 +615,12 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         Ok(()) => {
                             self.command_line
                                 .push_output(&format!("Saved: {}", path.display()));
+                            // Drop any prior autosave copy — including the temp
+                            // one used while the drawing was still unsaved —
+                            // before the tab takes on its new path.
+                            let _ = std::fs::remove_file(self.autosave_target(i));
                             self.tabs[i].current_path = Some(path.clone());
                             self.tabs[i].dirty = false;
-                            // A clean save supersedes any autosave recovery copy.
                             let _ = std::fs::remove_file(path.with_extension("sv$"));
                             if self.save_dialog_for_unsaved {
                                 let next = self.update(Message::UnsavedPickedSavePath(Some(path)));
@@ -681,10 +684,28 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.on_save_dialog_confirm()
     }
 
+    /// Where the autosave recovery copy for tab `i` lives: beside a saved
+    /// drawing as `<file>.sv$`, or — for an unsaved drawing with no path yet —
+    /// under the system temp dir keyed by the tab's display name.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn autosave_target(&self, i: usize) -> std::path::PathBuf {
+        match &self.tabs[i].current_path {
+            Some(p) => p.with_extension("sv$"),
+            None => {
+                let safe: String = self.tabs[i]
+                    .tab_display_name()
+                    .chars()
+                    .map(|c| if c.is_alphanumeric() { c } else { '_' })
+                    .collect();
+                std::env::temp_dir().join(format!("OpenCADStudio_{safe}.sv$"))
+            }
+        }
+    }
+
     /// Periodic autosave (SAVETIME): write a `.sv$` recovery copy for every
-    /// dirty tab that has a path, at the document's own DWG version. Best-effort
-    /// and non-destructive — it never touches the original file or the dirty
-    /// flag, and skips unsaved (path-less) tabs.
+    /// dirty tab — beside the file if it's saved, else under the temp dir — at
+    /// the document's own DWG version. Best-effort and non-destructive: it never
+    /// touches the original file or the dirty flag.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn on_autosave(&mut self) -> Task<Message> {
         let mut n = 0;
@@ -692,21 +713,18 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             if !self.tabs[i].dirty {
                 continue;
             }
-            let Some(path) = self.tabs[i].current_path.clone() else {
-                continue;
-            };
             let version = self.tabs[i].scene.document.version;
             if let Ok(bytes) =
                 crate::io::save_to_bytes(&self.tabs[i].scene.document, "dwg", version)
             {
-                if std::fs::write(path.with_extension("sv$"), bytes).is_ok() {
+                if std::fs::write(self.autosave_target(i), bytes).is_ok() {
                     n += 1;
                 }
             }
         }
         if n > 0 {
             self.command_line
-                .push_output(&format!("Autosaved {n} drawing(s) to .sv$"));
+                .push_output(&format!("Autosaved {n} drawing(s)"));
         }
         Task::none()
     }
@@ -720,10 +738,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// exist only to survive a crash, so a clean save or exit removes them.
     pub(in crate::app) fn cleanup_autosaves(&self) {
         #[cfg(not(target_arch = "wasm32"))]
-        for t in &self.tabs {
-            if let Some(path) = &t.current_path {
-                let _ = std::fs::remove_file(path.with_extension("sv$"));
-            }
+        for i in 0..self.tabs.len() {
+            let _ = std::fs::remove_file(self.autosave_target(i));
         }
     }
 

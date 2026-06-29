@@ -31,6 +31,9 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     self.pending_close = Some(crate::app::PendingClose::Tab(idx));
                     return self.open_unsaved_dialog_window();
                 }
+                // This tab is closing for good — drop its autosave recovery copy.
+                #[cfg(not(target_arch = "wasm32"))]
+                let _ = std::fs::remove_file(self.autosave_target(idx));
                 // Only-tab case: when the lone non-start tab closes, fall
                 // back to the Start tab if it exists; otherwise spawn a
                 // fresh blank drawing (legacy behaviour).

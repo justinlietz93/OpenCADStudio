@@ -157,6 +157,9 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                 match self.pending_close.take() {
                     Some(crate::app::PendingClose::Tab(idx)) => {
                         let close_win = self.close_unsaved_dialog_window();
+                        // Discarded — drop this tab's autosave recovery copy.
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let _ = std::fs::remove_file(self.autosave_target(idx));
                         if self.tabs.len() == 1 {
                             self.tab_counter += 1;
                             self.tabs[0] =
@@ -272,6 +275,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                             Ok(()) => {
                                 self.command_line
                                     .push_output(&format!("Saved: {}", path.display()));
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let _ = std::fs::remove_file(self.autosave_target(idx));
                                 self.tabs[idx].current_path = Some(path);
                                 self.tabs[idx].dirty = false;
                                 return self.update(Message::TabClose(idx));
@@ -293,6 +298,8 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                             Ok(()) => {
                                 self.command_line
                                     .push_output(&format!("Saved: {}", path.display()));
+                                #[cfg(not(target_arch = "wasm32"))]
+                                let _ = std::fs::remove_file(self.autosave_target(i));
                                 self.tabs[i].current_path = Some(path);
                                 self.tabs[i].dirty = false;
                                 if self.tabs.iter().any(|t| t.dirty) {
