@@ -189,6 +189,7 @@ pub fn selection_overlay<'a>(
     pane_move_rect: Option<iced::Rectangle>,
     pane_drop_rect: Option<iced::Rectangle>,
     pan_mode: bool,
+    suppressed: bool,
 ) -> Element<'a, Message> {
     canvas(SelectionCanvas {
         selection,
@@ -202,6 +203,7 @@ pub fn selection_overlay<'a>(
         pane_move_rect,
         pane_drop_rect,
         pan_mode,
+        suppressed,
     })
     .width(Length::Fill)
     .height(Length::Fill)
@@ -230,6 +232,10 @@ struct SelectionCanvas {
     /// Interactive PAN mode: the crosshair is hidden and the cursor becomes a
     /// hand so the viewport reads as a draggable surface.
     pan_mode: bool,
+    /// A ribbon dropdown (or similar overlay) is open over the viewport. The
+    /// crosshair is not drawn and the OS cursor is shown normally so the panel
+    /// is usable instead of the cursor vanishing over it. (#227)
+    suppressed: bool,
 }
 
 impl SelectionCanvas {
@@ -259,6 +265,12 @@ impl canvas::Program<Message> for SelectionCanvas {
         bounds: iced::Rectangle,
         cursor: mouse::Cursor,
     ) -> mouse::Interaction {
+        // A dropdown/overlay is open over the viewport — show the normal OS
+        // cursor over the whole canvas instead of hiding it for the crosshair,
+        // so the cursor doesn't vanish while using the panel. (#227)
+        if self.suppressed {
+            return mouse::Interaction::default();
+        }
         // PAN mode owns the whole viewport: an open hand when hovering, a
         // closed hand while dragging.
         if self.pan_mode && cursor.is_over(bounds) {
@@ -826,7 +838,7 @@ impl canvas::Program<Message> for SelectionCanvas {
         // top of it would double up the visual feedback.
         let over_divider = self.divider_under(cursor, bounds);
         // PAN mode replaces the crosshair with a hand cursor.
-        if !over_viewcube && !over_divider && !self.pan_mode {
+        if !over_viewcube && !over_divider && !self.pan_mode && !self.suppressed {
             if let Some(cp) = self.selection.last_move_pos {
                 let color = Color {
                     r: 0.85,

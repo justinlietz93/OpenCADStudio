@@ -64,6 +64,16 @@ pub struct LayerInfo {
     pub locked: bool,
 }
 
+/// Full-screen backdrop for an open ribbon dropdown: closes the dropdown when
+/// the user clicks outside the panel. (Cursor motion leaking to the viewport
+/// beneath is blocked in `on_viewport_move`, not here — iced 0.14's mouse_area
+/// can only capture button presses, never CursorMoved. #227.)
+fn dropdown_backdrop<'a>(positioned: Element<'a, Message>) -> Element<'a, Message> {
+    mouse_area(positioned)
+        .on_press(Message::CloseRibbonDropdown)
+        .into()
+}
+
 impl Ribbon {
     pub fn new() -> Self {
         Self {
@@ -547,11 +557,7 @@ impl Ribbon {
                 .width(Fill)
                 .height(Fill);
 
-            return Some(
-                mouse_area(positioned)
-                    .on_press(Message::CloseRibbonDropdown)
-                    .into(),
-            );
+            return Some(dropdown_backdrop(positioned.into()));
         }
 
         if open_id == LAYER_COMBO_ID {
@@ -677,11 +683,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 
     fn layer_combo_overlay(&self) -> Option<Element<'_, Message>> {
@@ -774,7 +776,12 @@ impl Ribbon {
             })
             .collect();
 
-        let panel = container(column(rows))
+        // Cap the panel height and make the list scrollable so a long layer
+        // list stays reachable instead of running off the bottom of the
+        // screen (#227). Short lists shrink to fit; longer ones scroll.
+        let row_count = self.layer_infos.len().max(1);
+        let list_h = (row_count as f32 * 26.0).min(420.0);
+        let panel = container(scrollable(column(rows)).height(Length::Fixed(list_h)))
             .style(|_: &Theme| container::Style {
                 background: Some(Background::Color(PANEL_BG)),
                 border: Border {
@@ -800,11 +807,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 
     /// Floating popup for an annotate-tab style combo (text / dimension /
@@ -927,11 +930,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 
     fn prop_color_overlay(&self) -> Option<Element<'_, Message>> {
@@ -970,11 +969,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 
     fn prop_linetype_overlay(&self) -> Option<Element<'_, Message>> {
@@ -1063,11 +1058,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 
     fn prop_lw_overlay(&self) -> Option<Element<'_, Message>> {
@@ -1143,11 +1134,7 @@ impl Ribbon {
             .width(Fill)
             .height(Fill);
 
-        Some(
-            mouse_area(positioned)
-                .on_press(Message::CloseRibbonDropdown)
-                .into(),
-        )
+        Some(dropdown_backdrop(positioned.into()))
     }
 }
 

@@ -482,6 +482,15 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
     }
 
     pub(super) fn on_viewport_move(&mut self, p: Point) -> Task<Message> {
+                // A ribbon dropdown is open over the viewport. Its backdrop
+                // cannot swallow cursor motion — in iced 0.14 mouse_area/opaque
+                // capture only button presses, never CursorMoved — so the move
+                // leaks through the stack to the pane mouse_area beneath and
+                // would track the crosshair over the dropdown's empty areas.
+                // Drop the move here instead. (#227)
+                if self.ribbon.open_dropdown.is_some() {
+                    return Task::none();
+                }
                 let i = self.active_tab;
 
                 // UCS icon grip drag: map the cursor onto the UCS plane and

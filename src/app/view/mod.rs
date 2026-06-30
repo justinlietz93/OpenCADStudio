@@ -401,6 +401,7 @@ impl OpenCADStudio {
                 pane_move_rect,
                 pane_drop_rect,
                 tab.pan_mode,
+                self.ribbon.open_dropdown.is_some(),
             )
         };
 
