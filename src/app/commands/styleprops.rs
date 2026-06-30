@@ -178,6 +178,18 @@ impl OpenCADStudio {
                     })
                     .collect();
 
+                let used_blocks: rustc_hash::FxHashSet<String> = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .filter_map(|e| match e {
+                        acadrust::EntityType::Insert(ins) => Some(ins.block_name.clone()),
+                        acadrust::EntityType::Dimension(d) => Some(d.base().block_name.clone()),
+                        _ => None,
+                    })
+                    .filter(|s| !s.is_empty())
+                    .collect();
+
                 // Build removal lists (still immutable)
                 let layer_remove: Vec<String> = if all || sub == "LAYERS" {
                     self.tabs[i]
@@ -220,8 +232,33 @@ impl OpenCADStudio {
                     vec![]
                 };
 
+                // Blocks: definitions with no INSERT/Dimension reference.
+                // Skip anonymous (*Model_Space/*Paper_Space/*U*/*D*…), layout,
+                // and xref blocks — those are system- or reference-managed.
+                let block_remove: Vec<String> = if all || sub == "BLOCKS" {
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .block_records
+                        .iter()
+                        .filter(|br| {
+                            !br.is_anonymous()
+                                && !br.is_layout()
+                                && !br.flags.is_xref
+                                && !br.flags.is_xref_overlay
+                                && !used_blocks.contains(&br.name)
+                        })
+                        .map(|br| br.name.clone())
+                        .collect()
+                } else {
+                    vec![]
+                };
+
                 // Apply removals (mutable)
-                let purged = layer_remove.len() + style_remove.len() + lt_remove.len();
+                let purged = layer_remove.len()
+                    + style_remove.len()
+                    + lt_remove.len()
+                    + block_remove.len();
                 for name in &layer_remove {
                     self.tabs[i].scene.document.layers.remove(name);
                 }
@@ -231,12 +268,50 @@ impl OpenCADStudio {
                 for name in &lt_remove {
                     self.tabs[i].scene.document.line_types.remove(name);
                 }
+                for name in &block_remove {
+                    // Drop the block definition's member entities (and the
+                    // BLOCK/ENDBLK delimiters) before the record so no orphaned
+                    // geometry survives in the document entity list.
+                    let handles: Vec<_> =
+                        if let Some(br) = self.tabs[i].scene.document.block_records.get(name) {
+                            let mut h = br.entity_handles.clone();
+                            h.push(br.block_entity_handle);
+                            h.push(br.block_end_handle);
+                            h
+                        } else {
+                            Vec::new()
+                        };
+                    for h in handles {
+                        self.tabs[i].scene.document.remove_entity(h);
+                    }
+                    self.tabs[i].scene.document.block_records.remove(name);
+                }
 
                 if purged > 0 {
                     self.push_undo_snapshot(i, "PURGE");
                     self.tabs[i].dirty = true;
-                    self.command_line
-                        .push_output(&format!("PURGE: {} definition(s) removed.", purged));
+                    // Rebuild the layer/style/linetype panel + ribbon caches so
+                    // the removed definitions disappear from the UI immediately.
+                    self.refresh_layer_panel();
+                    // Per-type breakdown so the user sees exactly what went.
+                    let mut parts: Vec<String> = Vec::new();
+                    if !layer_remove.is_empty() {
+                        parts.push(format!("{} layer(s)", layer_remove.len()));
+                    }
+                    if !style_remove.is_empty() {
+                        parts.push(format!("{} text style(s)", style_remove.len()));
+                    }
+                    if !lt_remove.is_empty() {
+                        parts.push(format!("{} linetype(s)", lt_remove.len()));
+                    }
+                    if !block_remove.is_empty() {
+                        parts.push(format!("{} block(s)", block_remove.len()));
+                    }
+                    self.command_line.push_output(&format!(
+                        "PURGE: {} definition(s) removed — {}.",
+                        purged,
+                        parts.join(", ")
+                    ));
                 } else {
                     self.command_line.push_output("PURGE: nothing to purge.");
                 }
