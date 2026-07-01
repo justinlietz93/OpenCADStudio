@@ -104,6 +104,8 @@ impl OpenCADStudio {
             // Dismissing these via ✕ is the cancel/decline path.
             Some(Unsaved) => self.pending_close = None,
             Some(AssocPrompt) => self.mark_assoc_prompted(),
+            // Cancel: leave the layer (and its objects) untouched.
+            Some(LayerDeleteWarning) => self.layer_delete_pending = None,
             // Cancel: drop the working copy without touching the block.
             Some(AttributeEditor) => {
                 self.attr_editor_handle = None;
@@ -913,6 +915,8 @@ impl OpenCADStudio {
             Message::LayerNew => self.on_layer_new(),
 
             Message::LayerDelete => self.on_layer_delete(),
+
+            Message::LayerDeleteConfirm => self.on_layer_delete_confirm(),
 
             Message::LayerSetCurrent => self.on_layer_set_current(),
 

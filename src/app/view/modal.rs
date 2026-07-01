@@ -485,6 +485,13 @@ impl OpenCADStudio {
             super::super::ModalKind::OverwriteWarning => {
                 sized(overwrite_dialog_window(&self.save_dialog_filename), 420, 180)
             }
+            super::super::ModalKind::LayerDeleteWarning => {
+                let (name, count) = self
+                    .layer_delete_pending
+                    .clone()
+                    .unwrap_or_else(|| (String::new(), 0));
+                sized(layer_delete_warning_window(&name, count), 440, 200)
+            }
             super::super::ModalKind::Unsaved => {
                 let tab_name = match &self.pending_close {
                     Some(super::super::PendingClose::Tab(idx)) => self
@@ -1033,6 +1040,60 @@ fn overwrite_dialog_window(filename: &str) -> Element<'static, Message> {
                 btn("Replace", Message::OverwriteConfirm, BTN_SAVE, BTN_HOVER),
                 iced::widget::Space::new().width(8),
                 btn("Cancel", Message::OverwriteCancel, BTN_DISC, BTN_DHOV),
+            ],
+        ]
+        .spacing(0),
+    )
+    .style(move |_: &Theme| container::Style {
+        background: Some(Background::Color(BG)),
+        ..Default::default()
+    })
+    .center(Fill)
+    .padding([24, 28])
+    .into()
+}
+
+/// Confirm deleting a layer that still has objects on it. "Delete Objects"
+/// erases them and removes the layer; "Cancel" leaves everything.
+fn layer_delete_warning_window(name: &str, count: usize) -> Element<'static, Message> {
+    const BG: Color = Color { r: 0.18, g: 0.18, b: 0.20, a: 1.0 };
+    const BORDER_COL: Color = Color { r: 0.38, g: 0.38, b: 0.42, a: 1.0 };
+    const TEXT_COL: Color = Color { r: 0.90, g: 0.90, b: 0.90, a: 1.0 };
+    const BTN_DEL: Color = Color { r: 0.72, g: 0.26, b: 0.24, a: 1.0 };
+    const BTN_DEL_HOV: Color = Color { r: 0.84, g: 0.32, b: 0.30, a: 1.0 };
+    const BTN_CANCEL: Color = Color { r: 0.28, g: 0.28, b: 0.30, a: 1.0 };
+    const BTN_CANCEL_HOV: Color = Color { r: 0.36, g: 0.36, b: 0.40, a: 1.0 };
+
+    let obj = if count == 1 { "object" } else { "objects" };
+    let body_text = format!(
+        "Layer \"{name}\" is not empty — it still has {count} {obj}.\n\nDeleting the layer will also remove {} from the drawing. Continue?",
+        if count == 1 { "that object" } else { "those objects" }
+    );
+
+    let btn = |label: &'static str, msg: Message, base: Color, hov: Color| {
+        button(text(label).size(13).color(TEXT_COL))
+            .on_press(msg)
+            .style(move |_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered | button::Status::Pressed => hov,
+                    _ => base,
+                })),
+                text_color: TEXT_COL,
+                border: Border { color: BORDER_COL, width: 1.0, radius: 4.0.into() },
+                shadow: iced::Shadow::default(),
+                snap: false,
+            })
+            .padding([6, 18])
+    };
+
+    container(
+        column![
+            text(body_text).size(13).color(TEXT_COL),
+            iced::widget::Space::new().height(20),
+            row![
+                btn("Delete Objects", Message::LayerDeleteConfirm, BTN_DEL, BTN_DEL_HOV),
+                iced::widget::Space::new().width(8),
+                btn("Cancel", Message::CloseModal, BTN_CANCEL, BTN_CANCEL_HOV),
             ],
         ]
         .spacing(0),

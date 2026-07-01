@@ -623,28 +623,83 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
 
     pub(super) fn on_layer_delete(&mut self) -> Task<Message> {
                 let i = self.active_tab;
-                if let Some(idx) = self.tabs[i].layers.selected {
-                    let name = self.tabs[i]
-                        .layers
-                        .layers
-                        .get(idx)
-                        .map(|l| l.name.clone())
-                        .unwrap_or_default();
-                    if name == "0" {
-                        return Task::none();
-                    }
+                let Some(idx) = self.tabs[i].layers.selected else {
+                    return Task::none();
+                };
+                let name = self.tabs[i]
+                    .layers
+                    .layers
+                    .get(idx)
+                    .map(|l| l.name.clone())
+                    .unwrap_or_default();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                if name == "0" {
+                    self.command_line
+                        .push_error("Layer \"0\" cannot be deleted.");
+                    return Task::none();
+                }
+                if name == self.tabs[i].scene.document.header.current_layer_name {
+                    self.command_line
+                        .push_error("Cannot delete the current layer. Set another layer current first.");
+                    return Task::none();
+                }
+                // Count objects on the layer. Empty → delete straight away;
+                // non-empty → warn first (deleting also removes those objects).
+                let count = self.tabs[i]
+                    .scene
+                    .document
+                    .entities()
+                    .filter(|e| e.common().layer == name)
+                    .count();
+                if count == 0 {
                     self.push_undo_snapshot(i, "LAYER DELETE");
                     self.tabs[i].scene.document.layers.remove(&name);
                     self.tabs[i].dirty = true;
-                    let doc_layers = self.tabs[i].scene.document.layers.clone();
-                    let vp_info = self.tabs[i].scene.viewport_list();
-                    self.tabs[i]
-                        .layers
-                        .sync_with_viewports(&doc_layers, vp_info);
-                    self.tabs[i].layers.selected = None;
-                    self.sync_ribbon_layers();
+                    self.sync_layer_panel(i);
+                } else {
+                    self.layer_delete_pending = Some((name, count));
+                    self.active_modal = Some(crate::app::ModalKind::LayerDeleteWarning);
+                    self.modal_offset = iced::Vector::ZERO;
                 }
                 Task::none()
+    }
+
+    /// User confirmed deleting a non-empty layer: erase every object on it,
+    /// then remove the layer record.
+    pub(super) fn on_layer_delete_confirm(&mut self) -> Task<Message> {
+        let i = self.active_tab;
+        self.active_modal = None;
+        self.modal_offset = iced::Vector::ZERO;
+        let Some((name, _)) = self.layer_delete_pending.take() else {
+            return Task::none();
+        };
+        self.push_undo_snapshot(i, "LAYER DELETE");
+        let handles: Vec<acadrust::Handle> = self.tabs[i]
+            .scene
+            .document
+            .entities()
+            .filter(|e| e.common().layer == name)
+            .map(|e| e.common().handle)
+            .collect();
+        // Remove the layer record first so the lock guard in `erase_entities`
+        // (which looks the layer up by name) can't block the objects.
+        self.tabs[i].scene.document.layers.remove(&name);
+        self.tabs[i].scene.erase_entities(&handles);
+        self.tabs[i].dirty = true;
+        self.sync_layer_panel(i);
+        self.refresh_properties();
+        Task::none()
+    }
+
+    /// Rebuild the Layer-manager panel + ribbon after a layer-table change.
+    fn sync_layer_panel(&mut self, i: usize) {
+        let doc_layers = self.tabs[i].scene.document.layers.clone();
+        let vp_info = self.tabs[i].scene.viewport_list();
+        self.tabs[i].layers.sync_with_viewports(&doc_layers, vp_info);
+        self.tabs[i].layers.selected = None;
+        self.sync_ribbon_layers();
     }
 
     pub(super) fn on_layer_set_current(&mut self) -> Task<Message> {

@@ -348,6 +348,10 @@ pub(super) struct OpenCADStudio {
     aec_drop_count: usize,
     /// Set once the user confirms overwriting an existing file on Save-As.
     overwrite_acknowledged: bool,
+    /// Layer awaiting a "delete non-empty layer" confirmation: `(name, object
+    /// count)`. Set when the user deletes a layer that still has objects; the
+    /// warning modal reads it, and confirming erases those objects too.
+    layer_delete_pending: Option<(String, usize)>,
     /// Pixel offset of the active modal from screen-centre (drag-to-move).
     /// Reset to zero whenever a modal closes so each dialog opens centred.
     modal_offset: iced::Vector,
@@ -958,6 +962,7 @@ pub enum ModalKind {
     AssocPrompt,
     PointStyle,
     AttributeEditor,
+    LayerDeleteWarning,
 }
 
 /// Identifies a DimStyle field that can be edited in the dialog.
@@ -1180,6 +1185,8 @@ pub enum Message {
     LayerToggleVpFreeze(usize, usize),
     LayerNew,
     LayerDelete,
+    /// Confirm deleting a non-empty layer (erases its objects too).
+    LayerDeleteConfirm,
     LayerSetCurrent,
     LayerSelect(usize),
     LayerRenameStart(usize),
@@ -1955,6 +1962,7 @@ impl OpenCADStudio {
             aec_drop_acknowledged: false,
             aec_drop_count: 0,
             overwrite_acknowledged: false,
+            layer_delete_pending: None,
             modal_offset: iced::Vector::ZERO,
             modal_drag_last: None,
             modal_dragging: false,

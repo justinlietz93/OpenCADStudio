@@ -1370,6 +1370,7 @@ impl OpenCADStudio {
             SaveDialog => (560, 480),
             PointStyle => (360, 470),
             AttributeEditor => (640, 500),
+            LayerDeleteWarning => (440, 200),
         };
         Some((w as f32 + EXTRA_W, h as f32 + EXTRA_H))
     }
