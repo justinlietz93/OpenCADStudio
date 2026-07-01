@@ -2001,6 +2001,16 @@ impl OpenCADStudio {
 
             Message::PropGeomCommit(field) => self.on_prop_geom_commit(field),
 
+            Message::PropAttrInput { tag, value } => {
+                self.tabs[self.active_tab]
+                    .properties
+                    .edit_buf
+                    .insert(crate::ui::properties::attr_edit_key(&tag), value);
+                Task::none()
+            }
+
+            Message::PropAttrCommit(tag) => self.on_prop_attr_commit(tag),
+
             Message::PropColorPickerToggle => {
                 let i = self.active_tab;
                 self.tabs[i].properties.color_picker_open =

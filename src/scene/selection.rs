@@ -285,6 +285,7 @@ impl Scene {
                     PropValue::LinetypeChoice(s) => s,
                     PropValue::HatchPatternChoice(s) => s,
                     PropValue::BoolToggle { value, .. } => value.to_string(),
+                    PropValue::AttrText { value, .. } => value,
                     PropValue::ColorVaries | PropValue::LwVaries => return None,
                 })
             }

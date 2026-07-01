@@ -1385,6 +1385,11 @@ pub enum Message {
     },
     /// User committed a geometry/common field edit (Enter pressed).
     PropGeomCommit(&'static str),
+    /// User is typing in a block-attribute value field (live buffer update),
+    /// keyed by the attribute tag.
+    PropAttrInput { tag: String, value: String },
+    /// User committed a block-attribute value edit (Enter pressed).
+    PropAttrCommit(String),
     /// Toggle the inline color picker dropdown open/closed.
     PropColorPickerToggle,
     /// Toggle the full ACI colour palette expansion.

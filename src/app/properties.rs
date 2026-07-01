@@ -15,6 +15,9 @@ impl OpenCADStudio {
         // closes, matching the deselect / reselect / click-away expectation.
         let color_palette_open = self.tabs[i].properties.color_palette_open;
         let edit_buf = std::mem::take(&mut self.tabs[i].properties.edit_buf);
+        // Which entities the previous panel was built for — an uncommitted
+        // edit buffer only survives a rebuild for the *same* selection.
+        let prev_handles = std::mem::take(&mut self.tabs[i].properties.source_handles);
         let selected_group = self.tabs[i].properties.selected_group.clone();
 
         // Seed the per-thread unit context from the document header so the
@@ -207,6 +210,30 @@ impl OpenCADStudio {
                         }
                     }
 
+                    // Block attributes: expose each attribute tag as an
+                    // editable value row so a block reference's attributes can
+                    // be read and changed directly from the panel.
+                    if let acadrust::EntityType::Insert(ins) = entity {
+                        if !ins.attributes.is_empty() {
+                            let props = ins
+                                .attributes
+                                .iter()
+                                .map(|a| crate::scene::model::object::Property {
+                                    label: a.tag.clone(),
+                                    field: "attr",
+                                    value: crate::scene::model::object::PropValue::AttrText {
+                                        tag: a.tag.clone(),
+                                        value: a.get_value().to_string(),
+                                    },
+                                })
+                                .collect();
+                            sections.push(crate::scene::model::object::PropSection {
+                                title: "Attributes".to_string(),
+                                props,
+                            });
+                        }
+                    }
+
                     if !group_names.is_empty() {
                         let label = group_names.join(", ");
                         if let Some(general) = sections.first_mut() {
@@ -310,7 +337,16 @@ impl OpenCADStudio {
                 }
             };
             panel.color_palette_open = color_palette_open;
-            panel.edit_buf = edit_buf;
+            let new_handles: Vec<acadrust::Handle> = selected.iter().map(|(h, _)| *h).collect();
+            // Carry the in-progress edits only when the selection is unchanged
+            // (a commit-triggered rebuild); a genuine selection change starts
+            // with a clean buffer so no stale value leaks onto the new entity.
+            panel.edit_buf = if prev_handles == new_handles {
+                edit_buf
+            } else {
+                Default::default()
+            };
+            panel.source_handles = new_handles;
             panel
         };
 

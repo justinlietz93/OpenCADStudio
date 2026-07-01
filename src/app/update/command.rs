@@ -1173,4 +1173,35 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 }
                 Task::none()
     }
+
+    /// Commit an edited block-attribute value from the Properties panel.
+    /// Writes the new value into the matching attribute (by tag) of every
+    /// selected INSERT, then re-tessellates so the attribute text repaints.
+    /// The value is stored verbatim (attribute values are free-form text, so
+    /// it is not run through the expression evaluator like numeric fields).
+    pub(super) fn on_prop_attr_commit(&mut self, tag: String) -> Task<Message> {
+        let i = self.active_tab;
+        let key = crate::ui::properties::attr_edit_key(&tag);
+        let handles = self.property_target_handles(i);
+        if handles.is_empty() {
+            return Task::none();
+        }
+        let Some(val) = self.tabs[i].properties.edit_buf.remove(&key) else {
+            return Task::none();
+        };
+        self.push_undo_snapshot(i, "ATTEDIT");
+        for &handle in &handles {
+            if let Some(acadrust::EntityType::Insert(ins)) =
+                self.tabs[i].scene.document.get_entity_mut(handle)
+            {
+                if let Some(attr) = ins.attributes.iter_mut().find(|a| a.tag == tag) {
+                    attr.set_value(val.clone());
+                }
+            }
+        }
+        self.invalidate_property_targets(i, &handles);
+        self.tabs[i].dirty = true;
+        self.refresh_properties();
+        Task::none()
+    }
 }

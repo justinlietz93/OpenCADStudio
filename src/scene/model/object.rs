@@ -31,6 +31,10 @@ pub enum PropValue {
     BoolToggle { field: &'static str, value: bool },
     /// Hatch pattern name — rendered as a combo_box from the catalog.
     HatchPatternChoice(String),
+    /// Block attribute value keyed by its (dynamic, runtime) tag — rendered as
+    /// an editable text_input. Unlike the other rows the routing key is the
+    /// tag carried here, not the row's `&'static str` field.
+    AttrText { tag: String, value: String },
 }
 
 /// A single property row in the Properties panel.

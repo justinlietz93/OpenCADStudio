@@ -109,6 +109,13 @@ pub fn lw_options() -> Vec<LwItem> {
     .collect()
 }
 
+/// Edit-buffer key for a block attribute value, keyed by its tag. Kept in one
+/// place so the live-input handler and the row renderer agree. The `\x01`
+/// sentinel guarantees no collision with a geometry field's `&'static str` key.
+pub fn attr_edit_key(tag: &str) -> String {
+    format!("\x01attr\x01{tag}")
+}
+
 // ── PropertiesPanel ───────────────────────────────────────────────────────
 
 #[derive(Clone)]
@@ -127,6 +134,13 @@ pub struct PropertiesPanel {
     pub hatch_pattern_combo: combo_box::State<String>,
     /// In-progress text edits keyed by `field` name.
     pub edit_buf: HashMap<String, String>,
+    /// Entity handles this panel was built for. `refresh_properties` compares
+    /// it against the new selection to decide whether an uncommitted `edit_buf`
+    /// may carry over: same selection → keep (survive a commit-triggered
+    /// rebuild); different selection → drop, so a stale value can't display or
+    /// commit onto a different entity (e.g. two title blocks sharing a `REV1`
+    /// tag).
+    pub source_handles: Vec<Handle>,
     /// Whether the quick color picker dropdown is open.
     pub color_picker_open: bool,
     /// Whether the full 16×16 ACI palette is expanded inside the color picker.
@@ -148,6 +162,7 @@ impl Default for PropertiesPanel {
             linetype_combo: combo_box::State::new(vec![]),
             hatch_pattern_combo: combo_box::State::new(crate::scene::model::hatch_patterns::names()),
             edit_buf: HashMap::default(),
+            source_handles: vec![],
             color_picker_open: false,
             color_palette_open: false,
         }
@@ -340,6 +355,9 @@ impl PropertiesPanel {
                 }
                 PropValue::HatchPatternChoice(current) => {
                     col = col.push(self.render_hatch_pattern_row(&prop.label, current));
+                }
+                PropValue::AttrText { tag, value } => {
+                    col = col.push(self.render_attr_row(tag, value));
                 }
             }
         }
@@ -584,6 +602,33 @@ impl PropertiesPanel {
             .width(Length::Fill);
 
         prop_row_widget(label, ti.into())
+    }
+
+    /// One editable row for a block attribute: the tag is the row label and the
+    /// text box edits the value. Routing rides the tag (a runtime string), so
+    /// this uses the dedicated `PropAttr*` messages instead of the geometry
+    /// path whose field key is `&'static str`. The row label is the tag itself.
+    fn render_attr_row<'a>(&'a self, tag: &'a str, entity_val: &'a str) -> Element<'a, Message> {
+        let key = attr_edit_key(tag);
+        let display = self
+            .edit_buf
+            .get(&key)
+            .map(|s| s.as_str())
+            .unwrap_or(entity_val);
+
+        let tag_for_input = tag.to_string();
+        let ti = text_input("", display)
+            .on_input(move |v| Message::PropAttrInput {
+                tag: tag_for_input.clone(),
+                value: v,
+            })
+            .on_submit(Message::PropAttrCommit(tag.to_string()))
+            .size(FONT_SZ)
+            .style(text_input_style)
+            .padding([3, 6])
+            .width(Length::Fill);
+
+        prop_row_widget(tag, ti.into())
     }
 
     fn render_hatch_pattern_row<'a>(
