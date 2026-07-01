@@ -1317,6 +1317,10 @@ pub enum Message {
     CloseSelectionFilterPopup,
     /// Include/exclude an entity type from interactive selection.
     ToggleSelectionFilterType(String),
+    /// Make every entity type selectable again (clear the filter).
+    SelectionFilterSelectAll,
+    /// Exclude every present entity type from selection.
+    SelectionFilterClearAll,
     /// Toggle the drawing-units picker open/closed.
     ToggleUnitsPopup,
     /// Close the drawing-units picker.

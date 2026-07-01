@@ -1486,6 +1486,19 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
+            Message::SelectionFilterSelectAll => {
+                self.tabs[self.active_tab].scene.selection_filter.clear();
+                Task::none()
+            }
+            Message::SelectionFilterClearAll => {
+                let i = self.active_tab;
+                let types = self.tabs[i].scene.entity_type_names_in_layout();
+                let f = &mut self.tabs[i].scene.selection_filter;
+                for t in types {
+                    f.insert(t.to_string());
+                }
+                Task::none()
+            }
             Message::ToggleUnitsPopup => {
                 self.units_popup_open ^= true;
                 Task::none()

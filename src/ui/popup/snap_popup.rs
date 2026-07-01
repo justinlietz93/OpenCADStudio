@@ -40,33 +40,7 @@ pub fn snap_popup_overlay<'a>(snapper: &'a Snapper, right_offset: f32) -> Elemen
         rows.push(snap_row(snap_type, label, snapper.is_on(snap_type)));
     }
 
-    // "Object Snap Settings…" footer
-    let footer_divider = container(iced::widget::Space::new().height(1))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(DIVIDER)),
-            ..Default::default()
-        })
-        .width(Fill)
-        .padding([0, 4]);
-
-    let footer = button(text("Object Snap Settings…").size(11).color(Color {
-        r: 0.75,
-        g: 0.75,
-        b: 0.75,
-        a: 1.0,
-    }))
-    .on_press(Message::Command("DSETTINGS".into()))
-    .style(|_: &Theme, status| button::Style {
-        background: Some(Background::Color(match status {
-            button::Status::Hovered => ROW_HOVER,
-            _ => Color::TRANSPARENT,
-        })),
-        ..Default::default()
-    })
-    .width(Fill)
-    .padding([5, 12]);
-
-    let panel_content = column![header, divider, column(rows), footer_divider, footer,];
+    let panel_content = column![header, divider, column(rows)];
 
     let panel = container(panel_content)
         .style(|_: &Theme| container::Style {

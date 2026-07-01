@@ -18,6 +18,34 @@ pub fn selection_filter_popup_overlay(
     types: Vec<String>,
     excluded: &HashSet<String>,
 ) -> Element<'static, Message> {
+    // "Select All / Clear All" header, mirroring the OSNAP popup: Select All
+    // clears every exclusion, Clear All excludes every present type.
+    let has_types = !types.is_empty();
+    let all_included = excluded.is_empty();
+    let all_excluded = has_types && types.iter().all(|t| excluded.contains(t));
+    let header = row![
+        header_btn(
+            "Select All",
+            Message::SelectionFilterSelectAll,
+            has_types && !all_included,
+        ),
+        header_btn(
+            "Clear All",
+            Message::SelectionFilterClearAll,
+            has_types && !all_excluded,
+        ),
+    ]
+    .spacing(1)
+    .padding([4u16, 8]);
+
+    let divider = container(iced::widget::Space::new().height(1))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(DIVIDER)),
+            ..Default::default()
+        })
+        .width(Fill)
+        .padding([0, 4]);
+
     let rows: Vec<Element<'static, Message>> = if types.is_empty() {
         vec![empty_row()]
     } else {
@@ -30,7 +58,7 @@ pub fn selection_filter_popup_overlay(
             .collect()
     };
 
-    let panel = container(column(rows))
+    let panel = container(column![header, divider, column(rows)])
         .style(|_: &Theme| container::Style {
             background: Some(Background::Color(PANEL_BG)),
             border: Border {
@@ -40,7 +68,7 @@ pub fn selection_filter_popup_overlay(
             },
             ..Default::default()
         })
-        .width(Length::Fixed(160.0));
+        .width(Length::Fixed(180.0));
 
     let positioned = container(panel)
         .align_right(Fill)
@@ -88,6 +116,30 @@ fn empty_row() -> Element<'static, Message> {
         .into()
 }
 
+fn header_btn(label: &str, msg: Message, enabled: bool) -> Element<'_, Message> {
+    let color = if enabled {
+        Color { r: 0.70, g: 0.70, b: 0.70, a: 1.0 }
+    } else {
+        Color { r: 0.38, g: 0.38, b: 0.38, a: 1.0 }
+    };
+    let b = button(text(label).size(10).color(color));
+    let b = if enabled { b.on_press(msg) } else { b };
+    b.style(|_: &Theme, status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered => ROW_HOVER,
+            _ => BTN_BG,
+        })),
+        border: Border {
+            color: PANEL_BORDER,
+            width: 1.0,
+            radius: 2.0.into(),
+        },
+        ..Default::default()
+    })
+    .padding([3, 8])
+    .into()
+}
+
 // ── Colours ───────────────────────────────────────────────────────────────
 
 const PANEL_BG: Color = Color {
@@ -106,6 +158,18 @@ const ROW_HOVER: Color = Color {
     r: 0.22,
     g: 0.22,
     b: 0.22,
+    a: 1.0,
+};
+const DIVIDER: Color = Color {
+    r: 0.28,
+    g: 0.28,
+    b: 0.28,
+    a: 1.0,
+};
+const BTN_BG: Color = Color {
+    r: 0.20,
+    g: 0.20,
+    b: 0.20,
     a: 1.0,
 };
 const CHECK_COLOR: Color = Color {
