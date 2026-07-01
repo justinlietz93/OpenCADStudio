@@ -207,6 +207,7 @@ impl PropertiesPanel {
             .size(FONT_SZ)
             .padding([2, 6])
             .input_style(combo_input_style)
+            .on_open(Message::PropColorPickerClose)
             .width(Length::Fill)
             .into()
         };
@@ -387,6 +388,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())
@@ -489,6 +491,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())
@@ -509,6 +512,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())
@@ -542,6 +546,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())
@@ -574,6 +579,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())
@@ -655,6 +661,7 @@ impl PropertiesPanel {
             right: 6.0,
         })
         .input_style(combo_input_style)
+        .on_open(Message::PropColorPickerClose)
         .width(Length::Fill);
 
         prop_row_widget(label, combo.into())

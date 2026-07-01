@@ -2123,6 +2123,13 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::PropColorPickerClose => {
+                let i = self.active_tab;
+                self.tabs[i].properties.color_picker_open = false;
+                self.tabs[i].properties.color_palette_open = false;
+                Task::none()
+            }
+
             Message::PropColorPaletteToggle => {
                 self.tabs[self.active_tab].properties.color_palette_open =
                     !self.tabs[self.active_tab].properties.color_palette_open;

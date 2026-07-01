@@ -1435,6 +1435,10 @@ pub enum Message {
     PropAttrCommit(String),
     /// Toggle the inline color picker dropdown open/closed.
     PropColorPickerToggle,
+    /// Collapse the inline color picker dropdown. Fired when another
+    /// properties-panel dropdown (a combo_box) opens, so at most one panel
+    /// dropdown is open at a time and they can't overlap. (#235)
+    PropColorPickerClose,
     /// Toggle the full ACI colour palette expansion.
     PropColorPaletteToggle,
     /// Enter the model-space editing mode inside the given viewport (MSPACE).
