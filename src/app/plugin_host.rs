@@ -530,6 +530,47 @@ mod tests {
     }
 
     #[test]
+    fn add_and_update_auto_register_novel_layers_with_real_handles() {
+        // A plugin adds/edits an entity naming a layer no LAYER command ever
+        // created. The layer must gain a real table entry (non-null handle) so
+        // it survives a DWG save instead of collapsing to layer 0 (#252, #67).
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+
+        assert!(!host.document().layers.contains("PLUGIN-LAYER"));
+        let mut pt = Point::at(acadrust::types::Vector3::new(3.0, 3.0, 0.0));
+        pt.common.layer = "PLUGIN-LAYER".to_string();
+        host.add_entity(EntityType::Point(pt));
+
+        let layer = host
+            .document()
+            .layers
+            .get("PLUGIN-LAYER")
+            .expect("novel layer auto-registered on add_entity");
+        assert!(
+            !layer.handle.is_null(),
+            "auto-registered layer must carry a real handle (#67)"
+        );
+
+        // Adding again on the same (now-existing) layer must not duplicate or
+        // error — the always-present default "0" is likewise never re-created.
+        let count_before = host.document().layers.len();
+        host.add_entity(EntityType::Point(Point::new())); // default layer "0"
+        let mut pt2 = Point::new();
+        pt2.common.layer = "PLUGIN-LAYER".to_string();
+        host.add_entity(EntityType::Point(pt2));
+        assert_eq!(host.document().layers.len(), count_before);
+
+        // Retargeting an entity to a novel layer via update_entity registers it.
+        let h = host.add_entity(EntityType::Point(Point::new()));
+        let mut edited = host.document().get_entity(h).unwrap().clone();
+        edited.common_mut().layer = "EDIT-LAYER".to_string();
+        assert!(host.update_entity(edited));
+        assert!(host.document().layers.contains("EDIT-LAYER"));
+    }
+
+    #[test]
     fn remove_entity_deletes_and_clears_caches() {
         let mut app = OpenCADStudio::new_for_test();
         app.tabs[0].is_start = false;

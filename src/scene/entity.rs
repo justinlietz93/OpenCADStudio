@@ -4,6 +4,24 @@ use super::*;
 impl Scene {
     // ── Entity management ─────────────────────────────────────────────────
 
+    /// Register `name` in the layer table if it isn't already there, giving the
+    /// new layer a real handle so it survives a DWG save (handle-based format;
+    /// issue #67). Called whenever an entity is added or edited: an entity that
+    /// names a layer no explicit LAYER command ever created — e.g. one supplied
+    /// by a plugin through `add_entity` — otherwise has no table entry, so the
+    /// DWG writer resolves its layer name to a NULL handle and it reopens on
+    /// layer 0. Auto-registering keeps it on its own layer (#252). Names are
+    /// registered verbatim so the writer's (case-insensitive) lookup matches;
+    /// the always-present default layer "0" and empty names are no-ops.
+    pub fn ensure_layer(&mut self, name: &str) {
+        if name.trim().is_empty() || self.document.layers.contains(name) {
+            return;
+        }
+        let mut layer = acadrust::tables::Layer::new(name);
+        layer.handle = self.document.allocate_handle();
+        let _ = self.document.layers.add(layer);
+    }
+
     pub fn add_entity(&mut self, mut entity: EntityType) -> Handle {
         // Only Insert / Block entities can introduce or reference a block
         // definition that the block cache must (re)build. Adding a plain
@@ -59,6 +77,12 @@ impl Scene {
             }
         }
 
+        // Register the entity's layer if it names one no LAYER command created
+        // (e.g. a plugin-supplied layer) so it survives a DWG save instead of
+        // collapsing to layer 0 in the reopened file (#252).
+        let layer = entity.common().layer.clone();
+        self.ensure_layer(&layer);
+
         // Route to the correct block based on current editing mode:
         //   - PSPACE (paper layout, no active viewport): paper-space layout block.
         //   - MSPACE or model layout: model space (document default).
@@ -113,6 +137,12 @@ impl Scene {
             &entity,
             EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
         );
+
+        // A plugin edit may retarget the entity to a novel layer; register it
+        // so the edited entity keeps that layer on save instead of collapsing
+        // to layer 0 in the reopened file (#252).
+        let new_layer = entity.common().layer.clone();
+        self.ensure_layer(&new_layer);
 
         // Rebuild the derived-model seeds from the new entity (as add_entity).
         let hatch_seed = if let EntityType::Hatch(dxf) = &entity {

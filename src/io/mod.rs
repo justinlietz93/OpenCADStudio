@@ -995,6 +995,43 @@ mod layer_roundtrip_tests {
     fn dwg_preserves_multiple_new_layers() {
         assert!(roundtrip_layers("dwg", 3), "DWG dropped colliding new layers (issue #67)");
     }
+
+    // #252: an entity added (as a plugin does) on a layer that no LAYER command
+    // ever created must keep that layer across a DWG save — `Scene::add_entity`
+    // auto-registers it so the writer resolves a real handle instead of NULL
+    // (which reopens as layer "0").
+    #[test]
+    fn dwg_preserves_entity_layer_auto_registered_on_add() {
+        use acadrust::entities::Point;
+        use acadrust::EntityType;
+
+        let mut scene = crate::scene::Scene::new();
+        crate::io::linetypes::populate_document(&mut scene.document);
+
+        let mut pt = Point::new();
+        pt.common.layer = "PLUGIN-LAYER".to_string();
+        let h = scene.add_entity(EntityType::Point(pt));
+        assert!(!h.is_null(), "entity was not added");
+
+        let path = std::env::temp_dir().join("ocs_entity_layer_rt.dwg");
+        save_as_version(&scene.document, &path, acadrust::DxfVersion::AC1032).expect("save");
+        let loaded = load_file(&path).expect("load");
+        let _ = std::fs::remove_file(&path);
+
+        assert!(
+            loaded.layers.contains("PLUGIN-LAYER"),
+            "layer table dropped the auto-registered layer (#252)"
+        );
+        let ent = loaded
+            .get_entity(h)
+            .or_else(|| loaded.entities().find(|e| matches!(e, EntityType::Point(_))))
+            .expect("point entity missing after round-trip");
+        assert_eq!(
+            ent.common().layer,
+            "PLUGIN-LAYER",
+            "entity collapsed to layer 0 on DWG save (#252)"
+        );
+    }
 }
 
 #[cfg(test)]
