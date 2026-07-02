@@ -107,16 +107,22 @@ impl Grippable for Solid3D {
 
 impl PropertyEditable for Solid3D {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
-        let history = match self.history_handle {
-            Some(h) if !h.is_null() => format!("{:X}", h.value()),
-            _ => "None".to_string(),
+        let has_history = matches!(self.history_handle, Some(h) if !h.is_null());
+        let history = if has_history {
+            format!("{:X}", self.history_handle.unwrap().value())
+        } else {
+            "None".to_string()
         };
         vec![
             PropSection {
                 title: "Solid History".into(),
                 props: vec![
                     ro("History", "s3d_history", history),
-                    ro("Show History", "s3d_show_history", String::new()),
+                    ro(
+                        "Show History",
+                        "s3d_show_history",
+                        if has_history { "Yes" } else { "No" },
+                    ),
                 ],
             },
             PropSection {
@@ -200,11 +206,21 @@ impl Grippable for Body {
 
 impl PropertyEditable for Body {
     fn geometry_properties(&self, _text_style_names: &[String]) -> Vec<PropSection> {
+        let has_history = matches!(self.history_handle, Some(h) if !h.is_null());
+        let history = if has_history {
+            format!("{:X}", self.history_handle.unwrap().value())
+        } else {
+            "None".to_string()
+        };
         vec![PropSection {
             title: "Solid History".into(),
             props: vec![
-                ro("History", "bdy_history", String::new()),
-                ro("Show History", "bdy_show_history", String::new()),
+                ro("History", "bdy_history", history),
+                ro(
+                    "Show History",
+                    "bdy_show_history",
+                    if has_history { "Yes" } else { "No" },
+                ),
             ],
         }]
     }

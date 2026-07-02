@@ -129,7 +129,11 @@ fn properties(vp: &Viewport) -> Vec<PropSection> {
                         value: vp.status.is_on,
                     },
                 },
-                ro("Clipped", "vp_clipped", String::new()),
+                ro(
+                    "Clipped",
+                    "vp_clipped",
+                    if vp.clip_boundary_handle.is_null() { "No" } else { "Yes" },
+                ),
                 Property {
                     label: "Display locked".into(),
                     field: "vp_locked",
