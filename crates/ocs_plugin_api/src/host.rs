@@ -120,10 +120,38 @@ pub trait HostApi {
 
     // ── Document ────────────────────────────────────────────────────────────
     fn document(&self) -> &CadDocument;
+    /// Mutable access to the active document.
+    ///
+    /// For an **out-of-process** plugin this borrows a *local snapshot*: edits
+    /// to existing entities made through it are NOT sent back to the host and
+    /// are silently discarded. To modify or delete entities from any plugin,
+    /// use [`add_entity`](Self::add_entity), [`update_entity`](Self::update_entity)
+    /// and [`remove_entity`](Self::remove_entity), which are committed to the
+    /// host document over IPC.
     fn document_mut(&mut self) -> &mut CadDocument;
 
     /// Add an entity to the active document, returning its handle.
     fn add_entity(&mut self, entity: EntityType) -> Handle;
+    /// Replace the existing entity that carries `entity`'s handle, preserving
+    /// its identity (handle and owning block). Returns `false` when no entity
+    /// has that handle. This is the sanctioned way to commit in-place edits
+    /// from an out-of-process plugin — mutating `document_mut()` does not work
+    /// across the process boundary.
+    fn update_entity(&mut self, entity: EntityType) -> bool {
+        let handle = entity.common().handle;
+        match self.document_mut().get_entity_mut(handle) {
+            Some(slot) => {
+                *slot = entity;
+                true
+            }
+            None => false,
+        }
+    }
+    /// Delete the entity with `handle` (and any derived render caches). Returns
+    /// `true` when an entity was removed.
+    fn remove_entity(&mut self, handle: Handle) -> bool {
+        self.document_mut().remove_entity(handle).is_some()
+    }
     /// Mark the scene geometry dirty so it is re-tessellated next frame.
     fn bump_geometry(&mut self);
 

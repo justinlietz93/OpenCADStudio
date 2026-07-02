@@ -151,6 +151,46 @@ impl HostApi for PluginHostApi {
         }
     }
 
+    fn update_entity(&mut self, entity: EntityType) -> bool {
+        match self.client.request(PluginRequest::UpdateEntity(entity)) {
+            Ok(PluginResponse::Bool(b)) => {
+                if b {
+                    // The cached snapshot is now stale; drop it so a later
+                    // document() re-fetches the host's post-edit truth.
+                    self.document_cache = OnceCell::new();
+                }
+                b
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected UpdateEntity response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] UpdateEntity failed: {e}");
+                false
+            }
+        }
+    }
+
+    fn remove_entity(&mut self, handle: Handle) -> bool {
+        match self.client.request(PluginRequest::RemoveEntity { handle }) {
+            Ok(PluginResponse::Bool(b)) => {
+                if b {
+                    self.document_cache = OnceCell::new();
+                }
+                b
+            }
+            Ok(other) => {
+                eprintln!("[plugin] unexpected RemoveEntity response: {other:?}");
+                false
+            }
+            Err(e) => {
+                eprintln!("[plugin] RemoveEntity failed: {e}");
+                false
+            }
+        }
+    }
+
     fn bump_geometry(&mut self) {
         let _ = self.client.request(PluginRequest::BumpGeometry);
     }
@@ -437,5 +477,37 @@ mod tests {
         let handle = api.add_entity(EntityType::Point(Point::new()));
         peer_handle.join().unwrap();
         assert_eq!(handle, Handle::new(42));
+    }
+
+    #[test]
+    fn update_entity_awaits_bool_response() {
+        let (mut api, mut peer) = make_client();
+        let peer_handle = thread::spawn(move || {
+            let msg = recv::<PluginToHost>(&mut peer).unwrap();
+            match msg {
+                PluginToHost::Request(PluginRequest::UpdateEntity(_)) => {}
+                other => panic!("unexpected: {other:?}"),
+            }
+            send(&mut peer, &HostToPlugin::Response(PluginResponse::Bool(true))).unwrap();
+        });
+        assert!(api.update_entity(EntityType::Point(Point::new())));
+        peer_handle.join().unwrap();
+    }
+
+    #[test]
+    fn remove_entity_awaits_bool_response() {
+        let (mut api, mut peer) = make_client();
+        let peer_handle = thread::spawn(move || {
+            let msg = recv::<PluginToHost>(&mut peer).unwrap();
+            match msg {
+                PluginToHost::Request(PluginRequest::RemoveEntity { handle }) => {
+                    assert_eq!(handle, Handle::new(7));
+                }
+                other => panic!("unexpected: {other:?}"),
+            }
+            send(&mut peer, &HostToPlugin::Response(PluginResponse::Bool(true))).unwrap();
+        });
+        assert!(api.remove_entity(Handle::new(7)));
+        peer_handle.join().unwrap();
     }
 }

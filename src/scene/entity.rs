@@ -90,6 +90,88 @@ impl Scene {
         handle
     }
 
+    /// Replace the entity stored under `entity`'s handle with `entity`, keeping
+    /// its identity (handle + owning block), and refresh the derived
+    /// hatch/image/mesh caches so the edit is visible. Returns `false` when no
+    /// entity has that handle. This is the in-place counterpart to
+    /// [`add_entity`](Self::add_entity) used to commit a plugin's edit of an
+    /// existing entity.
+    pub fn update_entity(&mut self, mut entity: EntityType) -> bool {
+        let handle = entity.common().handle;
+        let Some(existing) = self.document.get_entity(handle) else {
+            return false;
+        };
+        // The caller edited a snapshot copy; keep the live entity in its block.
+        entity.common_mut().owner_handle = existing.common().owner_handle;
+
+        // Replacing (or becoming) a block entity forces a full block-cache
+        // rebuild; a plain entity only needs its own wires re-tessellated.
+        let affects_blocks = matches!(
+            existing,
+            EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
+        ) || matches!(
+            &entity,
+            EntityType::Insert(_) | EntityType::Block(_) | EntityType::BlockEnd(_)
+        );
+
+        // Rebuild the derived-model seeds from the new entity (as add_entity).
+        let hatch_seed = if let EntityType::Hatch(dxf) = &entity {
+            let color = self.render_style(&entity).0;
+            Self::hatch_model_from_dxf(dxf, color)
+        } else if let EntityType::Solid(solid) = &entity {
+            let color = self.render_style(&entity).0;
+            Some(Self::solid_hatch_model(solid, color))
+        } else {
+            None
+        };
+        let image_seed = if let EntityType::RasterImage(img) = &entity {
+            ImageModel::from_raster_image(img)
+        } else {
+            None
+        };
+        let facet_res = self.document.header.facet_resolution;
+        let mesh_seed = if matches!(
+            &entity,
+            EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_)
+        ) {
+            let color = self.render_style(&entity).0;
+            crate::entities::solid3d::tessellate_volume(&entity, color, facet_res)
+                .map(|m| offset_mesh_lod_set(m))
+        } else {
+            None
+        };
+
+        // Write the new entity into the live slot.
+        let Some(slot) = self.document.get_entity_mut(handle) else {
+            return false;
+        };
+        *slot = entity;
+
+        // Drop stale derived caches for this handle, then reseed for the new
+        // entity's type (which may differ from the old one).
+        self.hatches.remove(&handle);
+        self.images.remove(&handle);
+        self.meshes.remove(&handle);
+        self.solid_models.remove(&handle);
+        if let Some(model) = hatch_seed {
+            self.hatches.insert(handle, model);
+        }
+        if let Some(model) = image_seed {
+            self.images.insert(handle, model);
+        }
+        if let Some(model) = mesh_seed {
+            self.meshes.insert(handle, model);
+        }
+
+        self.mark_entity_dirty(handle);
+        if affects_blocks {
+            self.bump_geometry();
+        } else {
+            self.bump_geometry_no_blocks();
+        }
+        true
+    }
+
     /// Returns the RGBA color for the given layer name.
     pub fn layer_color(&self, layer: &str) -> [f32; 4] {
         let layer_entry = self.document.layers.get(layer);

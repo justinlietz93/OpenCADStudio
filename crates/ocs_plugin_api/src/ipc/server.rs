@@ -28,6 +28,8 @@ pub fn handle_plugin_request(
             PluginResponse::Ok
         }
         AddEntity(entity) => PluginResponse::Handle(host.add_entity(entity)),
+        UpdateEntity(entity) => PluginResponse::Bool(host.update_entity(entity)),
+        RemoveEntity { handle } => PluginResponse::Bool(host.remove_entity(handle)),
         BumpGeometry => {
             host.bump_geometry();
             PluginResponse::Ok

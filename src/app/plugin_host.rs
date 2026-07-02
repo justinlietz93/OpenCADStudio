@@ -73,6 +73,31 @@ impl<'a> HostSession<'a> {
         self.app.tabs[self.tab].scene.bump_geometry();
     }
 
+    /// Replace the entity carrying `entity`'s handle in place, refreshing the
+    /// scene's derived caches. Returns `false` when no entity has that handle.
+    pub fn update_entity(&mut self, entity: EntityType) -> bool {
+        let ok = self.app.tabs[self.tab].scene.update_entity(entity);
+        if ok {
+            self.publish_document_view();
+        }
+        ok
+    }
+
+    /// Delete the entity with `handle`, keeping the scene's render caches in
+    /// sync. Returns `false` when the entity is absent or on a locked layer
+    /// (which `erase_entities` refuses to remove).
+    pub fn remove_entity(&mut self, handle: Handle) -> bool {
+        if self.document().get_entity(handle).is_none() {
+            return false;
+        }
+        self.app.tabs[self.tab].scene.erase_entities(&[handle]);
+        let removed = self.document().get_entity(handle).is_none();
+        if removed {
+            self.publish_document_view();
+        }
+        removed
+    }
+
     // ── XDATA convenience ──────────────────────────────────────────────────
     // Plugins persist domain data as XDATA on plain entities so it round-trips
     // through DWG/DXF. These wrap the `acadrust::xdata` API keyed by entity
@@ -94,6 +119,7 @@ impl<'a> HostSession<'a> {
     pub fn write_record(&mut self, handle: Handle, record: ExtendedDataRecord) -> bool {
         let app = record.application_name.clone();
         self.ensure_app_id(&app);
+        let app_handle = self.document().app_ids.get(&app).map(|a| a.handle.value());
         let Some(entity) = self.document_mut().get_entity_mut(handle) else {
             return false;
         };
@@ -110,6 +136,13 @@ impl<'a> HostSession<'a> {
             xd.add_record(r);
         }
         xd.add_record(record);
+        // Drop stale verbatim EED for this app so the fresh record — not the
+        // pre-edit bytes captured on a prior read — wins on the next save.
+        // Otherwise a plugin's edit made after a save/reopen (which registered
+        // the app in `raw_dwg_eed`) would not persist.
+        if let Some(ah) = app_handle {
+            xd.raw_dwg_eed.retain(|(a, _)| *a != ah);
+        }
         self.publish_document_view();
         true
     }
@@ -117,6 +150,7 @@ impl<'a> HostSession<'a> {
     /// Remove the XDATA record for `app_name` from entity `handle`. Returns
     /// `true` when a record was actually removed.
     pub fn remove_record(&mut self, handle: Handle, app_name: &str) -> bool {
+        let app_handle = self.document().app_ids.get(app_name).map(|a| a.handle.value());
         let Some(entity) = self.document_mut().get_entity_mut(handle) else {
             return false;
         };
@@ -127,23 +161,36 @@ impl<'a> HostSession<'a> {
             .filter(|r| r.application_name != app_name)
             .cloned()
             .collect();
-        if kept.len() == xd.records().len() {
+        let removed_record = kept.len() != xd.records().len();
+        // Also drop verbatim EED for this app so the removal persists across a
+        // save (a record read back from DWG lives in `raw_dwg_eed`).
+        let removed_raw = app_handle
+            .map(|ah| xd.raw_dwg_eed.iter().any(|(a, _)| *a == ah))
+            .unwrap_or(false);
+        if !removed_record && !removed_raw {
             return false;
         }
         xd.clear();
         for r in kept {
             xd.add_record(r);
         }
+        if let Some(ah) = app_handle {
+            xd.raw_dwg_eed.retain(|(a, _)| *a != ah);
+        }
         self.publish_document_view();
         true
     }
 
     /// Register `name` in the APPID table if it is not already present, so XDATA
-    /// written under it survives a DWG/DXF round-trip.
+    /// written under it survives a DWG/DXF round-trip. The entry is given a real
+    /// handle — a null-handle APPID is written as handle 0, which the DWG EED
+    /// reference then can't resolve, so the XDATA would be dropped on reopen.
     fn ensure_app_id(&mut self, name: &str) {
         let doc = self.document_mut();
         if !doc.app_ids.contains(name) {
-            let _ = doc.app_ids.add(AppId::new(name));
+            let mut app = AppId::new(name);
+            app.handle = doc.allocate_handle();
+            let _ = doc.app_ids.add(app);
         }
     }
 
@@ -185,6 +232,12 @@ impl HostApi for HostSession<'_> {
     }
     fn add_entity(&mut self, entity: EntityType) -> Handle {
         self.add_entity(entity)
+    }
+    fn update_entity(&mut self, entity: EntityType) -> bool {
+        self.update_entity(entity)
+    }
+    fn remove_entity(&mut self, handle: Handle) -> bool {
+        self.remove_entity(handle)
     }
     fn bump_geometry(&mut self) {
         self.bump_geometry()
@@ -445,6 +498,54 @@ mod tests {
             *host::plugin_state::<u32>(&*host, "opencad.demo").unwrap(),
             100
         );
+    }
+
+    #[test]
+    fn update_entity_replaces_in_place_preserving_handle() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let h = host.add_entity(EntityType::Point(Point::at(acadrust::types::Vector3::new(
+            1.0, 1.0, 0.0,
+        ))));
+        let epoch_before = host.app.tabs[0].scene.geometry_epoch;
+
+        // Edit a snapshot copy (as a plugin would) and commit it.
+        let mut edited = host.document().get_entity(h).unwrap().clone();
+        edited.common_mut().layer = "PLUGIN_EDIT".to_string();
+        assert!(host.update_entity(edited));
+
+        // Same handle, edit applied, geometry re-tessellated.
+        let got = host.document().get_entity(h).expect("entity kept its handle");
+        assert_eq!(got.common().layer, "PLUGIN_EDIT");
+        assert_ne!(
+            host.app.tabs[0].scene.geometry_epoch, epoch_before,
+            "update should bump geometry"
+        );
+
+        // Updating an unknown handle fails and changes nothing.
+        let mut ghost = Point::new();
+        ghost.common.handle = Handle::new(999_999);
+        assert!(!host.update_entity(EntityType::Point(ghost)));
+    }
+
+    #[test]
+    fn remove_entity_deletes_and_clears_caches() {
+        let mut app = OpenCADStudio::new_for_test();
+        app.tabs[0].is_start = false;
+        let mut host = HostSession::new(&mut app, 0);
+        let h = host.add_entity(EntityType::Point(Point::at(acadrust::types::Vector3::new(
+            2.0, 2.0, 0.0,
+        ))));
+        assert!(host.document().get_entity(h).is_some());
+
+        assert!(host.remove_entity(h));
+        assert!(host.document().get_entity(h).is_none());
+        assert!(!host.app.tabs[0].scene.hatches.contains_key(&h));
+        assert!(!host.app.tabs[0].scene.meshes.contains_key(&h));
+
+        // Removing an already-gone handle reports false.
+        assert!(!host.remove_entity(h));
     }
 
     /// A plugin command: second point commits a Point and ends.

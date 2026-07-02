@@ -75,6 +75,12 @@ pub enum PluginRequest {
     PushOutput(String),
     PushError(String),
     AddEntity(EntityType),
+    /// Replace the existing entity carrying this entity's handle in place.
+    UpdateEntity(EntityType),
+    /// Delete the entity with `handle`.
+    RemoveEntity {
+        handle: Handle,
+    },
     BumpGeometry,
     ReadRecord {
         handle: Handle,
