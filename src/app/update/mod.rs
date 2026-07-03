@@ -243,7 +243,7 @@ impl OpenCADStudio {
             }
 
             Message::RecentRemove(path) => {
-                self.app_menu.remove_recent(&path);
+                self.remove_recent(&path);
                 Task::none()
             }
 
@@ -613,24 +613,6 @@ impl OpenCADStudio {
                             .push_error(&format!("No plugin handled: {command}"));
                     }
                 }
-                Task::none()
-            }
-
-            // ── Application menu ──────────────────────────────────────────
-            Message::ToggleAppMenu => {
-                self.app_menu.toggle();
-                Task::none()
-            }
-            Message::CloseAppMenu => {
-                self.app_menu.close();
-                Task::none()
-            }
-            Message::CloseAppMenuAndRun(cmd) => {
-                self.app_menu.close();
-                self.dispatch_command(&cmd.clone())
-            }
-            Message::AppMenuSearch(s) => {
-                self.app_menu.search = s;
                 Task::none()
             }
 

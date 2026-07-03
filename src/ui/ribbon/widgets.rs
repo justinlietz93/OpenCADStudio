@@ -54,10 +54,11 @@ pub(super) const PROP_LW_ID: &str = "PROP_LW";
 
 // ── Colours ────────────────────────────────────────────────────────────────
 
-pub(super) const LOGO_RED: Color = Color {
-    r: 0.75,
-    g: 0.10,
-    b: 0.10,
+/// Light chrome grey for the quick-access file-command icons on the top strip.
+pub(super) const QA_ICON_COLOR: Color = Color {
+    r: 0.82,
+    g: 0.83,
+    b: 0.85,
     a: 1.0,
 };
 pub(super) const TOPBAR_BG: Color = Color {
@@ -1081,6 +1082,50 @@ pub fn module_event_to_message(event: ModuleEvent) -> Message {
 }
 
 // ── History control ────────────────────────────────────────────────────────
+
+/// Quick-access chrome button (New / Open / Save / Save As / Print) in the top
+/// strip: an SVG icon that dispatches a command string, with a hover tooltip.
+pub(super) fn quick_access_btn<'a>(
+    icon_bytes: &'static [u8],
+    label: &'static str,
+    cmd: &'static str,
+) -> Element<'a, Message> {
+    // The bundled UI SVGs are black-stroked; tint them to a light chrome grey so
+    // they read on the dark top strip (raw black is invisible there).
+    let icon = icons::tinted(icon_bytes, 16.0, QA_ICON_COLOR);
+    let btn = button(
+        container(icon)
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::Center)
+            .align_y(iced::Center),
+    )
+    .on_press(Message::Command(cmd.to_string()))
+    .style(|_: &Theme, status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered | button::Status::Pressed => Color {
+                r: 0.30,
+                g: 0.30,
+                b: 0.30,
+                a: 1.0,
+            },
+            _ => Color::TRANSPARENT,
+        })),
+        border: Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .width(Length::Fixed(TOP_HIST_W))
+    .height(24)
+    .padding([2, 0]);
+    tooltip(btn, make_tip(label.to_string()), TipPos::Bottom)
+        .gap(6.0)
+        .delay(Duration::from_millis(400))
+        .style(tip_style)
+        .into()
+}
 
 pub(super) fn render_history_control<'a>(
     label: &'static str,

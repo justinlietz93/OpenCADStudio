@@ -14,6 +14,7 @@ mod mtext_editor;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod plugin_host;
 mod properties;
+mod recent;
 mod settings;
 mod style_ops;
 mod text_inline;
@@ -155,7 +156,7 @@ pub struct QSelectState {
     pub append: bool,
 }
 use crate::snap::Snapper;
-use crate::ui::{AppMenu, CommandLine, Ribbon, StatusBar};
+use crate::ui::{CommandLine, Ribbon, StatusBar};
 use acadrust::types::{Color as AcadColor, LineWeight};
 use acadrust::CadDocument;
 
@@ -192,7 +193,8 @@ pub(super) struct OpenCADStudio {
     active_tab: usize,
     tab_counter: usize,
     ribbon: Ribbon,
-    app_menu: AppMenu,
+    /// Recently opened files, newest first — backs the Start page panel.
+    recent_files: Vec<std::path::PathBuf>,
     command_line: CommandLine,
     /// Paying Patreon supporters shown on the Start page (name, pledge cents),
     /// fetched once at boot, highest pledge first.
@@ -1121,12 +1123,6 @@ pub enum Message {
         command: String,
         path: Option<std::path::PathBuf>,
     },
-    // ── Application menu ──────────────────────────────────────────────────
-    ToggleAppMenu,
-    CloseAppMenu,
-    /// Close the menu and immediately dispatch a CAD command.
-    CloseAppMenuAndRun(String),
-    AppMenuSearch(String),
     // ── Document tabs ──────────────────────────────────────────────────────
     /// Create a new empty document tab.
     TabNew,
@@ -1918,16 +1914,14 @@ impl OpenCADStudio {
         // Boot with only the Welcome/Start tab. The user creates drawings
         // explicitly (File → New); we never auto-spawn Drawing1.
         let start_tab = DocumentTab::new_start();
-        let mut app_menu = AppMenu::new();
-        // Restore recents from disk so the Start page lists them across runs.
-        app_menu.load_persistent_recents();
         let mut app = Self {
             start: Instant::now(),
             tabs: vec![start_tab],
             active_tab: 0,
             tab_counter: 0,
             ribbon: Ribbon::new(),
-            app_menu,
+            // Restore recents from disk so the Start page lists them across runs.
+            recent_files: recent::load_recent_files(),
             command_line: CommandLine::new(),
             patrons: Vec::new(),
             history_content: iced::widget::text_editor::Content::new(),

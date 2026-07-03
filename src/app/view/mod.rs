@@ -1084,7 +1084,7 @@ impl OpenCADStudio {
         // Properties / layers panels carry no useful state on the Start tab.
         // Replace the properties panel with a Recent Documents list there.
         let properties_el: Element<'_, Message> = if tab.is_start {
-            recent_files_panel(&self.app_menu.recent)
+            recent_files_panel(&self.recent_files)
         } else if self.show_properties && !self.clean_screen {
             tab.properties.view()
         } else {
@@ -1304,7 +1304,6 @@ impl OpenCADStudio {
 
         let composed = stack![
             main_ui,
-            self.app_menu.view(),
             snap_layer,
             scale_layer,
             statusbar_menu_layer,

@@ -3,25 +3,6 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_view(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
-            "HELP" | "?" => {
-                self.command_line.push_output(
-                    "Draw: LINE CIRCLE ARC PLINE RECTANG(RECT) POLYGON(POLY) POINT ELLIPSE SPLINE RAY XLINE HATCH DONUT REVCLOUD WIPEOUT MLINE ATTDEF  |  \
-                     Modify: MOVE COPY ROTATE SCALE MIRROR ERASE OFFSET EXTEND FILLET CHAMFER STRETCH EXPLODE TRIM BREAK JOIN LENGTHEN ALIGN PEDIT  |  \
-                     Array: ARRAY ARRAYRECT ARRAYPOLAR ARRAYPATH  |  \
-                     Text: TEXT MTEXT LEADER MLEADER  |  \
-                     Dimension: DIMLINEAR DIMALIGNED DIMANGULAR DIMRADIUS DIMDIAMETER DIMCONTINUE DIMBASELINE  |  \
-                     Annotation: TOLERANCE  |  \
-                     Inquiry: DIST ID AREA LIST FIND FINDALL COUNT QSELECT  |  Draw on entity: DIVIDE MEASURE  |  \
-                     Attributes: ATTEDIT ATTDISP  |  \
-                     Utilities: FLATTEN LAYISO LAYUNISO  |  \
-                     View: ZOOM EXTENTS ZOOM WINDOW VIEW LIST/SAVE/RESTORE/DELETE  |  \
-                     Layer: LAYER LIST/NEW/ON/OFF/FREEZE/THAW/LOCK/UNLOCK/COLOR/SET  |  \
-                     Viewport: MVIEW VPLAYER VPORTS MS PS DRAWORDER  |  \
-                     Tables: STYLE DIMSTYLE LINETYPE UCS RENAME PURGE  |  \
-                     File: NEW OPEN SAVE SAVEAS PRINT PURGE UNDO REDO"
-                );
-            }
-
             "DONATE" => {
                 crate::sys::open_url("https://patreon.com/HakanSeven12");
                 self.command_line.push_info("Opening Patreon page...");

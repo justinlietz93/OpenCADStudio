@@ -2,7 +2,6 @@
 /// Change this to scale the ribbon, layer manager rows, and property panel rows uniformly.
 pub const ROW_H: f32 = 26.0;
 
-pub mod app_menu;
 pub mod color_select;
 pub mod command_line;
 pub mod icons;
@@ -17,7 +16,6 @@ pub mod style;
 pub mod text_util;
 pub mod window;
 
-pub use app_menu::AppMenu;
 pub use command_line::CommandLine;
 pub use properties::PropertiesPanel;
 pub use ribbon::Ribbon;

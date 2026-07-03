@@ -154,9 +154,9 @@ impl OpenCADStudio {
             "POLAR" => {
                 return Some(Task::done(Message::TogglePolar));
             }
-            // DSETTINGS / OSNAP / OPTIONS — open the drafting-settings popup, which
-            // is OCS's settings surface (the persisted DYN/ORTHO/POLAR/OSNAP prefs).
-            "DSETTINGS" | "OSNAP" | "OPTIONS" | "OP" => {
+            // DSETTINGS / OSNAP — open the drafting-settings popup, which is OCS's
+            // settings surface (the persisted DYN/ORTHO/POLAR/OSNAP prefs).
+            "DSETTINGS" | "OSNAP" => {
                 return Some(Task::done(Message::ToggleSnapPopup));
             }
             // UNITS — open the drawing-units picker (linear / angular format).

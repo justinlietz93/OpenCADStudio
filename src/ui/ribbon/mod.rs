@@ -217,32 +217,16 @@ impl Ribbon {
         undo_count: usize,
         redo_count: usize,
     ) -> Element<'_, Message> {
-        // ── Logo ──────────────────────────────────────────────────────────
-        let logo_svg = {
-            let handle = svg::Handle::from_memory(include_bytes!("../../../assets/logo.svg"));
-            svg(handle).width(30).height(28)
-        };
-        let logo = button(logo_svg)
-            .on_press(Message::ToggleAppMenu)
-            .style(|_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => Color {
-                        r: 0.80,
-                        g: 0.25,
-                        b: 0.15,
-                        a: 1.0,
-                    },
-                    _ => LOGO_RED,
-                })),
-                border: Border {
-                    radius: 2.0.into(),
-                    ..Default::default()
-                },
-                shadow: iced::Shadow::default(),
-                snap: false,
-                ..Default::default()
-            })
-            .padding([0, 4]);
+        // ── Quick-access file commands ─────────────────────────────────────
+        let quick_access = row![
+            quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW"),
+            quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN"),
+            quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE"),
+            quick_access_btn(crate::ui::icons::FILE_EXPORT, "Save As", "SAVEAS"),
+            quick_access_btn(crate::ui::icons::PRINT, "Print", "PRINT"),
+        ]
+        .spacing(TOP_HIST_GAP)
+        .align_y(iced::Center);
 
         // ── Tab buttons ───────────────────────────────────────────────────
         let history_controls = row![
@@ -253,7 +237,7 @@ impl Ribbon {
         .align_y(iced::Center);
 
         let tab_buttons = self.modules.iter().enumerate().fold(
-            row![logo, history_controls]
+            row![quick_access, history_controls]
                 .align_y(iced::Center)
                 .spacing(6),
             |row_acc, (i, module)| {

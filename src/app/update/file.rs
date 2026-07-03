@@ -240,7 +240,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         caches.corrupt_dropped
                     ));
                 }
-                self.app_menu.push_recent(path.clone());
+                self.push_recent(path.clone());
 
                 let current_is_empty = {
                     let t = &self.tabs[self.active_tab];
