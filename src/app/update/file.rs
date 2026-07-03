@@ -22,6 +22,45 @@ use iced::{mouse, Point, Task};
 
 
 impl OpenCADStudio {
+    /// Before a save, give every cached truck solid that still has no ACIS
+    /// geometry (EXTRUDE/REVOLVE/SWEEP/LOFT/boolean results) an exact modeler
+    /// body derived from its truck B-rep, so the written DWG/DXF carries real
+    /// 3-D geometry other CAD apps can open instead of an empty data stream.
+    /// Curved solids that the exact planar path can't yet express are left
+    /// untouched (handled by the NURBS path).
+    #[cfg(feature = "solid3d")]
+    fn sync_truck_solids_to_acis(&mut self, i: usize) {
+        use acadrust::EntityType;
+        let scene = &mut self.tabs[i].scene;
+        let targets: Vec<acadrust::Handle> = scene
+            .solid_models
+            .keys()
+            .copied()
+            .filter(|h| {
+                matches!(
+                    scene.document.get_entity(*h),
+                    Some(EntityType::Solid3D(s)) if !s.acis_data.has_data()
+                )
+            })
+            .collect();
+        for h in targets {
+            // Build the SAT while borrowing solid_models; the returned document
+            // is owned, so the borrow ends before we mutate the entity.
+            let sat = scene
+                .solid_models
+                .get(&h)
+                .and_then(crate::scene::convert::acis_export::planar_solid_to_sat);
+            if let Some(sat) = sat {
+                if let Some(EntityType::Solid3D(s)) = scene.document.get_entity_mut(h) {
+                    s.set_sat_document(&sat);
+                }
+            }
+        }
+    }
+
+    #[cfg(not(feature = "solid3d"))]
+    fn sync_truck_solids_to_acis(&mut self, _i: usize) {}
+
     /// Snapshot the persisted UI preferences from live state.
     pub(in crate::app) fn current_settings(&self) -> crate::app::settings::UserSettings {
         crate::app::settings::UserSettings {
@@ -556,6 +595,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     if self.backup_on_save {
                         crate::io::write_backup(&path);
                     }
+                    self.sync_truck_solids_to_acis(i);
                     match crate::io::save(&self.tabs[i].scene.document, &path) {
                         Ok(()) => {
                             self.command_line
@@ -613,6 +653,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let close = self.close_save_dialog_window();
                 let i = self.active_tab;
                 sync_annotation_scale_header(&mut self.tabs[i].scene);
+                self.sync_truck_solids_to_acis(i);
 
                 // Native: write to the chosen path. Web: download the bytes
                 // under the chosen name (no filesystem).

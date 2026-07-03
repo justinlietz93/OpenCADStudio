@@ -1,5 +1,7 @@
 pub mod acad_to_truck;
 #[cfg(feature = "solid3d")]
+pub mod acis_export;
+#[cfg(feature = "solid3d")]
 pub mod acis_to_truck;
 /// Without `solid3d` (e.g. wasm) ACIS/SAT meshing is unavailable; the entry
 /// point stays so callers compile, returning no mesh.
