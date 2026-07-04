@@ -441,7 +441,12 @@ impl WireGpu {
                 .par_iter()
                 .enumerate()
                 .map(|(idx, w)| {
-                    emit_wire_native(w, idx as u32, w.color, wire_draw_depth(w, depth_map))
+                    // 3D mesh outline edges are real geometry occluded by true
+                    // depth — they must NOT take the draw-order z-bias (which
+                    // pulls 2D wires toward the camera), or the hidden edges of a
+                    // small / distant mesh peek through its own shaded fill.
+                    let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                    emit_wire_native(w, idx as u32, w.color, dd)
                 })
                 .collect();
             let mut instances: Vec<WireInstance> =
@@ -474,7 +479,10 @@ impl WireGpu {
             let _ = const_bgl;
             let per: Vec<Vec<WireInstance>> = wires
                 .iter()
-                .map(|w| emit_wire_instances(w, w.color, wire_draw_depth(w, depth_map)))
+                .map(|w| {
+                    let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                    emit_wire_instances(w, w.color, dd)
+                })
                 .collect();
             let mut instances: Vec<WireInstance> =
                 Vec::with_capacity(per.iter().map(Vec::len).sum());
