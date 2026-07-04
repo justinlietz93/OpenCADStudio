@@ -206,3 +206,18 @@ fn in_dash(dist: f32, pat_len: f32, p0: vec4<f32>, p1: vec4<f32>) -> bool {
     let alpha = select(1.0, in.color.a, u.transparency_enable > 0.5);
     return vec4<f32>(in.color.rgb, alpha);
 }
+
+// Black variant: used for 3D mesh outline edges in filled render modes so the
+// mesh reads as a shaded surface framed by black edges. Keeps the dash/LOD
+// logic identical to `fs_main`; only the RGB is forced to black.
+@fragment fn fs_black(in: VertexOut) -> @location(0) vec4<f32> {
+    if in.pattern_length > 0.0 {
+        if in.min_elem >= u.world_per_pixel {
+            if !in_dash(in.distance, in.pattern_length, in.pat0, in.pat1) {
+                discard;
+            }
+        }
+    }
+    let alpha = select(1.0, in.color.a, u.transparency_enable > 0.5);
+    return vec4<f32>(0.0, 0.0, 0.0, alpha);
+}

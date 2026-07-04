@@ -29,6 +29,9 @@ const MSAA_SAMPLES: u32 = 4;
 
 pub struct Pipeline {
     wire_pipeline: wgpu::RenderPipeline,
+    /// Black-fragment variant of `wire_pipeline` for 3D mesh outline edges in
+    /// filled render modes.
+    wire_black_pipeline: wgpu::RenderPipeline,
     /// Same shader as wire_pipeline but depth_compare=Greater, depth_write_enabled=false.
     /// Used to draw ghost copies of selected wires through occluding geometry.
     wire_xray_pipeline: wgpu::RenderPipeline,
@@ -272,6 +275,48 @@ impl Pipeline {
             fragment: Some(wgpu::FragmentState {
                 module: &wire_shader,
                 entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            multiview: None,
+            cache: None,
+        });
+
+        // Black variant of `wire_pipeline` — same geometry/depth, black fragment
+        // — for 3D mesh outline edges in filled modes (see the wire draw loop).
+        let wire_black_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("wire.black.pipeline"),
+            layout: Some(&wire_layout),
+            vertex: wgpu::VertexState {
+                module: &wire_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wire_gpu::WireInstance::layout()],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: None,
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState {
+                count: MSAA_SAMPLES,
+                mask: !0,
+                alpha_to_coverage_enabled: false,
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &wire_shader,
+                entry_point: Some("fs_black"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: Some(wgpu::BlendState::ALPHA_BLENDING),
@@ -1053,6 +1098,7 @@ impl Pipeline {
 
         Self {
             wire_pipeline,
+            wire_black_pipeline,
             wire_xray_pipeline,
             #[cfg(not(target_arch = "wasm32"))]
             wire_const_bgl: Some(wire_const_bgl),
@@ -1128,15 +1174,28 @@ impl Pipeline {
         // and alpha blending both depend on it. Scissor and mesh-edge stay
         // grouping keys because the draw loop sets one scissor per batch and
         // skips whole mesh-edge batches in shaded modes.
+        // A 3D mesh entity (PolyfaceMesh / PolygonMesh) emits its face fill and
+        // its outline edges as *separate* WireModels sharing the entity handle
+        // (`name`): the fill carries `fill_tris` + a non-empty `fill_tris_low`
+        // (real 3D depth, same test face3d uses); the edge carries `points`.
+        // Flag the edge wire as `is_3d_mesh_edge` so the draw loop can hide it in
+        // clean-shaded modes and draw it black in filled-with-edges modes.
+        let mesh_names: rustc_hash::FxHashSet<&str> = wires
+            .iter()
+            .filter(|w| !w.fill_tris.is_empty() && !w.fill_tris_low.is_empty())
+            .map(|w| w.name.as_str())
+            .collect();
+        let is_mesh_edge =
+            |w: &WireModel| !w.points.is_empty() && mesh_names.contains(w.name.as_str());
         let mut batches: Vec<WireGpu> = Vec::new();
         let mut i = 0;
         while i < wires.len() {
             let scissor = wires[i].vp_scissor;
-            let mesh_edge = !wires[i].fill_tris.is_empty();
+            let mesh_edge = is_mesh_edge(&wires[i]);
             let mut j = i + 1;
             while j < wires.len()
                 && wires[j].vp_scissor == scissor
-                && (!wires[j].fill_tris.is_empty()) == mesh_edge
+                && is_mesh_edge(&wires[j]) == mesh_edge
             {
                 j += 1;
             }
@@ -1861,7 +1920,13 @@ impl Pipeline {
             pass.set_viewport(0.0, 0.0, vp.width as f32, vp.height as f32, 0.0, 1.0);
             pass.set_pipeline(&self.wire_pipeline);
             pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+            // In a filled-with-edges mode the mesh outline edges frame the shaded
+            // fill and should read black; wireframe / hidden-line keep the entity
+            // colour. `wire_black_pipeline` shares the wire layout, so the switch
+            // needs no bind-group rebind.
+            let want_solid_with_edges = !hidden_line && !mesh_wireframe && show_3d_edges;
             let mut scissor_active = false;
+            let mut black_active = false;
             for (i, wire) in self.gpu_wires.iter().enumerate() {
                 if wire.instance_count == 0 {
                     continue;
@@ -1874,6 +1939,15 @@ impl Pipeline {
                 // modes leave the flag at true and draw them.
                 if !show_3d_edges && wire.is_3d_mesh_edge {
                     continue;
+                }
+                let use_black = want_solid_with_edges && wire.is_3d_mesh_edge;
+                if use_black != black_active {
+                    pass.set_pipeline(if use_black {
+                        &self.wire_black_pipeline
+                    } else {
+                        &self.wire_pipeline
+                    });
+                    black_active = use_black;
                 }
                 match self.wire_pixel_scissors.get(i) {
                     Some(Some([x, y, w, h])) => {
