@@ -48,6 +48,7 @@ const LAY_ULK: &[u8] = include_bytes!("../../assets/icons/layers/layulk.svg");
 pub const CHECK: &[u8] = include_bytes!("../../assets/icons/ui/check.svg");
 pub const CLOSE: &[u8] = include_bytes!("../../assets/icons/ui/close.svg");
 pub const PLUS: &[u8] = include_bytes!("../../assets/icons/ui/plus.svg");
+pub const MINUS: &[u8] = include_bytes!("../../assets/icons/ui/minus.svg");
 pub const TRASH: &[u8] = include_bytes!("../../assets/icons/ui/trash.svg");
 pub const COPY: &[u8] = include_bytes!("../../assets/icons/ui/copy.svg");
 pub const MENU: &[u8] = include_bytes!("../../assets/icons/ui/menu.svg");

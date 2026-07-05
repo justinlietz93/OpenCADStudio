@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 pub mod app;
+pub mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 pub mod command;

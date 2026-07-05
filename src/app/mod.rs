@@ -225,6 +225,11 @@ pub(super) struct OpenCADStudio {
     ribbon: Ribbon,
     /// Recently opened files, newest first — backs the Start page panel.
     recent_files: Vec<std::path::PathBuf>,
+    /// How many recent files to keep (user-set on the Start page, persisted).
+    recent_limit: usize,
+    /// Live text of the recent-limit input box (may differ from `recent_limit`
+    /// mid-edit; applied on Enter). Kept in sync when the +/- buttons change it.
+    recent_limit_input: String,
     command_line: CommandLine,
     /// Paying Patreon supporters shown on the Start page (name, pledge cents),
     /// fetched once at boot, highest pledge first.
@@ -1139,6 +1144,10 @@ pub enum Message {
     ScrollLayoutTabs(f32),
     /// Drop a path from the recent-documents list.
     RecentRemove(PathBuf),
+    /// Set how many recent documents to keep (persisted).
+    SetRecentLimit(usize),
+    /// Live edit of the recent-limit input box (not applied until Enter).
+    RecentLimitInput(String),
     /// User clicked Cancel on the loading overlay. The parser thread keeps
     /// running but its result is discarded.
     OpenCancel,
@@ -1164,6 +1173,8 @@ pub enum Message {
     SetProjection(bool),
     /// Select a ribbon module tab by index.
     RibbonSelectTab(usize),
+    /// Change the ribbon tool-panel density (persisted).
+    SetRibbonCollapseMode(crate::ui::ribbon::CollapseMode),
     /// A ribbon tool button was clicked — highlights the tool and dispatches its event.
     RibbonToolClick {
         tool_id: String,
@@ -1977,6 +1988,8 @@ impl OpenCADStudio {
             ribbon: Ribbon::new(),
             // Restore recents from disk so the Start page lists them across runs.
             recent_files: recent::load_recent_files(),
+            recent_limit: recent::load_recent_limit(),
+            recent_limit_input: recent::load_recent_limit().to_string(),
             command_line: CommandLine::new(),
             patrons: Vec::new(),
             start_section: StartSection::default(),

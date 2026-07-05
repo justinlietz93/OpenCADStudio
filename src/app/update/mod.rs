@@ -257,6 +257,19 @@ impl OpenCADStudio {
                 Task::none()
             }
 
+            Message::SetRecentLimit(limit) => {
+                self.set_recent_limit(limit);
+                // Resync the input box to the clamped, applied value.
+                self.recent_limit_input = self.recent_limit.to_string();
+                Task::none()
+            }
+
+            Message::RecentLimitInput(s) => {
+                // Keep only digits while typing; applied on Enter (SetRecentLimit).
+                self.recent_limit_input = s.chars().filter(|c| c.is_ascii_digit()).collect();
+                Task::none()
+            }
+
             Message::OpenPathPicked(Some((path, size_bytes))) => {
                 let name = path
                     .file_name()
@@ -605,6 +618,12 @@ impl OpenCADStudio {
 
             Message::RibbonSelectTab(idx) => {
                 self.ribbon.select(idx);
+                Task::none()
+            }
+
+            Message::SetRibbonCollapseMode(mode) => {
+                self.ribbon.set_collapse_mode(mode);
+                self.ribbon.close_dropdown();
                 Task::none()
             }
 

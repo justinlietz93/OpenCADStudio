@@ -8,7 +8,7 @@
 //! panel, so it shrinks as the panels do.
 
 use std::cell::RefCell;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use iced::advanced::layout::{self, Layout};
@@ -51,6 +51,94 @@ const TIGHT: u8 = 3;
 /// before wrapping.
 const MAX_PANEL_SQUEEZE: f32 = 8.0;
 
+/// How the ribbon tool panels are sized. `Auto` adapts to the window width (the
+/// step-by-step degradation); the others pin every panel to one density so the
+/// user can override the automatic choice. The selection is persisted.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum CollapseMode {
+    /// Size panels to the window: degrade from the right as space runs out.
+    #[default]
+    Auto,
+    /// Always full-size panels (large buttons), even if they overflow.
+    Full,
+    /// Always compact panels (small icon columns).
+    Compact,
+    /// Always collapsed to title buttons.
+    Collapsed,
+}
+
+impl CollapseMode {
+    /// Every mode, in dropdown order.
+    pub const ALL: &'static [CollapseMode] = &[
+        CollapseMode::Auto,
+        CollapseMode::Full,
+        CollapseMode::Compact,
+        CollapseMode::Collapsed,
+    ];
+
+    /// Label shown in the dropdown.
+    pub fn label(self) -> &'static str {
+        match self {
+            CollapseMode::Auto => "Auto",
+            CollapseMode::Full => "Full",
+            CollapseMode::Compact => "Compact",
+            CollapseMode::Collapsed => "Collapsed",
+        }
+    }
+
+    /// Stable identifier used for persistence.
+    fn id(self) -> &'static str {
+        match self {
+            CollapseMode::Auto => "auto",
+            CollapseMode::Full => "full",
+            CollapseMode::Compact => "compact",
+            CollapseMode::Collapsed => "collapsed",
+        }
+    }
+
+    fn from_id(s: &str) -> Option<Self> {
+        CollapseMode::ALL.iter().copied().find(|m| m.id() == s)
+    }
+
+    /// The degradation level every panel is pinned to, or `None` for `Auto`.
+    fn forced_level(self) -> Option<u8> {
+        match self {
+            CollapseMode::Auto => None,
+            CollapseMode::Full => Some(FULL),
+            CollapseMode::Compact => Some(COMPACT),
+            CollapseMode::Collapsed => Some(COLLAPSED),
+        }
+    }
+
+    /// Load the saved mode, defaulting to `Auto`.
+    pub fn load() -> Self {
+        config_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .and_then(|s| CollapseMode::from_id(s.trim()))
+            .unwrap_or_default()
+    }
+
+    /// Persist this mode (best-effort; silent on failure).
+    pub fn save(self) {
+        let Some(path) = config_path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, self.id());
+    }
+}
+
+/// `<config-dir>/OpenCADStudio/ribbon.txt`, matching the other settings stores.
+fn config_path() -> Option<std::path::PathBuf> {
+    Some(crate::config::config_dir()?.join("ribbon.txt"))
+}
+
+impl std::fmt::Display for CollapseMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
 pub struct CollapsePanels<'a> {
     panels: Vec<Panel<'a>>,
     /// Title of the panel whose flyout is open (if any).
@@ -64,6 +152,12 @@ pub struct CollapsePanels<'a> {
     /// If set, the measured row height is written here each layout (read when
     /// anchoring dropdowns below the ribbon).
     height_out: Option<Arc<AtomicU32>>,
+    /// If set, `true` is written here whenever the row is in the tight state
+    /// (some panel dropped to its small icon), so the tab bar can react.
+    tight_out: Option<Arc<AtomicBool>>,
+    /// User-chosen density. `Auto` runs the width-based degradation; the others
+    /// pin every panel to one level regardless of the window width.
+    mode: CollapseMode,
 }
 
 impl<'a> CollapsePanels<'a> {
@@ -76,12 +170,26 @@ impl<'a> CollapsePanels<'a> {
             divider,
             levels: RefCell::new(vec![FULL; n]),
             height_out: None,
+            tight_out: None,
+            mode: CollapseMode::Auto,
         }
     }
 
     /// Report the measured row height into `out` on every layout.
     pub fn report_height(mut self, out: Arc<AtomicU32>) -> Self {
         self.height_out = Some(out);
+        self
+    }
+
+    /// Report whether the row is in the tight state into `out` on every layout.
+    pub fn report_tight(mut self, out: Arc<AtomicBool>) -> Self {
+        self.tight_out = Some(out);
+        self
+    }
+
+    /// Pin the panels to a density (or `Auto` to size by window width).
+    pub fn mode(mut self, mode: CollapseMode) -> Self {
+        self.mode = mode;
         self
     }
 
@@ -200,34 +308,45 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         };
         let total = |levels: &[u8]| -> f32 { (0..n).map(|i| width_of(levels[i], i)).sum() };
 
-        // Degrade from the RIGHT, one panel at a time (gradual): first FULL →
-        // COMPACT, then COMPACT → COLLAPSED, each phase only while the row still
-        // overflows. If even the all-collapsed row overflows, every button drops
-        // to its small icon (tight) together, then the buttons are squeezed.
-        let mut levels = vec![FULL; n];
-        for degraded in [COMPACT, COLLAPSED] {
-            for i in (0..n).rev() {
-                if total(&levels) <= max_w {
-                    break;
+        // A forced mode pins every panel to one level. Otherwise (Auto) degrade
+        // from the RIGHT, one panel at a time (gradual): first FULL → COMPACT,
+        // then COMPACT → COLLAPSED, each phase only while the row still overflows.
+        // If even the all-collapsed row overflows, every button drops to its
+        // small icon (tight) together, then the buttons are squeezed.
+        let levels = if let Some(level) = self.mode.forced_level() {
+            vec![level; n]
+        } else {
+            let mut levels = vec![FULL; n];
+            for degraded in [COMPACT, COLLAPSED] {
+                for i in (0..n).rev() {
+                    if total(&levels) <= max_w {
+                        break;
+                    }
+                    levels[i] = degraded;
                 }
-                levels[i] = degraded;
             }
-        }
-        if total(&levels) > max_w {
+            if total(&levels) > max_w {
+                levels
+                    .iter_mut()
+                    .filter(|l| **l == COLLAPSED)
+                    .for_each(|l| *l = TIGHT);
+            }
             levels
-                .iter_mut()
-                .filter(|l| **l == COLLAPSED)
-                .for_each(|l| *l = TIGHT);
+        };
+        // The row is "tight" once any panel has dropped to its small icon — the
+        // last, most cramped state. The tab bar hides its mode selector then.
+        if let Some(out) = &self.tight_out {
+            out.store(levels.iter().any(|&l| l == TIGHT), Ordering::Relaxed);
         }
         *self.levels.borrow_mut() = levels.clone();
 
         // Same idea as the tab bar squeezing its gaps before wrapping: once every
         // panel is at its tightest and the row STILL overflows, pull the buttons
         // together (up to MAX_PANEL_SQUEEZE per gap, reclaiming their edge
-        // padding) so more of them stay on-screen before anything is clipped.
-        // `total(&levels) > max_w` only remains true when nothing more can be
-        // degraded, so this never overlaps a full/compact panel.
-        let squeeze = if n > 1 && total(&levels) > max_w {
+        // padding) so more of them stay on-screen before anything is clipped. In
+        // Auto this only fires when everything is already tight, so it never
+        // overlaps a full/compact panel; a forced density is left to overflow.
+        let squeeze = if self.mode == CollapseMode::Auto && n > 1 && total(&levels) > max_w {
             ((total(&levels) - max_w) / (n - 1) as f32).min(MAX_PANEL_SQUEEZE)
         } else {
             0.0

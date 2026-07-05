@@ -155,23 +155,5 @@ impl StatusBarConfig {
 
 /// `<config-dir>/OpenCADStudio/statusbar.txt`, matching the recent-files store.
 fn config_path() -> Option<PathBuf> {
-    let base: PathBuf = if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)?
-    } else if cfg!(target_os = "macos") {
-        let home = std::env::var_os("HOME")?;
-        let mut p = PathBuf::from(home);
-        p.push("Library");
-        p.push("Application Support");
-        p
-    } else if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(d)
-    } else {
-        let home = std::env::var_os("HOME")?;
-        let mut p = PathBuf::from(home);
-        p.push(".config");
-        p
-    };
-    let mut p = base;
-    p.push("OpenCADStudio");
-    Some(p.join("statusbar.txt"))
+    Some(crate::config::config_dir()?.join("statusbar.txt"))
 }

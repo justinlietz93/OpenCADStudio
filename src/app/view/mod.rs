@@ -81,6 +81,8 @@ impl OpenCADStudio {
             start_page_view(
                 &self.patrons,
                 &self.recent_files,
+                self.recent_limit,
+                &self.recent_limit_input,
                 self.win_size.0,
                 self.start_section,
             )
@@ -2084,6 +2086,8 @@ pub(super) fn collapse_bar<'a>(name: &str, on_press: Message) -> Element<'a, Mes
 pub(super) fn start_page_view<'a>(
     patrons: &'a [(String, i64)],
     recents: &'a [std::path::PathBuf],
+    recent_limit: usize,
+    recent_limit_input: &'a str,
     avail_w: f32,
     active: super::StartSection,
 ) -> Element<'a, Message> {
@@ -2435,7 +2439,7 @@ pub(super) fn start_page_view<'a>(
     let avail = (avail_w - 16.0).max(0.0); // minus the page's l/r padding
     let fits_all = avail >= recent_w + welcome_min + sup_w;
 
-    let recent = recent_files_panel(recents);
+    let recent = recent_files_panel(recents, recent_limit, recent_limit_input);
     let welcome = container(content).width(Fill).height(Fill);
 
     // Right rail: Patreon supporters, fetched at boot. When the list is empty
@@ -2468,9 +2472,12 @@ pub(super) fn start_page_view<'a>(
         }
         let support_btn = mouse_area(
             container(
-                text("♥  Support on Patreon")
-                    .size(12)
-                    .color(Color::WHITE),
+                iced::widget::row![
+                    crate::ui::icons::tinted(crate::ui::icons::HEART, 13.0, Color::WHITE),
+                    text("Support on Patreon").size(12).color(Color::WHITE),
+                ]
+                .spacing(6)
+                .align_y(iced::Center),
             )
             .padding([6, 10])
             .width(Fill)
@@ -2609,17 +2616,22 @@ pub(super) fn start_page_view<'a>(
 // Properties panel normally occupies, but only when the active tab is the
 // Start tab. The list is restored from disk at boot and re-saved on every
 // open — entries persist across sessions.
-pub(super) fn recent_files_panel<'a>(recents: &'a [std::path::PathBuf]) -> Element<'a, Message> {
+pub(super) fn recent_files_panel<'a>(
+    recents: &'a [std::path::PathBuf],
+    limit: usize,
+    limit_input: &'a str,
+) -> Element<'a, Message> {
+    // Card chrome matches the Supporters rail (the canonical start-page card).
     const PANEL_BG: Color = Color {
-        r: 0.10,
-        g: 0.10,
-        b: 0.11,
+        r: 0.12,
+        g: 0.12,
+        b: 0.13,
         a: 1.0,
     };
     const PANEL_BORDER: Color = Color {
-        r: 0.18,
-        g: 0.18,
-        b: 0.20,
+        r: 0.20,
+        g: 0.20,
+        b: 0.22,
         a: 1.0,
     };
     const ITEM_HOVER: Color = Color {
@@ -2629,9 +2641,9 @@ pub(super) fn recent_files_panel<'a>(recents: &'a [std::path::PathBuf]) -> Eleme
         a: 1.0,
     };
     const TEXT: Color = Color {
-        r: 0.92,
-        g: 0.91,
-        b: 0.90,
+        r: 0.94,
+        g: 0.93,
+        b: 0.92,
         a: 1.0,
     };
     const MUTED: Color = Color {
@@ -2641,23 +2653,21 @@ pub(super) fn recent_files_panel<'a>(recents: &'a [std::path::PathBuf]) -> Eleme
         a: 1.0,
     };
 
-    let header = container(text("Recent Documents").size(11).color(MUTED)).padding(iced::Padding {
-        top: 12.0,
-        right: 14.0,
-        bottom: 8.0,
-        left: 14.0,
-    });
+    // Title mirrors the Supporters rail: size 15 in the bright text colour,
+    // followed by a 12px gap before the content.
+    let title = text("Recent Documents").size(15).color(TEXT);
 
     let body: Element<'a, Message> = if recents.is_empty() {
-        container(
-            text("Files you open will show up here.")
-                .size(11)
-                .color(MUTED),
-        )
-        .padding([10, 14])
-        .into()
+        container(text("Files you open will show up here.").size(12).color(MUTED))
+            .height(Fill)
+            .into()
     } else {
-        let mut col = column![].spacing(0);
+        // Right padding reserves a gutter for the scrollbar so it doesn't sit on
+        // top of the row's ✕ remove button.
+        let mut col = column![].spacing(0).padding(iced::Padding {
+            right: 12.0,
+            ..iced::Padding::ZERO
+        });
         for path in recents {
             let name = path
                 .file_name()
@@ -2722,21 +2732,75 @@ pub(super) fn recent_files_panel<'a>(recents: &'a [std::path::PathBuf]) -> Eleme
 
             col = col.push(row![open_btn, remove_btn].spacing(0).align_y(iced::Center));
         }
-        iced::widget::scrollable(col).into()
+        iced::widget::scrollable(col).height(Fill).into()
     };
 
-    container(column![header, body])
-        .width(iced::Length::Fixed(280.0))
-        .height(Fill)
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PANEL_BG)),
-            border: Border {
-                color: PANEL_BORDER,
-                width: 1.0,
-                radius: 0.0.into(),
-            },
-            ..Default::default()
-        })
-        .into()
+    // Footer: how many recent files to keep — [-] [editable count] [+] with the
+    // max shown. The count box takes keyboard input (applied on Enter); the
+    // update handler clamps to [MIN, MAX] and persists (see `set_recent_limit`),
+    // so an over-max entry snaps to the max.
+    const STEP: usize = 5;
+    let step_style = |_: &Theme, status: button::Status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered => ITEM_HOVER,
+            _ => Color::TRANSPARENT,
+        })),
+        text_color: TEXT,
+        border: Border {
+            color: PANEL_BORDER,
+            width: 1.0,
+            radius: 4.0.into(),
+        },
+        ..Default::default()
+    };
+    // +/- step from whatever is currently shown in the box (mid-edit included).
+    let shown = limit_input.parse::<usize>().unwrap_or(limit);
+    let count_box = iced::widget::text_input("", limit_input)
+        .on_input(Message::RecentLimitInput)
+        .on_submit(Message::SetRecentLimit(shown))
+        .size(13)
+        .padding([2, 6])
+        .width(iced::Length::Fixed(46.0));
+    let limit_row = row![
+        text("Keep recent files").size(11).color(MUTED).width(Fill),
+        button(crate::ui::icons::tinted(crate::ui::icons::MINUS, 11.0, TEXT))
+            .on_press(Message::SetRecentLimit(shown.saturating_sub(STEP)))
+            .padding([3, 6])
+            .style(step_style),
+        count_box,
+        button(crate::ui::icons::tinted(crate::ui::icons::PLUS, 11.0, TEXT))
+            .on_press(Message::SetRecentLimit(shown + STEP))
+            .padding([3, 6])
+            .style(step_style),
+        text(format!("/ {}", super::recent::RECENT_MAX))
+            .size(11)
+            .color(MUTED),
+    ]
+    .spacing(6)
+    .align_y(iced::Center);
+
+    container(
+        column![
+            title,
+            Space::new().height(iced::Length::Fixed(12.0)),
+            body,
+            Space::new().height(iced::Length::Fixed(12.0)),
+            limit_row,
+        ]
+        .width(Fill),
+    )
+    .width(iced::Length::Fixed(280.0))
+    .height(Fill)
+    .padding(20)
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(PANEL_BG)),
+        border: Border {
+            color: PANEL_BORDER,
+            width: 1.0,
+            radius: 8.0.into(),
+        },
+        ..Default::default()
+    })
+    .into()
 }
 

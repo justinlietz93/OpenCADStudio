@@ -6,7 +6,7 @@
 //
 // Dropdown items within a group are collected into columns of 3 rows.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::Arc;
 
 use rustc_hash::FxHashMap as HashMap;
@@ -24,7 +24,8 @@ mod widgets;
 use widgets::{StyleContext, *};
 mod collapse;
 use collapse::{CollapsePanels, Panel};
-use crate::ui::wrap_bar::{WrapBar, WrapFlow};
+pub use collapse::CollapseMode;
+use crate::ui::wrap_bar::{PosReport, WrapBar, WrapFlow};
 
 // ── Ribbon state ───────────────────────────────────────────────────────────
 
@@ -70,6 +71,11 @@ pub struct Ribbon {
     /// panel is collapsed). Written by `CollapsePanels`, read when anchoring
     /// dropdowns below the ribbon.
     tool_bar_h: Arc<AtomicU32>,
+    /// User-chosen panel density (persisted). `Auto` sizes by window width.
+    collapse_mode: CollapseMode,
+    /// Set by `CollapsePanels` when the tool row is in its tight state; the mode
+    /// selector hides itself then to give the cramped tab row its space back.
+    collapse_tight: Arc<AtomicBool>,
 }
 
 /// Per-layer display data shown in the ribbon layer dropdown.
@@ -155,7 +161,15 @@ impl Ribbon {
             active_table_style: String::new(),
             tab_bar_h: Arc::new(AtomicU32::new(28.0f32.to_bits())),
             tool_bar_h: Arc::new(AtomicU32::new(TOOL_BAR_H.to_bits())),
+            collapse_mode: CollapseMode::load(),
+            collapse_tight: Arc::new(AtomicBool::new(false)),
         }
+    }
+
+    /// Change the tool-panel density and persist the choice.
+    pub fn set_collapse_mode(&mut self, mode: CollapseMode) {
+        self.collapse_mode = mode;
+        mode.save();
     }
 
     /// Current tab-bar height as last measured by the `WrapBar` widget.
@@ -436,16 +450,41 @@ impl Ribbon {
             .min_spacing_x(0.0)
             .row_h(28.0);
 
-        let tab_bar = container(
+        // Panel-density selector, pinned to the right edge of the tab row: a bare
+        // ▾ button that opens a list of modes (see `dropdown_overlay`). `Auto`
+        // sizes panels to the window; the others force one density. The choice is
+        // persisted (see `Ribbon::set_collapse_mode`). It hides itself once the
+        // tool row is tight, giving the cramped tab row its space back.
+        let dd_open = self.open_dropdown.as_deref() == Some(COLLAPSE_MODE_ID);
+        let mode_btn = button(crate::ui::icons::arrow_down(10.0, ARROW_COLOR))
+            .on_press(Message::ToggleRibbonDropdown(COLLAPSE_MODE_ID.to_string()))
+            .style(move |_: &Theme, status| top_hist_btn_style(true, dd_open, status))
+            .height(24)
+            .padding([2, 8]);
+        let mode_dd = PosReport::new(COLLAPSE_MODE_ID, mode_btn);
+
+        let mut tab_row = row![container(
             WrapBar::new(lead.into(), tabs.into())
                 .spacing(6.0)
                 .report_height(self.tab_bar_h.clone()),
         )
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(TOPBAR_BG)),
-            ..Default::default()
-        })
-        .width(Length::Fill);
+        .width(Length::Fill)]
+        .spacing(6.0)
+        .align_y(iced::Center);
+        if !self.collapse_tight.load(Ordering::Relaxed) {
+            tab_row = tab_row.push(mode_dd);
+        }
+
+        let tab_bar = container(tab_row)
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(TOPBAR_BG)),
+                ..Default::default()
+            })
+            .padding(Padding {
+                right: 6.0,
+                ..Padding::ZERO
+            })
+            .width(Length::Fill);
 
         // ── Tool area ─────────────────────────────────────────────────────
         let effective_active = if !is_paper
@@ -572,6 +611,8 @@ impl Ribbon {
                     .collect();
                 CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H, BORDER_DARK)
                     .report_height(self.tool_bar_h.clone())
+                    .report_tight(self.collapse_tight.clone())
+                    .mode(self.collapse_mode)
                     .into()
             } else {
                 text("").into()
@@ -648,6 +689,56 @@ impl Ribbon {
             let (align_right, h_pad, top) = self.dd_anchor(open_id, 170.0, win.0);
             let positioned = position_ribbon_dropdown(panel.into(), align_right, h_pad, top);
 
+            return Some(dropdown_backdrop(positioned));
+        }
+
+        if open_id == COLLAPSE_MODE_ID {
+            const W: f32 = 150.0;
+            let current = self.collapse_mode;
+            let rows: Vec<Element<Message>> = CollapseMode::ALL
+                .iter()
+                .map(|&m| {
+                    let mark: Element<Message> = if m == current {
+                        crate::ui::icons::tinted(crate::ui::icons::CHECK, 11.0, CHECK_COLOR)
+                    } else {
+                        iced::widget::Space::new().width(0).into()
+                    };
+                    button(
+                        row![
+                            container(mark).width(Length::Fixed(16.0)),
+                            text(m.label()).size(11).color(LABEL_ON),
+                        ]
+                        .spacing(4)
+                        .align_y(iced::Center),
+                    )
+                    .on_press(Message::SetRibbonCollapseMode(m))
+                    .style(|_: &Theme, status| button::Style {
+                        background: Some(Background::Color(match status {
+                            button::Status::Hovered | button::Status::Pressed => ROW_HOVER,
+                            _ => Color::TRANSPARENT,
+                        })),
+                        ..Default::default()
+                    })
+                    .width(Fill)
+                    .padding([5, 10])
+                    .into()
+                })
+                .collect();
+
+            let panel = container(column(rows))
+                .style(|_: &Theme| container::Style {
+                    background: Some(Background::Color(PANEL_BG)),
+                    border: Border {
+                        color: PANEL_BORDER,
+                        width: 1.0,
+                        radius: 3.0.into(),
+                    },
+                    ..Default::default()
+                })
+                .width(Length::Fixed(W));
+
+            let (align_right, h_pad, top) = self.dd_anchor(open_id, W, win.0);
+            let positioned = position_ribbon_dropdown(panel.into(), align_right, h_pad, top);
             return Some(dropdown_backdrop(positioned));
         }
 
