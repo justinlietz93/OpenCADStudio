@@ -24,7 +24,7 @@ mod widgets;
 use widgets::{StyleContext, *};
 mod collapse;
 use collapse::{CollapsePanels, Panel};
-use crate::ui::wrap_bar::{DensitySwap, WrapBar, WrapFlow};
+use crate::ui::wrap_bar::{WrapBar, WrapFlow};
 
 // ── Ribbon state ───────────────────────────────────────────────────────────
 
@@ -468,47 +468,30 @@ impl Ribbon {
                     active_table_style: self.active_table_style.clone(),
                 };
 
-                // Adaptive tool area, widest→narrowest:
-                //   1. full     — full-size panels on one row
-                //   2. compact  — large buttons shrink to icon-only columns
-                //   3. collapse — panels that still don't fit collapse to title
-                //                 buttons that open the full panel as a flyout
-                // DensitySwap shows the widest variant that fits the width.
-                let build = |compact: bool| {
-                    build_tool_groups(
-                        compact,
-                        &groups,
-                        &self.active_tool,
-                        &self.open_dropdown,
-                        &self.last_cmd,
-                        self.wireframe,
-                        self.ortho_mode,
-                        &self.layer_infos,
-                        &self.active_layer,
-                        self.active_color,
-                        &self.active_linetype,
-                        self.active_lineweight,
-                        &style_ctx,
-                    )
-                };
-                let full: Element<'_, Message> = build(false)
-                    .into_iter()
-                    .fold(row![].spacing(0).height(Length::Fixed(TOOL_BAR_H)), |r, w| {
-                        r.push(w)
-                    })
-                    .into();
-                let compact: Element<'_, Message> = build(true)
-                    .into_iter()
-                    .fold(row![].spacing(0).height(Length::Fixed(TOOL_BAR_H)), |r, w| {
-                        r.push(w)
-                    })
-                    .into();
-
+                // Adaptive tool area: panels sit on one row; when they don't all
+                // fit they degrade from the right — a panel's large buttons first
+                // shrink to compact icon columns, then it collapses to a ▾ flyout
+                // button. See `CollapsePanels`.
                 let panels: Vec<Panel<'_>> = groups
                     .iter()
                     .map(|g| Panel {
                         id: g.title.to_string(),
-                        inline: render_group(
+                        full: render_group(
+                            false,
+                            g,
+                            &self.active_tool,
+                            &self.open_dropdown,
+                            &self.last_cmd,
+                            self.wireframe,
+                            self.ortho_mode,
+                            &self.layer_infos,
+                            &self.active_layer,
+                            self.active_color,
+                            &self.active_linetype,
+                            self.active_lineweight,
+                            &style_ctx,
+                        ),
+                        compact: render_group(
                             true,
                             g,
                             &self.active_tool,
@@ -565,12 +548,7 @@ impl Ribbon {
                         .into(),
                     })
                     .collect();
-                let collapse: Element<'_, Message> =
-                    CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H).into();
-
-                DensitySwap::new(vec![full, compact, collapse])
-                    .report_height(self.tool_bar_h.clone())
-                    .into()
+                CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H).into()
             } else {
                 text("").into()
             };
@@ -1177,67 +1155,6 @@ impl Ribbon {
             top,
         )))
     }
-}
-
-/// Render the active module's ribbon panels as a list of group elements (with
-/// 1px dividers between them). When `compact`, large tools/dropdowns are drawn
-/// as small icon columns so each panel is narrower; the combo groups (layer /
-/// properties / style) always stay full. Each panel is a fixed `TOOL_BAR_H`
-/// tall so the list can be laid out in a row or flex-wrapped across rows.
-#[allow(clippy::too_many_arguments)]
-fn build_tool_groups<'a>(
-    compact: bool,
-    groups: &[RibbonGroup],
-    active_tool: &Option<String>,
-    open_dd: &Option<String>,
-    last_cmd: &HashMap<&'static str, &'static str>,
-    wireframe: bool,
-    ortho_mode: bool,
-    layer_infos: &'a [LayerInfo],
-    active_layer: &'a str,
-    active_color: AcadColor,
-    active_linetype: &'a str,
-    active_lineweight: LineWeight,
-    style_ctx: &StyleContext,
-) -> Vec<Element<'a, Message>> {
-    let mut widgets: Vec<Element<Message>> = Vec::new();
-    let mut first_group = true;
-
-    for group in groups {
-        if !first_group {
-            widgets.push(tool_divider());
-        }
-        first_group = false;
-        widgets.push(render_group(
-            compact,
-            group,
-            active_tool,
-            open_dd,
-            last_cmd,
-            wireframe,
-            ortho_mode,
-            layer_infos,
-            active_layer,
-            active_color,
-            active_linetype,
-            active_lineweight,
-            style_ctx,
-        ));
-    }
-
-    widgets
-}
-
-/// A 1px vertical divider between ribbon panels, full tool-area height.
-fn tool_divider<'a>() -> Element<'a, Message> {
-    container(text(""))
-        .width(1)
-        .height(Length::Fixed(TOOL_BAR_H))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(BORDER_DARK)),
-            ..Default::default()
-        })
-        .into()
 }
 
 /// Render a single ribbon panel (tools + group label), fixed `TOOL_BAR_H` tall.

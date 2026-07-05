@@ -1,12 +1,11 @@
-//! Collapsing ribbon panels.
+//! Adaptive ribbon panels.
 //!
-//! Given a list of panels (each with an inline element, a collapsed title
-//! button, and a full flyout), this widget lays out as many inline panels as
-//! fit the width from the left and collapses the rest into their title buttons.
-//! Clicking a collapsed button opens that panel's flyout as an overlay anchored
-//! just below the button.
+//! Lays the active module's panels on one row. When they don't all fit, panels
+//! degrade **from the right**: first a panel's large buttons shrink to compact
+//! icon columns, then — if it still doesn't fit — the panel collapses to a title
+//! button whose click opens the full panel as a flyout overlay.
 
-use std::cell::Cell;
+use std::cell::RefCell;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
@@ -15,13 +14,20 @@ use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vect
 
 use crate::app::Message;
 
-/// One ribbon panel in its three renderings.
+/// One panel in its four renderings.
 pub struct Panel<'a> {
     pub id: String,
-    pub inline: Element<'a, Message>,
+    pub full: Element<'a, Message>,
+    pub compact: Element<'a, Message>,
     pub button: Element<'a, Message>,
     pub flyout: Element<'a, Message>,
 }
+
+// Per-panel degradation level; also the offset of the shown element within the
+// panel's 4 trees ([full, compact, button, flyout]).
+const FULL: u8 = 0;
+const COMPACT: u8 = 1;
+const COLLAPSED: u8 = 2;
 
 pub struct CollapsePanels<'a> {
     panels: Vec<Panel<'a>>,
@@ -29,53 +35,50 @@ pub struct CollapsePanels<'a> {
     open: Option<String>,
     /// Row height (a full ribbon tool-area height).
     row_h: f32,
-    /// Number of panels shown inline from the left; set during layout.
-    split: Cell<usize>,
+    /// Chosen degradation level per panel; set during layout.
+    levels: RefCell<Vec<u8>>,
 }
 
 impl<'a> CollapsePanels<'a> {
     pub fn new(panels: Vec<Panel<'a>>, open: Option<String>, row_h: f32) -> Self {
+        let n = panels.len();
         Self {
             panels,
             open,
             row_h,
-            split: Cell::new(0),
+            levels: RefCell::new(vec![FULL; n]),
         }
     }
 
-    /// Element used inline for panel `i` given the split `k`.
-    fn shown(&self, i: usize, k: usize) -> &Element<'a, Message> {
-        if i < k {
-            &self.panels[i].inline
-        } else {
-            &self.panels[i].button
+    fn shown(&self, i: usize, level: u8) -> &Element<'a, Message> {
+        match level {
+            FULL => &self.panels[i].full,
+            COMPACT => &self.panels[i].compact,
+            _ => &self.panels[i].button,
         }
     }
 
-    fn shown_mut(&mut self, i: usize, k: usize) -> &mut Element<'a, Message> {
-        if i < k {
-            &mut self.panels[i].inline
-        } else {
-            &mut self.panels[i].button
+    fn shown_mut(&mut self, i: usize, level: u8) -> &mut Element<'a, Message> {
+        match level {
+            FULL => &mut self.panels[i].full,
+            COMPACT => &mut self.panels[i].compact,
+            _ => &mut self.panels[i].button,
         }
     }
 
-    /// Tree index of the element shown inline for panel `i` given split `k`.
-    fn shown_tree(i: usize, k: usize) -> usize {
-        // trees are laid out [inline_0, button_0, flyout_0, inline_1, …]
-        if i < k {
-            3 * i
-        } else {
-            3 * i + 1
-        }
+    fn levels_snapshot(&self, n: usize) -> Vec<u8> {
+        let mut v = self.levels.borrow().clone();
+        v.resize(n, FULL);
+        v
     }
 }
 
 impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
     fn children(&self) -> Vec<widget::Tree> {
-        let mut v = Vec::with_capacity(self.panels.len() * 3);
+        let mut v = Vec::with_capacity(self.panels.len() * 4);
         for p in &self.panels {
-            v.push(widget::Tree::new(&p.inline));
+            v.push(widget::Tree::new(&p.full));
+            v.push(widget::Tree::new(&p.compact));
             v.push(widget::Tree::new(&p.button));
             v.push(widget::Tree::new(&p.flyout));
         }
@@ -85,7 +88,8 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
     fn diff(&self, tree: &mut widget::Tree) {
         let mut refs: Vec<&dyn Widget<Message, Theme, Renderer>> = Vec::new();
         for p in &self.panels {
-            refs.push(p.inline.as_widget());
+            refs.push(p.full.as_widget());
+            refs.push(p.compact.as_widget());
             refs.push(p.button.as_widget());
             refs.push(p.flyout.as_widget());
         }
@@ -103,57 +107,69 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         limits: &layout::Limits,
     ) -> layout::Node {
         let max_w = limits.max().width;
-        let natural =
-            layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, f32::INFINITY));
+        let natural = layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, f32::INFINITY));
         let n = self.panels.len();
 
-        // Measure every inline panel and every collapsed button.
-        let mut inline_w = vec![0.0f32; n];
+        // Measure each panel at all three densities.
+        let mut full_w = vec![0.0f32; n];
+        let mut compact_w = vec![0.0f32; n];
         let mut button_w = vec![0.0f32; n];
         for i in 0..n {
-            let inline_node = self.panels[i].inline.as_widget_mut().layout(
-                &mut tree.children[3 * i],
-                renderer,
-                &natural,
-            );
-            let button_node = self.panels[i].button.as_widget_mut().layout(
-                &mut tree.children[3 * i + 1],
-                renderer,
-                &natural,
-            );
-            inline_w[i] = inline_node.size().width;
-            button_w[i] = button_node.size().width;
+            full_w[i] = self.panels[i].full.as_widget_mut()
+                .layout(&mut tree.children[4 * i], renderer, &natural)
+                .size()
+                .width;
+            compact_w[i] = self.panels[i].compact.as_widget_mut()
+                .layout(&mut tree.children[4 * i + 1], renderer, &natural)
+                .size()
+                .width;
+            button_w[i] = self.panels[i].button.as_widget_mut()
+                .layout(&mut tree.children[4 * i + 2], renderer, &natural)
+                .size()
+                .width;
         }
 
-        // Expand a prefix of panels from the left while the row still fits with
-        // the remaining panels collapsed to buttons.
-        let all_buttons: f32 = button_w.iter().sum();
-        let mut used = all_buttons;
-        let mut k = 0;
-        for i in 0..n {
-            let candidate = used - button_w[i] + inline_w[i];
-            if candidate <= max_w {
-                used = candidate;
-                k = i + 1;
-            } else {
+        let width_of = |lv: u8, i: usize| -> f32 {
+            match lv {
+                FULL => full_w[i],
+                COMPACT => compact_w[i],
+                _ => button_w[i],
+            }
+        };
+        let total = |levels: &[u8]| -> f32 { (0..n).map(|i| width_of(levels[i], i)).sum() };
+
+        // Start all full; degrade from the RIGHT. Phase 1 shrinks large panels
+        // to compact one at a time; phase 2 (only if compact still overflows)
+        // collapses them to buttons.
+        let mut levels = vec![FULL; n];
+        for i in (0..n).rev() {
+            if total(&levels) <= max_w {
                 break;
             }
+            levels[i] = COMPACT;
         }
-        self.split.set(k);
+        for i in (0..n).rev() {
+            if total(&levels) <= max_w {
+                break;
+            }
+            levels[i] = COLLAPSED;
+        }
+        *self.levels.borrow_mut() = levels.clone();
 
         // Place the chosen element for each panel left-to-right.
         let mut children: Vec<layout::Node> = Vec::with_capacity(n);
         let mut x = 0.0f32;
         for i in 0..n {
-            let tree_idx = Self::shown_tree(i, k);
-            let node = self.shown_mut(i, k).as_widget_mut().layout(
+            let level = levels[i];
+            let tree_idx = 4 * i + level as usize;
+            let node = self.shown_mut(i, level).as_widget_mut().layout(
                 &mut tree.children[tree_idx],
                 renderer,
                 &natural,
             );
             let h = node.size().height;
-            let y = ((self.row_h - h) / 2.0).max(0.0);
             let w = node.size().width;
+            let y = ((self.row_h - h) / 2.0).max(0.0);
             children.push(node.move_to(Point::new(x, y)));
             x += w;
         }
@@ -172,10 +188,11 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         shell: &mut Shell<'_, Message>,
         viewport: &Rectangle,
     ) {
-        let k = self.split.get();
+        let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
-            let tree_idx = Self::shown_tree(i, k);
-            self.shown_mut(i, k).as_widget_mut().update(
+            let level = levels[i];
+            let tree_idx = 4 * i + level as usize;
+            self.shown_mut(i, level).as_widget_mut().update(
                 &mut tree.children[tree_idx],
                 event,
                 child_layout,
@@ -196,11 +213,12 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         viewport: &Rectangle,
         renderer: &Renderer,
     ) -> mouse::Interaction {
-        let k = self.split.get();
+        let levels = self.levels_snapshot(self.panels.len());
         let mut interaction = mouse::Interaction::default();
         for (i, child_layout) in layout.children().enumerate() {
-            let tree_idx = Self::shown_tree(i, k);
-            let it = self.shown(i, k).as_widget().mouse_interaction(
+            let level = levels[i];
+            let tree_idx = 4 * i + level as usize;
+            let it = self.shown(i, level).as_widget().mouse_interaction(
                 &tree.children[tree_idx],
                 child_layout,
                 cursor,
@@ -221,10 +239,11 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         renderer: &Renderer,
         operation: &mut dyn widget::Operation,
     ) {
-        let k = self.split.get();
+        let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
-            let tree_idx = Self::shown_tree(i, k);
-            self.shown_mut(i, k).as_widget_mut().operate(
+            let level = levels[i];
+            let tree_idx = 4 * i + level as usize;
+            self.shown_mut(i, level).as_widget_mut().operate(
                 &mut tree.children[tree_idx],
                 child_layout,
                 renderer,
@@ -243,10 +262,11 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         cursor: mouse::Cursor,
         viewport: &Rectangle,
     ) {
-        let k = self.split.get();
+        let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
-            let tree_idx = Self::shown_tree(i, k);
-            self.shown(i, k).as_widget().draw(
+            let level = levels[i];
+            let tree_idx = 4 * i + level as usize;
+            self.shown(i, level).as_widget().draw(
                 &tree.children[tree_idx],
                 renderer,
                 theme,
@@ -266,11 +286,11 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         _viewport: &Rectangle,
         translation: Vector,
     ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
-        let k = self.split.get();
+        let levels = self.levels_snapshot(self.panels.len());
         let open_id = self.open.clone()?;
         let p = self.panels.iter().position(|pan| pan.id == open_id)?;
-        // Only collapsed panels (index >= k) show a flyout.
-        if p < k {
+        // Only a collapsed panel shows a flyout.
+        if levels.get(p).copied().unwrap_or(FULL) != COLLAPSED {
             return None;
         }
 
@@ -280,7 +300,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
 
         Some(overlay::Element::new(Box::new(FlyoutOverlay {
             flyout: &mut self.panels[p].flyout,
-            tree: &mut tree.children[3 * p + 2],
+            tree: &mut tree.children[4 * p + 3],
             anchor,
         })))
     }
@@ -352,9 +372,6 @@ impl overlay::Overlay<Message, Theme, Renderer> for FlyoutOverlay<'_, '_> {
         let child = layout.children().next().unwrap();
         let vp = child.bounds();
 
-        // Close when a press lands outside the flyout. Capture the event so the
-        // press doesn't also reach the collapsed button underneath (which would
-        // immediately re-open the flyout).
         if let Event::Mouse(mouse::Event::ButtonPressed(_)) = event {
             if !cursor.is_over(vp) {
                 shell.publish(Message::CloseRibbonDropdown);
