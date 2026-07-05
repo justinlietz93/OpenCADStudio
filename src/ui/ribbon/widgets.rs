@@ -584,6 +584,8 @@ pub(super) fn render_large<'a>(
     active_linetype: &'a str,
     active_lineweight: LineWeight,
     style_ctx: &StyleContext,
+    // When compact, the Properties panel's Match button shrinks to a small icon.
+    compact: bool,
 ) -> Element<'a, Message> {
     match item {
         // A plain Tool renders large too, so a collapsed panel can show its
@@ -765,35 +767,49 @@ pub(super) fn render_large<'a>(
         }
 
         RibbonItem::PropertiesGroup { match_prop } => {
-            let mp_active = is_active_tool(match_prop.id, active_tool, wireframe, ortho_mode);
-            let mp_event = match_prop.event.clone();
-            let mp_id = match_prop.id.to_string();
-            let mp_tip = format!("{}\nCommand: {}", match_prop.label, match_prop.id);
-            let mp_btn = button(
-                column![
-                    make_icon(match_prop.icon, LARGE_ICON),
-                    text(match_prop.label).size(10).color(LABEL_COLOR),
-                ]
-                .align_x(iced::Center)
-                .spacing(3),
-            )
-            .on_press(Message::RibbonToolClick {
-                tool_id: mp_id,
-                event: mp_event,
-            })
-            .style(move |_: &Theme, status| tool_btn_style(mp_active, status))
-            .width(Length::Fixed(LARGE_W))
-            .height(Fill)
-            .padding(Padding {
-                top: 6.0,
-                right: 4.0,
-                bottom: 4.0,
-                left: 4.0,
-            });
-            let mp_el = tooltip(mp_btn, make_tip(mp_tip), TipPos::Right)
-                .gap(6.0)
-                .delay(Duration::from_millis(400))
-                .style(tip_style);
+            // The Match Properties button is a large icon normally, but shrinks
+            // to a small icon when the panel is compacted.
+            let mp_el: Element<'a, Message> = if compact {
+                render_small(
+                    &RibbonItem::Tool(match_prop.clone()),
+                    active_tool,
+                    open_dd,
+                    last_cmd,
+                    wireframe,
+                    ortho_mode,
+                )
+            } else {
+                let mp_active = is_active_tool(match_prop.id, active_tool, wireframe, ortho_mode);
+                let mp_event = match_prop.event.clone();
+                let mp_id = match_prop.id.to_string();
+                let mp_tip = format!("{}\nCommand: {}", match_prop.label, match_prop.id);
+                let mp_btn = button(
+                    column![
+                        make_icon(match_prop.icon, LARGE_ICON),
+                        text(match_prop.label).size(10).color(LABEL_COLOR),
+                    ]
+                    .align_x(iced::Center)
+                    .spacing(3),
+                )
+                .on_press(Message::RibbonToolClick {
+                    tool_id: mp_id,
+                    event: mp_event,
+                })
+                .style(move |_: &Theme, status| tool_btn_style(mp_active, status))
+                .width(Length::Fixed(LARGE_W))
+                .height(Fill)
+                .padding(Padding {
+                    top: 6.0,
+                    right: 4.0,
+                    bottom: 4.0,
+                    left: 4.0,
+                });
+                tooltip(mp_btn, make_tip(mp_tip), TipPos::Right)
+                    .gap(6.0)
+                    .delay(Duration::from_millis(400))
+                    .style(tip_style)
+                    .into()
+            };
 
             const PROP_W: f32 = 130.0;
 
@@ -1139,7 +1155,7 @@ pub(super) fn render_history_control<'a>(
         .style(tip_style)
     };
 
-    row![main_btn, arrow_btn].spacing(0).into()
+    PosReport::new(dropdown_id, row![main_btn, arrow_btn].spacing(0)).into()
 }
 
 pub(super) fn top_hist_btn_style(

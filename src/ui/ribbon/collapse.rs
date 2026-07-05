@@ -9,8 +9,11 @@ use std::cell::RefCell;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
-use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell};
-use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
+use iced::advanced::{mouse, overlay, renderer, Clipboard, Renderer as _, Shell};
+use iced::{
+    Background, Border, Color, Element, Event, Length, Point, Rectangle, Renderer, Shadow, Size,
+    Theme, Vector,
+};
 
 use crate::app::Message;
 
@@ -35,17 +38,20 @@ pub struct CollapsePanels<'a> {
     open: Option<String>,
     /// Row height (a full ribbon tool-area height).
     row_h: f32,
+    /// Colour of the 1px divider drawn between panels.
+    divider: Color,
     /// Chosen degradation level per panel; set during layout.
     levels: RefCell<Vec<u8>>,
 }
 
 impl<'a> CollapsePanels<'a> {
-    pub fn new(panels: Vec<Panel<'a>>, open: Option<String>, row_h: f32) -> Self {
+    pub fn new(panels: Vec<Panel<'a>>, open: Option<String>, row_h: f32, divider: Color) -> Self {
         let n = panels.len();
         Self {
             panels,
             open,
             row_h,
+            divider,
             levels: RefCell::new(vec![FULL; n]),
         }
     }
@@ -274,6 +280,31 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
                 child_layout,
                 cursor,
                 viewport,
+            );
+        }
+
+        // 1px divider between adjacent panels, except between two collapsed
+        // panels (whose buttons read better with no line between them).
+        let bounds: Vec<Rectangle> = layout.children().map(|l| l.bounds()).collect();
+        let wb = layout.bounds();
+        for i in 0..self.panels.len().saturating_sub(1) {
+            if levels[i] == COLLAPSED && levels[i + 1] == COLLAPSED {
+                continue;
+            }
+            let x = bounds[i + 1].x;
+            renderer.fill_quad(
+                renderer::Quad {
+                    bounds: Rectangle {
+                        x,
+                        y: wb.y,
+                        width: 1.0,
+                        height: wb.height,
+                    },
+                    border: Border::default(),
+                    shadow: Shadow::default(),
+                    snap: true,
+                },
+                Background::Color(self.divider),
             );
         }
     }

@@ -548,7 +548,8 @@ impl Ribbon {
                         .into(),
                     })
                     .collect();
-                CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H).into()
+                CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H, BORDER_DARK)
+                    .into()
             } else {
                 text("").into()
             };
@@ -1202,6 +1203,7 @@ fn render_group<'a>(
                 active_linetype,
                 active_lineweight,
                 style_ctx,
+                compact,
             ));
         } else {
             small_buf.push(render_small(
@@ -1241,6 +1243,7 @@ fn item_id(it: &RibbonItem) -> Option<&'static str> {
     match it {
         RibbonItem::Tool(t) | RibbonItem::LargeTool(t) => Some(t.id),
         RibbonItem::Dropdown { id, .. } | RibbonItem::LargeDropdown { id, .. } => Some(*id),
+        RibbonItem::PropertiesGroup { match_prop } => Some(match_prop.id),
         _ => None,
     }
 }
@@ -1281,9 +1284,24 @@ fn collapse_button<'a>(
 ) -> Element<'a, Message> {
     let title = group.title;
 
-    // Show the representative tool with a large icon (Tool/Dropdown alike —
-    // render_large handles every tool-like item).
+    // Show the representative tool with a large icon. For a Properties panel the
+    // representative is its Match button, rendered as a large tool.
     let face: Element<'_, Message> = match representative(group, last_used) {
+        Some(RibbonItem::PropertiesGroup { match_prop }) => render_large(
+            &RibbonItem::LargeTool(match_prop.clone()),
+            active_tool,
+            open_dd,
+            last_cmd,
+            wireframe,
+            ortho_mode,
+            layer_infos,
+            active_layer,
+            active_color,
+            active_linetype,
+            active_lineweight,
+            style_ctx,
+            false,
+        ),
         Some(item) => render_large(
             item,
             active_tool,
@@ -1297,6 +1315,7 @@ fn collapse_button<'a>(
             active_linetype,
             active_lineweight,
             style_ctx,
+            false,
         ),
         None => text("").into(),
     };
