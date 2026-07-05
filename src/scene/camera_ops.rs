@@ -642,9 +642,9 @@ impl Scene {
         // both rejects below: its centroid sits at the base point (inside
         // the consensus cluster), and in a fresh drawing `local_extent_max`
         // is still the 1e9 default, so the far points pass the `lim` filter
-        // too (issue #284). Exclude them up front — matching AutoCAD, where
-        // infinite lines never contribute to ZOOM Extents — and fall back
-        // to their base points if the drawing holds nothing else.
+        // too (issue #284). Exclude them up front — an infinite construction
+        // line should never contribute to ZOOM Extents — and fall back to their
+        // base points if the drawing holds nothing else.
         let mut infinite_base_pts: Vec<glam::Vec3> = Vec::new();
         wires.retain(|w| {
             let is_infinite = Self::handle_from_wire_name(&w.name)

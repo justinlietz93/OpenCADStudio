@@ -63,12 +63,12 @@ pub enum PlotScale {
     Ratio(f64),
 }
 
-/// Map a world-space window onto a sheet. Returns (scale, offset_x, offset_y):
-/// world (x, y) -> sheet mm ((x - window_min.0) * scale + offset_x, (y - window_min.1) * scale + offset_y).
-/// The scaled window is centered on the sheet.
+/// Map a world-space window onto a sheet. Returns (scale, offset_x, offset_y),
+/// where the scaled window is centered on the sheet and (offset_x, offset_y) is
+/// the sheet-mm position of the window's min corner. The caller turns that into
+/// its own coordinate offset.
 pub fn window_to_sheet(
     window_wh: (f64, f64),
-    window_min: (f64, f64),
     sheet_mm: (f64, f64),
     scale: PlotScale,
 ) -> (f64, f64, f64) {
@@ -86,7 +86,6 @@ pub fn window_to_sheet(
     let scaled_h = wh * scale;
     let offset_x = (sheet_mm.0 - scaled_w) / 2.0;
     let offset_y = (sheet_mm.1 - scaled_h) / 2.0;
-    let _ = window_min; // offset already places the window min at (offset_x, offset_y)
     (scale, offset_x, offset_y)
 }
 
@@ -109,7 +108,7 @@ mod tests {
     fn fit_centers_and_scales_within_margin() {
         // 100×100 window onto a 210×297 sheet, Fit. Limiting axis is width:
         // usable = 210/1.05 = 200; scale = 200/100 = 2.0.
-        let (s, ox, oy) = window_to_sheet((100.0, 100.0), (0.0, 0.0), (210.0, 297.0), PlotScale::Fit);
+        let (s, ox, oy) = window_to_sheet((100.0, 100.0), (210.0, 297.0), PlotScale::Fit);
         assert!((s - 2.0).abs() < 1e-9, "scale {s}");
         // Window is 100*2 = 200 wide/tall; centered on 210×297.
         assert!((ox - (210.0 - 200.0) / 2.0).abs() < 1e-9, "ox {ox}");
@@ -117,12 +116,11 @@ mod tests {
     }
 
     #[test]
-    fn ratio_applies_exact_scale_and_offsets_window_min() {
-        // Ratio(0.5): scale is exactly 0.5; a window starting at (10,20)
-        // maps its min corner to the offset so (10,20) -> (ox,oy).
-        let (s, ox, oy) = window_to_sheet((100.0, 80.0), (10.0, 20.0), (210.0, 297.0), PlotScale::Ratio(0.5));
+    fn ratio_applies_exact_scale_and_centers() {
+        // Ratio(0.5): scale is exactly 0.5; the scaled window is centered and
+        // (ox, oy) is the sheet-mm position of its min corner.
+        let (s, ox, oy) = window_to_sheet((100.0, 80.0), (210.0, 297.0), PlotScale::Ratio(0.5));
         assert!((s - 0.5).abs() < 1e-9);
-        // Centered: sheet_center - scaled_window_center, then min maps to offset.
         // scaled window = 50×40; centered box origin = ((210-50)/2,(297-40)/2).
         assert!((ox - (210.0 - 50.0) / 2.0).abs() < 1e-9, "ox {ox}");
         assert!((oy - (297.0 - 40.0) / 2.0).abs() < 1e-9, "oy {oy}");

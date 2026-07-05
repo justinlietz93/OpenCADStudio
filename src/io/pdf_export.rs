@@ -283,10 +283,9 @@ fn build_pdf(
         }
 
         // Line weight: CTB override (in pt) or screen px → points. Divided by
-        // `scale` in both branches so pen widths stay absolute under the
-        // scaled CTM above (AutoCAD keeps lineweights independent of plot
-        // scale) — without this a Fit plot of a large window renders
-        // near-invisible hairlines.
+        // `scale` in both branches so pen widths stay absolute under the scaled
+        // CTM above — lineweights are independent of plot scale, so without this
+        // a Fit plot of a large window renders near-invisible hairlines.
         let lw_pt = lw_override
             .unwrap_or_else(|| (wire.line_weight_px * LW_PX_TO_PT).max(0.1) / scale.max(1e-6));
         if last_lw.map(|l| (l - lw_pt).abs() > 0.01).unwrap_or(true) {

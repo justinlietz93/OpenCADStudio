@@ -1072,8 +1072,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         PlotScale::Fit
                     }
                 };
-                let (scale, ox, oy) =
-                    window_to_sheet((win_w, win_h), (x0, y0), (sheet_w, sheet_h), scale_sel);
+                let (scale, ox, oy) = window_to_sheet((win_w, win_h), (sheet_w, sheet_h), scale_sel);
 
                 let scene = &self.tabs[i].scene;
                 // Cull to the window so a small-area plot doesn't write the whole
