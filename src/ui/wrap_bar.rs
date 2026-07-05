@@ -431,6 +431,9 @@ impl<'a> From<WrapBar<'a>> for Element<'a, Message> {
 pub struct WrapFlow<'a> {
     items: Vec<Element<'a, Message>>,
     spacing_x: f32,
+    /// Smallest inter-item gap when the row overflows. `INFINITY` (the default)
+    /// means "never compress" — strictly opt-in per flow.
+    min_spacing_x: f32,
     spacing_y: f32,
     row_h: f32,
 }
@@ -440,6 +443,7 @@ impl<'a> WrapFlow<'a> {
         Self {
             items,
             spacing_x: 2.0,
+            min_spacing_x: f32::INFINITY,
             spacing_y: 0.0,
             row_h: 28.0,
         }
@@ -447,6 +451,13 @@ impl<'a> WrapFlow<'a> {
 
     pub fn spacing_x(mut self, s: f32) -> Self {
         self.spacing_x = s;
+        self
+    }
+
+    /// Allow the inter-item gap to shrink to `s` (from `spacing_x`) when the
+    /// items don't fit, so they get a bit closer before wrapping to a new row.
+    pub fn min_spacing_x(mut self, s: f32) -> Self {
+        self.min_spacing_x = s;
         self
     }
 
@@ -480,13 +491,35 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
         let natural =
             layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, f32::INFINITY));
 
-        let mut nodes: Vec<layout::Node> = Vec::with_capacity(self.items.len());
+        // Measure each item exactly once and total their widths.
+        let mut measured: Vec<layout::Node> = Vec::with_capacity(self.items.len());
+        let mut sum_w = 0.0f32;
+        for (item, state) in self.items.iter_mut().zip(tree.children.iter_mut()) {
+            let node = item.as_widget_mut().layout(state, renderer, &natural);
+            sum_w += node.size().width;
+            measured.push(node);
+        }
+
+        // If this flow opted into compression and the items don't fit one row at
+        // the normal gap, shrink the gap (down to min_spacing_x) so they get a
+        // bit closer before wrapping. Only fires when max_w is a real bound
+        // (i.e. the flow is already width-constrained, e.g. overflowing tabs).
+        let n = measured.len();
+        let mut eff_gap = self.spacing_x;
+        if self.min_spacing_x < self.spacing_x && max_w.is_finite() && n > 1 {
+            let line_w = sum_w + (n - 1) as f32 * self.spacing_x;
+            if line_w > max_w {
+                eff_gap =
+                    ((max_w - sum_w) / (n - 1) as f32).clamp(self.min_spacing_x, self.spacing_x);
+            }
+        }
+
+        let mut nodes: Vec<layout::Node> = Vec::with_capacity(n);
         let mut x = 0.0f32;
         let mut y = 0.0f32;
         let mut used_w = 0.0f32;
 
-        for (item, state) in self.items.iter_mut().zip(tree.children.iter_mut()) {
-            let node = item.as_widget_mut().layout(state, renderer, &natural);
+        for node in measured {
             let sz = node.size();
             if x > 0.0 && x + sz.width > max_w {
                 x = 0.0;
@@ -494,8 +527,8 @@ impl<'a> Widget<Message, Theme, Renderer> for WrapFlow<'a> {
             }
             let cy = y + ((self.row_h - sz.height) / 2.0).max(0.0);
             nodes.push(node.move_to(Point::new(x, cy)));
-            x += sz.width + self.spacing_x;
-            used_w = used_w.max(x - self.spacing_x);
+            x += sz.width + eff_gap;
+            used_w = used_w.max(x - eff_gap);
         }
 
         let total_h = if self.items.is_empty() {

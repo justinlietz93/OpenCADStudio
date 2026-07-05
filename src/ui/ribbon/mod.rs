@@ -66,8 +66,9 @@ pub struct Ribbon {
     /// Measured tab-bar height (28 on one row, 56 when tabs wrap). Written by
     /// the `WrapBar` widget during layout, read when anchoring dropdowns.
     tab_bar_h: Arc<AtomicU32>,
-    /// Measured tool-area height (TOOL_BAR_H on one row, taller when the panels
-    /// wrap). Written by the `DensitySwap` widget, read when anchoring dropdowns.
+    /// Measured tool-area height (TOOL_BAR_H at full density, shorter once every
+    /// panel is collapsed). Written by `CollapsePanels`, read when anchoring
+    /// dropdowns below the ribbon.
     tool_bar_h: Arc<AtomicU32>,
 }
 
@@ -429,7 +430,11 @@ impl Ribbon {
             },
         );
 
-        let tabs = WrapFlow::new(tab_items).spacing_x(6.0).row_h(28.0);
+        // Tabs may squeeze their gaps shut (down to 0px) to fit before wrapping.
+        let tabs = WrapFlow::new(tab_items)
+            .spacing_x(6.0)
+            .min_spacing_x(0.0)
+            .row_h(28.0);
 
         let tab_bar = container(
             WrapBar::new(lead.into(), tabs.into())
@@ -520,6 +525,23 @@ impl Ribbon {
                             &self.active_linetype,
                             self.active_lineweight,
                             &style_ctx,
+                            false,
+                        ),
+                        tight: collapse_button(
+                            g,
+                            self.last_panel_tool.get(g.title).copied(),
+                            &self.active_tool,
+                            &self.open_dropdown,
+                            &self.last_cmd,
+                            self.wireframe,
+                            self.ortho_mode,
+                            &self.layer_infos,
+                            &self.active_layer,
+                            self.active_color,
+                            &self.active_linetype,
+                            self.active_lineweight,
+                            &style_ctx,
+                            true,
                         ),
                         flyout: container(render_group(
                             false,
@@ -549,6 +571,7 @@ impl Ribbon {
                     })
                     .collect();
                 CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H, BORDER_DARK)
+                    .report_height(self.tool_bar_h.clone())
                     .into()
             } else {
                 text("").into()
@@ -1264,8 +1287,9 @@ fn representative<'g>(group: &'g RibbonGroup, last_used: Option<&str>) -> Option
 }
 
 /// A collapsed panel: its representative tool (a live button that updates to the
-/// last-used tool) plus a title + ▾ opener for the full flyout. Fixed
-/// `TOOL_BAR_H` tall so it lines up with inline panels.
+/// last-used tool) plus a title + ▾ opener for the full flyout. Its height is its
+/// natural content height (shorter than a full 3-row panel), so `CollapsePanels`
+/// can shrink the ribbon once every panel is collapsed.
 #[allow(clippy::too_many_arguments)]
 fn collapse_button<'a>(
     group: &RibbonGroup,
@@ -1281,43 +1305,65 @@ fn collapse_button<'a>(
     active_linetype: &'a str,
     active_lineweight: LineWeight,
     style_ctx: &StyleContext,
+    // When set, the button shows a SMALL representative icon instead of the large
+    // one — the `tight` step used once even the all-collapsed row overflows.
+    compact: bool,
 ) -> Element<'a, Message> {
     let title = group.title;
 
-    // Show the representative tool with a large icon. For a Properties panel the
-    // representative is its Match button, rendered as a large tool.
-    let face: Element<'_, Message> = match representative(group, last_used) {
-        Some(RibbonItem::PropertiesGroup { match_prop }) => render_large(
-            &RibbonItem::LargeTool(match_prop.clone()),
-            active_tool,
-            open_dd,
-            last_cmd,
-            wireframe,
-            ortho_mode,
-            layer_infos,
-            active_layer,
-            active_color,
-            active_linetype,
-            active_lineweight,
-            style_ctx,
-            false,
-        ),
-        Some(item) => render_large(
-            item,
-            active_tool,
-            open_dd,
-            last_cmd,
-            wireframe,
-            ortho_mode,
-            layer_infos,
-            active_layer,
-            active_color,
-            active_linetype,
-            active_lineweight,
-            style_ctx,
-            false,
-        ),
-        None => text("").into(),
+    // The representative tool's face. Normally a large icon; in the tight step it
+    // shrinks to the small icon (SMALL_W vs LARGE_W) to reclaim width. For a
+    // Properties panel the representative is its Match button.
+    let rep = representative(group, last_used);
+    let face: Element<'_, Message> = if compact {
+        match rep {
+            Some(RibbonItem::PropertiesGroup { match_prop }) => render_small(
+                &RibbonItem::LargeTool(match_prop.clone()),
+                active_tool,
+                open_dd,
+                last_cmd,
+                wireframe,
+                ortho_mode,
+            ),
+            Some(item) => {
+                render_small(item, active_tool, open_dd, last_cmd, wireframe, ortho_mode)
+            }
+            None => text("").into(),
+        }
+    } else {
+        match rep {
+            Some(RibbonItem::PropertiesGroup { match_prop }) => render_large(
+                &RibbonItem::LargeTool(match_prop.clone()),
+                active_tool,
+                open_dd,
+                last_cmd,
+                wireframe,
+                ortho_mode,
+                layer_infos,
+                active_layer,
+                active_color,
+                active_linetype,
+                active_lineweight,
+                style_ctx,
+                false,
+            ),
+            Some(item) => render_large(
+                item,
+                active_tool,
+                open_dd,
+                last_cmd,
+                wireframe,
+                ortho_mode,
+                layer_infos,
+                active_layer,
+                active_color,
+                active_linetype,
+                active_lineweight,
+                style_ctx,
+                false,
+            ),
+            None => text("").into(),
+        }
     };
 
     let opener = button(
@@ -1347,15 +1393,22 @@ fn collapse_button<'a>(
     })
     .padding([1, 4]);
 
-    column![
-        container(face).height(Fill).align_y(iced::Center),
-        opener,
-    ]
-    .align_x(iced::Center)
-    .spacing(2)
-    .padding([3u16, 4])
-    .height(Length::Fixed(TOOL_BAR_H))
-    .into()
+    // The large face fills a fixed slot; the small (compact) face keeps its own
+    // natural height. Either way the whole button is natural height, so a
+    // collapsed / tight panel is shorter than a full one and the row shrinks.
+    let face_box = if compact {
+        container(face).align_y(iced::Center)
+    } else {
+        container(face)
+            .height(Length::Fixed(COLLAPSED_FACE_H))
+            .align_y(iced::Center)
+    };
+
+    column![face_box, opener]
+        .align_x(iced::Center)
+        .spacing(2)
+        .padding([3u16, 4])
+        .into()
 }
 
 impl Default for Ribbon {

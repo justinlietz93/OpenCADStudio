@@ -1,11 +1,15 @@
 //! Adaptive ribbon panels.
 //!
-//! Lays the active module's panels on one row. When they don't all fit, panels
-//! degrade **from the right**: first a panel's large buttons shrink to compact
-//! icon columns, then — if it still doesn't fit — the panel collapses to a title
-//! button whose click opens the full panel as a flyout overlay.
+//! Lays the active module's panels on one row. When they don't all fit, the row
+//! degrades **from the right**, one panel at a time: first a panel shrinks to
+//! compact icon columns, then it collapses to a title button. If even the
+//! all-collapsed row overflows, every button drops to its small icon together,
+//! then the buttons are squeezed. The row's height tracks the tallest shown
+//! panel, so it shrinks as the panels do.
 
 use std::cell::RefCell;
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
@@ -17,31 +21,49 @@ use iced::{
 
 use crate::app::Message;
 
-/// One panel in its four renderings.
+/// One panel in its five renderings. `tight` is the collapsed button with a
+/// small representative icon instead of the large one — the last step before the
+/// buttons are squeezed together.
 pub struct Panel<'a> {
     pub id: String,
     pub full: Element<'a, Message>,
     pub compact: Element<'a, Message>,
     pub button: Element<'a, Message>,
+    pub tight: Element<'a, Message>,
     pub flyout: Element<'a, Message>,
 }
 
+// Number of tree slots per panel: [full, compact, button, tight, flyout].
+const SLOTS: usize = 5;
+
 // Per-panel degradation level; also the offset of the shown element within the
-// panel's 4 trees ([full, compact, button, flyout]).
+// panel's tree slots. Degrade order (from the right): FULL → COMPACT → COLLAPSED
+// (big-icon button) → TIGHT (small-icon button). `flyout` (slot 4) is overlay
+// only, never a level.
 const FULL: u8 = 0;
 const COMPACT: u8 = 1;
 const COLLAPSED: u8 = 2;
+const TIGHT: u8 = 3;
+
+/// When even the all-tight row still overflows, the collapsed buttons are pulled
+/// together by up to this many px per gap — reclaiming their edge padding —
+/// before anything is clipped. Mirrors the tab bar squeezing its gaps shut
+/// before wrapping.
+const MAX_PANEL_SQUEEZE: f32 = 8.0;
 
 pub struct CollapsePanels<'a> {
     panels: Vec<Panel<'a>>,
     /// Title of the panel whose flyout is open (if any).
     open: Option<String>,
-    /// Row height (a full ribbon tool-area height).
+    /// Fallback row height, used only when there are no panels to measure.
     row_h: f32,
     /// Colour of the 1px divider drawn between panels.
     divider: Color,
     /// Chosen degradation level per panel; set during layout.
     levels: RefCell<Vec<u8>>,
+    /// If set, the measured row height is written here each layout (read when
+    /// anchoring dropdowns below the ribbon).
+    height_out: Option<Arc<AtomicU32>>,
 }
 
 impl<'a> CollapsePanels<'a> {
@@ -53,14 +75,22 @@ impl<'a> CollapsePanels<'a> {
             row_h,
             divider,
             levels: RefCell::new(vec![FULL; n]),
+            height_out: None,
         }
+    }
+
+    /// Report the measured row height into `out` on every layout.
+    pub fn report_height(mut self, out: Arc<AtomicU32>) -> Self {
+        self.height_out = Some(out);
+        self
     }
 
     fn shown(&self, i: usize, level: u8) -> &Element<'a, Message> {
         match level {
             FULL => &self.panels[i].full,
             COMPACT => &self.panels[i].compact,
-            _ => &self.panels[i].button,
+            COLLAPSED => &self.panels[i].button,
+            _ => &self.panels[i].tight,
         }
     }
 
@@ -68,7 +98,8 @@ impl<'a> CollapsePanels<'a> {
         match level {
             FULL => &mut self.panels[i].full,
             COMPACT => &mut self.panels[i].compact,
-            _ => &mut self.panels[i].button,
+            COLLAPSED => &mut self.panels[i].button,
+            _ => &mut self.panels[i].tight,
         }
     }
 
@@ -81,11 +112,12 @@ impl<'a> CollapsePanels<'a> {
 
 impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
     fn children(&self) -> Vec<widget::Tree> {
-        let mut v = Vec::with_capacity(self.panels.len() * 4);
+        let mut v = Vec::with_capacity(self.panels.len() * SLOTS);
         for p in &self.panels {
             v.push(widget::Tree::new(&p.full));
             v.push(widget::Tree::new(&p.compact));
             v.push(widget::Tree::new(&p.button));
+            v.push(widget::Tree::new(&p.tight));
             v.push(widget::Tree::new(&p.flyout));
         }
         v
@@ -97,6 +129,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
             refs.push(p.full.as_widget());
             refs.push(p.compact.as_widget());
             refs.push(p.button.as_widget());
+            refs.push(p.tight.as_widget());
             refs.push(p.flyout.as_widget());
         }
         tree.diff_children(&refs);
@@ -116,58 +149,109 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let natural = layout::Limits::new(Size::ZERO, Size::new(f32::INFINITY, f32::INFINITY));
         let n = self.panels.len();
 
-        // Measure each panel at all three densities.
+        // Measure each panel at all four densities. Width drives the degradation
+        // decision; height drives the row height.
         let mut full_w = vec![0.0f32; n];
         let mut compact_w = vec![0.0f32; n];
         let mut button_w = vec![0.0f32; n];
+        let mut tight_w = vec![0.0f32; n];
+        let mut full_h = vec![0.0f32; n];
+        let mut compact_h = vec![0.0f32; n];
+        let mut button_h = vec![0.0f32; n];
+        let mut tight_h = vec![0.0f32; n];
         for i in 0..n {
-            full_w[i] = self.panels[i].full.as_widget_mut()
-                .layout(&mut tree.children[4 * i], renderer, &natural)
-                .size()
-                .width;
-            compact_w[i] = self.panels[i].compact.as_widget_mut()
-                .layout(&mut tree.children[4 * i + 1], renderer, &natural)
-                .size()
-                .width;
-            button_w[i] = self.panels[i].button.as_widget_mut()
-                .layout(&mut tree.children[4 * i + 2], renderer, &natural)
-                .size()
-                .width;
+            let s = self.panels[i].full.as_widget_mut()
+                .layout(&mut tree.children[SLOTS * i], renderer, &natural)
+                .size();
+            full_w[i] = s.width;
+            full_h[i] = s.height;
+            let s = self.panels[i].compact.as_widget_mut()
+                .layout(&mut tree.children[SLOTS * i + 1], renderer, &natural)
+                .size();
+            compact_w[i] = s.width;
+            compact_h[i] = s.height;
+            let s = self.panels[i].button.as_widget_mut()
+                .layout(&mut tree.children[SLOTS * i + 2], renderer, &natural)
+                .size();
+            button_w[i] = s.width;
+            button_h[i] = s.height;
+            let s = self.panels[i].tight.as_widget_mut()
+                .layout(&mut tree.children[SLOTS * i + 3], renderer, &natural)
+                .size();
+            tight_w[i] = s.width;
+            tight_h[i] = s.height;
         }
 
         let width_of = |lv: u8, i: usize| -> f32 {
             match lv {
                 FULL => full_w[i],
                 COMPACT => compact_w[i],
-                _ => button_w[i],
+                COLLAPSED => button_w[i],
+                _ => tight_w[i],
+            }
+        };
+        let height_of = |lv: u8, i: usize| -> f32 {
+            match lv {
+                FULL => full_h[i],
+                COMPACT => compact_h[i],
+                COLLAPSED => button_h[i],
+                _ => tight_h[i],
             }
         };
         let total = |levels: &[u8]| -> f32 { (0..n).map(|i| width_of(levels[i], i)).sum() };
 
-        // Start all full; degrade from the RIGHT. Phase 1 shrinks large panels
-        // to compact one at a time; phase 2 (only if compact still overflows)
-        // collapses them to buttons.
+        // Degrade from the RIGHT, one panel at a time (gradual): first FULL →
+        // COMPACT, then COMPACT → COLLAPSED, each phase only while the row still
+        // overflows. If even the all-collapsed row overflows, every button drops
+        // to its small icon (tight) together, then the buttons are squeezed.
         let mut levels = vec![FULL; n];
-        for i in (0..n).rev() {
-            if total(&levels) <= max_w {
-                break;
+        for degraded in [COMPACT, COLLAPSED] {
+            for i in (0..n).rev() {
+                if total(&levels) <= max_w {
+                    break;
+                }
+                levels[i] = degraded;
             }
-            levels[i] = COMPACT;
         }
-        for i in (0..n).rev() {
-            if total(&levels) <= max_w {
-                break;
-            }
-            levels[i] = COLLAPSED;
+        if total(&levels) > max_w {
+            levels
+                .iter_mut()
+                .filter(|l| **l == COLLAPSED)
+                .for_each(|l| *l = TIGHT);
         }
         *self.levels.borrow_mut() = levels.clone();
+
+        // Same idea as the tab bar squeezing its gaps before wrapping: once every
+        // panel is at its tightest and the row STILL overflows, pull the buttons
+        // together (up to MAX_PANEL_SQUEEZE per gap, reclaiming their edge
+        // padding) so more of them stay on-screen before anything is clipped.
+        // `total(&levels) > max_w` only remains true when nothing more can be
+        // degraded, so this never overlaps a full/compact panel.
+        let squeeze = if n > 1 && total(&levels) > max_w {
+            ((total(&levels) - max_w) / (n - 1) as f32).min(MAX_PANEL_SQUEEZE)
+        } else {
+            0.0
+        };
+
+        // The row is as tall as the tallest shown panel, so the ribbon height
+        // shrinks as its panels degrade to shorter collapsed / tight buttons.
+        let row_h = if n == 0 {
+            self.row_h
+        } else {
+            (0..n)
+                .map(|i| height_of(levels[i], i))
+                .fold(0.0f32, f32::max)
+        };
 
         // Place the chosen element for each panel left-to-right.
         let mut children: Vec<layout::Node> = Vec::with_capacity(n);
         let mut x = 0.0f32;
         for i in 0..n {
+            if i > 0 {
+                x -= squeeze;
+            }
             let level = levels[i];
-            let tree_idx = 4 * i + level as usize;
+            let tree_idx = SLOTS * i + level as usize;
             let node = self.shown_mut(i, level).as_widget_mut().layout(
                 &mut tree.children[tree_idx],
                 renderer,
@@ -175,12 +259,16 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
             );
             let h = node.size().height;
             let w = node.size().width;
-            let y = ((self.row_h - h) / 2.0).max(0.0);
+            let y = ((row_h - h) / 2.0).max(0.0);
             children.push(node.move_to(Point::new(x, y)));
             x += w;
         }
 
-        layout::Node::with_children(Size::new(x, self.row_h), children)
+        if let Some(out) = &self.height_out {
+            out.store(row_h.to_bits(), Ordering::Relaxed);
+        }
+
+        layout::Node::with_children(Size::new(x, row_h), children)
     }
 
     fn update(
@@ -197,7 +285,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
             let level = levels[i];
-            let tree_idx = 4 * i + level as usize;
+            let tree_idx = SLOTS * i + level as usize;
             self.shown_mut(i, level).as_widget_mut().update(
                 &mut tree.children[tree_idx],
                 event,
@@ -223,7 +311,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let mut interaction = mouse::Interaction::default();
         for (i, child_layout) in layout.children().enumerate() {
             let level = levels[i];
-            let tree_idx = 4 * i + level as usize;
+            let tree_idx = SLOTS * i + level as usize;
             let it = self.shown(i, level).as_widget().mouse_interaction(
                 &tree.children[tree_idx],
                 child_layout,
@@ -248,7 +336,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
             let level = levels[i];
-            let tree_idx = 4 * i + level as usize;
+            let tree_idx = SLOTS * i + level as usize;
             self.shown_mut(i, level).as_widget_mut().operate(
                 &mut tree.children[tree_idx],
                 child_layout,
@@ -271,7 +359,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let levels = self.levels_snapshot(self.panels.len());
         for (i, child_layout) in layout.children().enumerate() {
             let level = levels[i];
-            let tree_idx = 4 * i + level as usize;
+            let tree_idx = SLOTS * i + level as usize;
             self.shown(i, level).as_widget().draw(
                 &tree.children[tree_idx],
                 renderer,
@@ -283,12 +371,13 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
             );
         }
 
-        // 1px divider between adjacent panels, except between two collapsed
-        // panels (whose buttons read better with no line between them).
+        // 1px divider between adjacent panels, except between two button-form
+        // panels (collapsed or tight — they read better with no line between).
+        let is_btn = |lv: u8| lv == COLLAPSED || lv == TIGHT;
         let bounds: Vec<Rectangle> = layout.children().map(|l| l.bounds()).collect();
         let wb = layout.bounds();
         for i in 0..self.panels.len().saturating_sub(1) {
-            if levels[i] == COLLAPSED && levels[i + 1] == COLLAPSED {
+            if is_btn(levels[i]) && is_btn(levels[i + 1]) {
                 continue;
             }
             let x = bounds[i + 1].x;
@@ -320,8 +409,9 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
         let levels = self.levels_snapshot(self.panels.len());
         let open_id = self.open.clone()?;
         let p = self.panels.iter().position(|pan| pan.id == open_id)?;
-        // Only a collapsed panel shows a flyout.
-        if levels.get(p).copied().unwrap_or(FULL) != COLLAPSED {
+        // Only a button-form panel (collapsed or tight) shows a flyout.
+        let lvl = levels.get(p).copied().unwrap_or(FULL);
+        if lvl != COLLAPSED && lvl != TIGHT {
             return None;
         }
 
@@ -331,7 +421,7 @@ impl<'a> Widget<Message, Theme, Renderer> for CollapsePanels<'a> {
 
         Some(overlay::Element::new(Box::new(FlyoutOverlay {
             flyout: &mut self.panels[p].flyout,
-            tree: &mut tree.children[4 * p + 3],
+            tree: &mut tree.children[SLOTS * p + 4],
             anchor,
         })))
     }

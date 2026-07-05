@@ -37,6 +37,10 @@ pub(super) const ARROW_W: f32 = ROW_H * 0.4;
 pub(super) const LARGE_ARR: f32 = ROW_H * 0.55;
 /// Total ribbon tool-area height = 3 × ROW_H + 6 px v-padding + 12 px group-label.
 pub(super) const TOOL_BAR_H: f32 = 3.0 * ROW_H + 18.0;
+/// Height of a collapsed panel button's large representative face (big icon +
+/// its label). A collapsed button is this face plus the title opener, so it is
+/// shorter than a full 3-row panel — the ribbon height follows it down.
+pub(super) const COLLAPSED_FACE_H: f32 = LARGE_ICON + 20.0;
 
 // ── Tab-bar constants ──────────────────────────────────────────────────────
 
