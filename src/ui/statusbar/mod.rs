@@ -4,17 +4,15 @@ pub mod statusbar_config;
 pub mod statusbar_menu;
 
 use iced::widget::tooltip::Position as TipPos;
-use iced::widget::scrollable::{Direction, Scrollbar};
 use iced::widget::{
-    button, column, container, mouse_area, row, scrollable, text, text_input, tooltip, Row,
+    button, column, container, mouse_area, row, text, text_input, tooltip,
 };
 use iced::{Background, Border, Color, Element, Length, Theme};
 
-/// Scrollable id of the status-bar layout-tab strip, so the ‹ › arrows (and
-/// `Message::ScrollLayoutTabs`) can scroll it.
+/// Scrollable id of the status-bar layout-tab strip (retained so the existing
+/// `Message::ScrollLayoutTabs` handler still resolves; the strip now flex-wraps
+/// instead of scrolling).
 pub const LAYOUT_TABS_SCROLL_ID: &str = "statusbar-layout-tabs";
-/// How far one ‹ / › arrow click scrolls the layout-tab strip.
-const LAYOUT_TAB_SCROLL_STEP: f32 = 96.0;
 
 /// Widget id of the inline layout-rename text input, so the rename can grab
 /// keyboard focus the moment it opens (issue #86).
@@ -23,6 +21,7 @@ pub const LAYOUT_RENAME_INPUT_ID: &str = "layout_rename_input";
 use crate::app::Message;
 use crate::snap::Snapper;
 use crate::ui::statusbar::statusbar_config::{StatusBarConfig, StatusPill};
+use crate::ui::wrap_bar::{WrapBar, WrapFlow};
 
 #[derive(Clone, Default)]
 pub struct StatusBar {
@@ -137,151 +136,189 @@ impl StatusBar {
             status_pill(scale_label).into()
         };
         // Build the right-side pills, honouring the user's per-pill visibility.
+        // They live in a flex-wrap flow (WrapFlow) so they spill onto extra rows
+        // when the width can't hold them all on one line.
         let vis = |p: StatusPill| config.is_visible(p);
-        let mut right_status = Row::new().spacing(2).align_y(iced::Center);
+        let mut pills: Vec<Element<'_, Message>> = Vec::new();
         if vis(StatusPill::Coords) {
-            right_status = right_status.push(tip(
-                status_pill(format_coords(cursor_world)).into(),
-                "Cursor coordinates (X, Y, Z)",
-            ));
+            pills.push(
+                tip(
+                    status_pill(format_coords(cursor_world)).into(),
+                    "Cursor coordinates (X, Y, Z)",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Ortho) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_ORTHO, ortho_mode, Message::ToggleOrtho),
-                "Orthogonal Mode\nF8",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_ORTHO, ortho_mode, Message::ToggleOrtho),
+                    "Orthogonal Mode\nF8",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Lwt) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_LWT, lineweight_display, Message::ToggleLineweightDisplay),
-                "Show Lineweight\nLWDISPLAY",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_LWT, lineweight_display, Message::ToggleLineweightDisplay),
+                    "Show Lineweight\nLWDISPLAY",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Polar) {
-            right_status = right_status.push(polar_pill(polar_mode, polar_increment_deg));
+            pills.push(polar_pill(polar_mode, polar_increment_deg).into());
         }
         if vis(StatusPill::Dyn) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_DYN, dyn_input, Message::ToggleDynInput),
-                "Dynamic Input\nF12",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_DYN, dyn_input, Message::ToggleDynInput),
+                    "Dynamic Input\nF12",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Otrack) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_OTRACK, otrack, Message::ToggleOTrack),
-                "Object Snap Tracking\nF11",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_OTRACK, otrack, Message::ToggleOTrack),
+                    "Object Snap Tracking\nF11",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Osnap) {
-            right_status =
-                right_status.push(osnap_btn(osnap_active, snapper.snap_enabled, popup_open));
+            pills.push(osnap_btn(osnap_active, snapper.snap_enabled, popup_open).into());
         }
         if vis(StatusPill::Space) {
-            right_status = right_status.push(tip(
-                space_mode_btn(&current_layout, in_mspace),
-                "PAPER: double-click viewport to enter MSPACE\nMODEL: click to switch to Model Space",
-            ));
+            pills.push(
+                tip(
+                    space_mode_btn(&current_layout, in_mspace),
+                    "PAPER: double-click viewport to enter MSPACE\nMODEL: click to switch to Model Space",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Scale) {
-            right_status = right_status.push(scale_element);
+            pills.push(scale_element);
         }
         if vis(StatusPill::Units) {
-            right_status = right_status.push(tip(
-                units_btn(
-                    crate::ui::popup::units_popup::unit_short(insertion_units),
-                    units_popup_open,
-                ),
-                "Drawing Units (INSUNITS)\nClick to change",
-            ));
+            pills.push(
+                tip(
+                    units_btn(
+                        crate::ui::popup::units_popup::unit_short(insertion_units),
+                        units_popup_open,
+                    ),
+                    "Drawing Units (INSUNITS)\nClick to change",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Transparency) {
-            right_status = right_status.push(tip(
-                toggle_pill(
-                    crate::ui::icons::ST_TRANSPARENCY,
-                    transparency_display,
-                    Message::ToggleTransparencyDisplay,
-                ),
-                "Show Transparency\nForce opaque when off",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(
+                        crate::ui::icons::ST_TRANSPARENCY,
+                        transparency_display,
+                        Message::ToggleTransparencyDisplay,
+                    ),
+                    "Show Transparency\nForce opaque when off",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Isolate) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_ISOLATE, isolation_active, Message::ToggleIsolatePopup),
-                "Isolate Objects\nClick for Isolate / Hide / End",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_ISOLATE, isolation_active, Message::ToggleIsolatePopup),
+                    "Isolate Objects\nClick for Isolate / Hide / End",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::QuickProps) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_QUICKPROPS, quick_properties, Message::ToggleQuickProperties),
-                "Quick Properties\nFloating panel on selection",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_QUICKPROPS, quick_properties, Message::ToggleQuickProperties),
+                    "Quick Properties\nFloating panel on selection",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::SelFilter) {
-            right_status = right_status.push(tip(
-                toggle_pill(
-                    crate::ui::icons::ST_FILTER,
-                    selection_filter_active,
-                    Message::ToggleSelectionFilterPopup,
-                ),
-                "Selection Filtering\nLimit which object types can be picked",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(
+                        crate::ui::icons::ST_FILTER,
+                        selection_filter_active,
+                        Message::ToggleSelectionFilterPopup,
+                    ),
+                    "Selection Filtering\nLimit which object types can be picked",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::SelCycle) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_SELCYCLE, selection_cycling, Message::ToggleSelectionCycling),
-                "Selection Cycling\nRepeat-click to step through overlapping objects",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_SELCYCLE, selection_cycling, Message::ToggleSelectionCycling),
+                    "Selection Cycling\nRepeat-click to step through overlapping objects",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Vp) && !vp_label.is_empty() {
-            right_status = right_status.push(tip(
-                status_pill(vp_label).into(),
-                "Viewport count in active layout",
-            ));
+            pills.push(
+                tip(
+                    status_pill(vp_label).into(),
+                    "Viewport count in active layout",
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::CleanScreen) {
-            right_status = right_status.push(tip(
-                toggle_pill(crate::ui::icons::ST_CLEANSCREEN, clean_screen, Message::ToggleCleanScreen),
-                "Clean Screen\nHide ribbon and panels",
-            ));
+            pills.push(
+                tip(
+                    toggle_pill(crate::ui::icons::ST_CLEANSCREEN, clean_screen, Message::ToggleCleanScreen),
+                    "Clean Screen\nHide ribbon and panels",
+                )
+                .into(),
+            );
         }
         // Customization handle: opens the pill show/hide menu.
-        right_status = right_status.push(tip(
-            customize_btn(),
-            "Customization\nShow or hide status-bar items",
-        ));
-        let right_status = right_status;
+        pills.push(
+            tip(
+                customize_btn(),
+                "Customization\nShow or hide status-bar items",
+            )
+            .into(),
+        );
+        let right_status = WrapFlow::new(pills).spacing_x(2.0).row_h(30.0);
 
-        let mut bar = Row::new().align_y(iced::Center).spacing(0);
-        bar = bar.push(menu_btn);
+        // Left area: hamburger menu + Model/layout tabs in a flex-wrap flow, so
+        // they spill onto lower rows when narrow (no scroll arrows). The pills
+        // wrap in their own flow; WrapBar stacks the two areas so a wrapped tab
+        // never shares a row with a pill.
+        let mut left: Vec<Element<'_, Message>> = Vec::new();
+        left.push(menu_btn.into());
         if show_layout_tabs {
-            // The layout tabs live in a horizontal scrollable that takes only
-            // the space left between the menu and the right-side tools, so many
-            // layouts scroll instead of pushing the tools off the bar (#199).
-            // ‹ › arrows scroll it (the mouse wheel works too).
-            let mut tabs_row = Row::new().align_y(iced::Center).spacing(0);
             for name in layouts {
                 let is_active = name == current_layout;
                 let renaming = rename_state
                     .filter(|(orig, _)| *orig == name)
                     .map(|(_, edit)| edit.as_str());
-                tabs_row = tabs_row.push(space_tab(name, is_active, renaming));
+                left.push(space_tab(name, is_active, renaming).into());
             }
-            tabs_row = tabs_row.push(add_btn);
-
-            let tabs_scroll = scrollable(tabs_row)
-                .direction(Direction::Horizontal(Scrollbar::hidden()))
-                .id(iced::advanced::widget::Id::new(LAYOUT_TABS_SCROLL_ID))
-                .width(Length::Shrink);
-
-            bar = bar.push(scroll_arrow(false));
-            bar = bar.push(container(tabs_scroll).width(Length::Fill));
-            bar = bar.push(scroll_arrow(true));
-        } else {
-            bar = bar.push(iced::widget::Space::new().width(Length::Fill));
+            left.push(add_btn.into());
         }
-        bar = bar.push(right_status);
+        let left_area = WrapFlow::new(left).spacing_x(2.0).row_h(30.0);
 
-        container(bar)
+        let wrap = WrapBar::new(left_area.into(), right_status.into())
+            .min_row_h(30.0)
+            .justify_end(true);
+
+        container(wrap)
             .style(|_: &Theme| container::Style {
                 background: Some(Background::Color(BAR_BG)),
                 border: Border {
@@ -292,11 +329,10 @@ impl StatusBar {
                 ..Default::default()
             })
             .width(Length::Fill)
-            // Match the drawing (document) tab bar height so the three
+            // One row matches the drawing (document) tab bar height so the three
             // horizontal strips — tabs, status bar, command line — line up.
-            // `center_y` (not `height`) also vertically centres every pill in
-            // the taller bar instead of top-aligning them (issue #216).
-            .center_y(Length::Fixed(30.0))
+            // WrapBar vertically centres every pill (issue #216) and grows to a
+            // second row when the width can't hold both blocks.
             .padding([0, 4])
             .into()
     }
@@ -306,38 +342,6 @@ impl StatusBar {
 
 fn format_coords(p: glam::Vec3) -> String {
     format!("{:.4}, {:.4}, {:.4}", p.x, p.y, p.z)
-}
-
-// ── Layout-tab scroll arrow ───────────────────────────────────────────────
-
-/// A ‹ / › arrow that scrolls the layout-tab strip. `right` picks the
-/// direction (and step sign).
-fn scroll_arrow<'a>(right: bool) -> Element<'a, Message> {
-    let glyph = if right {
-        crate::ui::icons::arrow_right(12.0, ICON_COLOR)
-    } else {
-        crate::ui::icons::arrow_left(12.0, ICON_COLOR)
-    };
-    let step = if right {
-        LAYOUT_TAB_SCROLL_STEP
-    } else {
-        -LAYOUT_TAB_SCROLL_STEP
-    };
-    button(glyph)
-        .on_press(Message::ScrollLayoutTabs(step))
-        .style(|_: &Theme, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered => PILL_BG,
-                _ => Color::TRANSPARENT,
-            })),
-            border: Border {
-                radius: 3.0.into(),
-                ..Default::default()
-            },
-            ..Default::default()
-        })
-        .padding([4, 6])
-        .into()
 }
 
 // ── Customization handle ──────────────────────────────────────────────────

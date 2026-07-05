@@ -6,6 +6,9 @@
 //
 // Dropdown items within a group are collected into columns of 3 rows.
 
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::Arc;
+
 use rustc_hash::FxHashMap as HashMap;
 
 use acadrust::types::{Color as AcadColor, LineWeight};
@@ -19,6 +22,7 @@ use crate::ui::properties::{lw_options, LinetypeItem};
 
 mod widgets;
 use widgets::{StyleContext, *};
+use crate::ui::wrap_bar::{WrapBar, WrapFlow};
 
 // ── Ribbon state ───────────────────────────────────────────────────────────
 
@@ -52,6 +56,9 @@ pub struct Ribbon {
     pub active_mleader_style: String,
     pub table_style_names: Vec<String>,
     pub active_table_style: String,
+    /// Measured tab-bar height (28 on one row, 56 when tabs wrap). Written by
+    /// the `WrapBar` widget during layout, read when anchoring dropdowns.
+    tab_bar_h: Arc<AtomicU32>,
 }
 
 /// Per-layer display data shown in the ribbon layer dropdown.
@@ -106,7 +113,13 @@ impl Ribbon {
             active_mleader_style: String::new(),
             table_style_names: vec![],
             active_table_style: String::new(),
+            tab_bar_h: Arc::new(AtomicU32::new(28.0f32.to_bits())),
         }
+    }
+
+    /// Current tab-bar height as last measured by the `WrapBar` widget.
+    fn tab_bar_height(&self) -> f32 {
+        f32::from_bits(self.tab_bar_h.load(Ordering::Relaxed))
     }
 
     pub fn set_styles(
@@ -217,34 +230,29 @@ impl Ribbon {
         undo_count: usize,
         redo_count: usize,
     ) -> Element<'_, Message> {
-        // ── Quick-access file commands ─────────────────────────────────────
-        let quick_access = row![
-            quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW"),
-            quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN"),
-            quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE"),
-            quick_access_btn(crate::ui::icons::FILE_EXPORT, "Save As", "SAVEAS"),
-            quick_access_btn(crate::ui::icons::PRINT, "Print", "PRINT"),
-        ]
-        .spacing(TOP_HIST_GAP)
-        .align_y(iced::Center);
+        // ── Quick-access file commands + undo/redo, one merged flow ────────
+        let lead = WrapFlow::new(vec![
+            quick_access_btn(crate::ui::icons::DOC_NEW, "New", "NEW").into(),
+            quick_access_btn(crate::ui::icons::FOLDER_OPEN, "Open", "OPEN").into(),
+            quick_access_btn(crate::ui::icons::SAVE, "Save", "SAVE").into(),
+            quick_access_btn(crate::ui::icons::FILE_EXPORT, "Save As", "SAVEAS").into(),
+            quick_access_btn(crate::ui::icons::PRINT, "Print", "PRINT").into(),
+            render_history_control("Undo", UNDO_HISTORY_ID, undo_count, &self.open_dropdown).into(),
+            render_history_control("Redo", REDO_HISTORY_ID, redo_count, &self.open_dropdown).into(),
+        ])
+        .spacing_x(TOP_HIST_GAP)
+        .row_h(28.0);
 
-        // ── Tab buttons ───────────────────────────────────────────────────
-        let history_controls = row![
-            render_history_control("Undo", UNDO_HISTORY_ID, undo_count, &self.open_dropdown),
-            render_history_control("Redo", REDO_HISTORY_ID, redo_count, &self.open_dropdown),
-        ]
-        .spacing(TOP_HIST_GAP)
-        .align_y(iced::Center);
+        // The quick-access flow and the tabs flow each flex-wrap; WrapBar stacks
+        // them so a wrapped tab never shares a row with a quick-access button.
 
-        let tab_buttons = self.modules.iter().enumerate().fold(
-            row![quick_access, history_controls]
-                .align_y(iced::Center)
-                .spacing(6),
-            |row_acc, (i, module)| {
+        let tab_items = self.modules.iter().enumerate().fold(
+            Vec::<Element<'_, Message>>::new(),
+            |mut acc, (i, module)| {
                 // The Layout module no longer has a ribbon tab — its paper-space
                 // tools live in the right-edge side toolbar (see ui::side_toolbar).
                 if module.id() == "layout" {
-                    return row_acc;
+                    return acc;
                 }
 
                 let is_active = i == self.active;
@@ -324,17 +332,23 @@ impl Ribbon {
                     },
                     ..Default::default()
                 });
-                row_acc.push(btn)
+                acc.push(btn.into());
+                acc
             },
         );
 
-        let tab_bar = container(tab_buttons)
-            .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(TOPBAR_BG)),
-                ..Default::default()
-            })
-            .width(Length::Fill)
-            .height(28);
+        let tabs = WrapFlow::new(tab_items).spacing_x(6.0).row_h(28.0);
+
+        let tab_bar = container(
+            WrapBar::new(lead.into(), tabs.into())
+                .spacing(6.0)
+                .report_height(self.tab_bar_h.clone()),
+        )
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(TOPBAR_BG)),
+            ..Default::default()
+        })
+        .width(Length::Fill);
 
         // ── Tool area ─────────────────────────────────────────────────────
         let effective_active = if !is_paper
@@ -654,7 +668,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(190.0));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let left_offset = compute_dropdown_left(&groups, open_id);
         let positioned = container(panel)
             .align_left(Fill)
@@ -777,7 +791,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(220.0));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let groups = self.modules.get(self.active)?.ribbon_groups();
         let left_offset = compute_layer_combo_left(&groups);
         let positioned = container(panel)
@@ -901,7 +915,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(LARGE_W * 2.3));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let left_offset = compute_dropdown_left(&groups, open_id);
         let positioned = container(panel)
             .align_left(Fill)
@@ -939,7 +953,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(200.0));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let groups = self.modules.get(self.active)?.ribbon_groups();
         let left_offset = compute_prop_combo_left(&groups, PROP_COLOR_ID);
         let positioned = container(panel)
@@ -1028,7 +1042,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(220.0));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let groups = self.modules.get(self.active)?.ribbon_groups();
         let left_offset = compute_prop_combo_left(&groups, PROP_LINETYPE_ID);
         let positioned = container(list)
@@ -1104,7 +1118,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(width));
 
-        let top_offset = 28.0 + TOOL_BAR_H;
+        let top_offset = self.tab_bar_height() + TOOL_BAR_H;
         let groups = self.modules.get(self.active)?.ribbon_groups();
         let left_offset = compute_prop_combo_left(&groups, dd_id);
         let positioned = container(panel)

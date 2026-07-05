@@ -15,6 +15,7 @@ pub mod statusbar;
 pub mod style;
 pub mod text_util;
 pub mod window;
+pub mod wrap_bar;
 
 pub use command_line::CommandLine;
 pub use properties::PropertiesPanel;
