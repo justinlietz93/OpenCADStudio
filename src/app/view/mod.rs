@@ -78,7 +78,12 @@ impl OpenCADStudio {
         // viewport draws the layout's own geometry (white sheet + entities +
         // borders) and the floating content viewports blit on top.
         let viewport_3d: Element<'_, Message> = if tab.is_start {
-            start_page_view(&self.patrons)
+            start_page_view(
+                &self.patrons,
+                &self.recent_files,
+                self.win_size.0,
+                self.start_section,
+            )
         } else if is_paper {
             shader(ViewportPane::model(
                 &tab.scene,
@@ -1132,10 +1137,11 @@ impl OpenCADStudio {
             }
         }
 
-        // Properties / layers panels carry no useful state on the Start tab.
-        // Replace the properties panel with a Recent Documents list there.
+        // The Start tab shows its own three-panel page (Recent · Welcome ·
+        // Supporters) in place of the viewport, so the left properties slot is
+        // empty there.
         let properties_el: Element<'_, Message> = if tab.is_start {
-            recent_files_panel(&self.recent_files)
+            Space::new().into()
         } else if self.show_properties && !self.clean_screen {
             tab.properties.view()
         } else {
@@ -1981,17 +1987,16 @@ fn pane_mouse_area<'a>(idx: usize) -> Element<'a, Message> {
         .into()
 }
 
-pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, Message> {
+pub(super) fn start_page_view<'a>(
+    patrons: &'a [(String, i64)],
+    recents: &'a [std::path::PathBuf],
+    avail_w: f32,
+    active: super::StartSection,
+) -> Element<'a, Message> {
     const TEXT: Color = Color {
         r: 0.94,
         g: 0.93,
         b: 0.92,
-        a: 1.0,
-    };
-    const MUTED: Color = Color {
-        r: 0.62,
-        g: 0.62,
-        b: 0.62,
         a: 1.0,
     };
     const CARD_BG: Color = Color {
@@ -2007,20 +2012,7 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         a: 1.0,
     };
 
-    // Brand-tinted "Welcome to" — the "OpenCADStudio" word takes the accent colour
-    // (Thunderbird-style coloured headline split).
-    let headline = row![
-        text("Welcome to ").size(40).color(TEXT),
-        text("Open CAD Studio").size(40).color(BRAND),
-    ]
-    .align_y(iced::Center);
-
-    let subtitle = text(
-        "Open CAD Studio is an open-source CAD viewer and editor — a gift from contributors like you. \
-         Open a DWG/DXF file, start a new drawing, or help shape what comes next.",
-    )
-    .size(13)
-    .color(MUTED);
+    let headline = text("Open CAD Studio").size(40).color(BRAND);
 
     // Plain outlined button (Open / New / Help / Contribute).
     let outline_btn = |label: &'static str, msg: Message| {
@@ -2097,38 +2089,32 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         })
     };
 
-    let primary_row = row![
-        outline_btn("New Drawing", Message::TabNew),
-        outline_btn("Open File…", Message::OpenFile),
-        donate_btn,
-    ]
-    .spacing(12)
-    .align_y(iced::Center);
+    let primary_row = WrapFlow::new(vec![
+        outline_btn("New Drawing", Message::TabNew).into(),
+        outline_btn("Open File…", Message::OpenFile).into(),
+        donate_btn.into(),
+    ])
+    .spacing_x(12.0)
+    .row_h(48.0);
 
     #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
-    let mut secondary_row = row![
+    let mut secondary_items: Vec<Element<'a, Message>> = vec![
         outline_btn(
             "Send Feedback",
             Message::RibbonToolClick {
                 tool_id: "REPORT".to_string(),
                 event: crate::modules::ModuleEvent::Command("REPORT".to_string()),
             },
-        ),
-        outline_btn(
-            "Release Notes",
-            Message::RibbonToolClick {
-                tool_id: "CHANGELOG".to_string(),
-                event: crate::modules::ModuleEvent::Command("CHANGELOG".to_string()),
-            },
-        ),
-        outline_btn("Plugins", Message::PluginManagerOpen),
+        )
+        .into(),
+        outline_btn("Plugins", Message::PluginManagerOpen).into(),
     ];
     // The web build is already in the browser, so only the desktop offers a
     // link to the web version.
     #[cfg(not(target_arch = "wasm32"))]
     {
         // Bright ribbon blue (matches the active-tool accent), filled.
-        secondary_row = secondary_row.push(
+        secondary_items.push(
             button(text("OCS Web").size(14).color(Color::WHITE))
                 .on_press(Message::RibbonToolClick {
                     tool_id: "WEBVERSION".to_string(),
@@ -2162,10 +2148,13 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
                         radius: 6.0.into(),
                     },
                     ..Default::default()
-                }),
+                })
+                .into(),
         );
     }
-    let secondary_row = secondary_row.spacing(12).align_y(iced::Center);
+    let secondary_row = WrapFlow::new(secondary_items)
+        .spacing_x(12.0)
+        .row_h(44.0);
 
     // Intro videos: clickable thumbnails with a play badge, side by side.
     // Native iced has no embedded web player, so a click opens the video in the
@@ -2198,7 +2187,7 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
     }
     // One clickable video card: cover-fitted thumbnail with a white play triangle
     // on a translucent disc, opening `url` in the browser on click.
-    let video_card = |handle: iced::widget::image::Handle, url: &str| {
+    let video_card = |handle: iced::widget::image::Handle, url: &str, card_w: f32, card_h: f32| {
         let thumb = iced::widget::image(handle)
             .width(Fill)
             .height(Fill)
@@ -2233,8 +2222,8 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         .center_y(Fill);
         mouse_area(
             container(iced::widget::stack![thumb, play_badge])
-                .width(iced::Length::Fixed(352.0))
-                .height(iced::Length::Fixed(198.0))
+                .width(iced::Length::Fixed(card_w))
+                .height(iced::Length::Fixed(card_h))
                 .style(|_: &Theme| container::Style {
                     background: Some(Background::Color(CARD_BG)),
                     border: Border {
@@ -2249,14 +2238,50 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         .interaction(iced::mouse::Interaction::Pointer)
         .on_press(Message::OpenUrl(url.to_string()))
     };
-    let cards = container(
-        iced::widget::row![
-            video_card(intro_thumb_1(), INTRO_VIDEO_URL),
-            video_card(intro_thumb_2(), INTRO_VIDEO_URL_2),
-        ]
-        .spacing(12),
-    )
-    .center_x(Fill);
+    // The two video cards keep their 16:9-ish aspect. They sit side by side
+    // while there's room; when the width gets tight they WRAP to a stacked
+    // column; and when even the stack won't fit the remaining height they
+    // SHRINK to fit — never overflowing onto the status bar.
+    let cards = container(responsive(move |size| {
+        const GAP: f32 = 12.0;
+        const MAX_W: f32 = 352.0;
+        let aspect = 352.0f32 / 198.0; // width / height
+
+        // Wrap to a stacked column once side-by-side cards would get too small.
+        let side_w = ((size.width - GAP) / 2.0).min(MAX_W);
+        let stacked = side_w < 220.0;
+
+        let (mut cw, mut ch, rows) = if stacked {
+            let w = size.width.min(MAX_W);
+            (w, w / aspect, 2.0f32)
+        } else {
+            (side_w, side_w / aspect, 1.0f32)
+        };
+
+        // Shrink to fit the height the page can give the cards.
+        let needed_h = ch * rows + if rows > 1.0 { GAP } else { 0.0 };
+        if needed_h > size.height && needed_h > 1.0 {
+            let scale = (size.height / needed_h).max(0.0);
+            cw *= scale;
+            ch *= scale;
+        }
+
+        let c1 = video_card(intro_thumb_1(), INTRO_VIDEO_URL, cw, ch);
+        let c2 = video_card(intro_thumb_2(), INTRO_VIDEO_URL_2, cw, ch);
+        let inner: Element<'_, Message> = if stacked {
+            column![c1, c2].spacing(GAP).into()
+        } else {
+            iced::widget::row![c1, c2].spacing(GAP).into()
+        };
+        container(inner)
+            .center_x(Fill)
+            .center_y(Fill)
+            .width(Fill)
+            .height(Fill)
+            .into()
+    }))
+    .width(Fill)
+    .height(Fill);
 
     // Buttons sit on a transparent container with a large, brand-tinted
     // ambient shadow (offset = 0, big blur) — produces a soft halo behind
@@ -2287,14 +2312,12 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
     let content = column![
         Space::new().height(iced::Length::Fixed(28.0)),
         container(headline).center_x(Fill),
-        container(subtitle).center_x(Fill).padding([10, 60]),
         Space::new().height(iced::Length::Fixed(22.0)),
         container(primary_glow).center_x(Fill),
         Space::new().height(iced::Length::Fixed(10.0)),
         container(secondary_row).center_x(Fill),
-        Space::new().height(iced::Length::Fixed(40.0)),
+        Space::new().height(iced::Length::Fixed(24.0)),
         cards,
-        Space::new().height(Fill),
     ]
     .spacing(0)
     .width(Fill)
@@ -2309,6 +2332,18 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         b: 0.085,
         a: 1.0,
     };
+    // Three parts — Recent Files · Welcome · Supporters. They sit side by side
+    // while they fit; when the page is too narrow it becomes a tab bar with the
+    // Welcome tab open by default.
+    let recent_w = 280.0f32;
+    let sup_w = 240.0f32;
+    let welcome_min = 480.0f32;
+    let avail = (avail_w - 16.0).max(0.0); // minus the page's l/r padding
+    let fits_all = avail >= recent_w + welcome_min + sup_w;
+
+    let recent = recent_files_panel(recents);
+    let welcome = container(content).width(Fill).height(Fill);
+
     // Right rail: Patreon supporters, fetched at boot. When the list is empty
     // (no token configured / offline) only the "Support on Patreon" button
     // shows, so the rail always invites support.
@@ -2385,23 +2420,93 @@ pub(super) fn start_page_view<'a>(patrons: &'a [(String, i64)]) -> Element<'a, M
         .into()
     };
 
-    container(iced::widget::row![
-        container(content).width(Fill).height(Fill),
-        supporters,
-    ])
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(PAGE_BG)),
-            ..Default::default()
-        })
-        .padding(iced::Padding {
-            top: 40.0,
-            right: 60.0,
-            bottom: 40.0,
-            left: 60.0,
-        })
+    let body: Element<'a, Message> = if fits_all {
+        iced::widget::row![recent, welcome, supporters]
+            .spacing(16)
+            .into()
+    } else {
+        let tab_btn = |label: &'static str, section: super::StartSection| {
+            let is_active = active == section;
+            button(text(label).size(14))
+                .on_press(Message::StartSectionSelect(section))
+                .padding([8, 18])
+                .style(move |_: &Theme, status| button::Style {
+                    background: Some(Background::Color(match (is_active, status) {
+                        (true, _) => Color {
+                            r: 0.18,
+                            g: 0.18,
+                            b: 0.20,
+                            a: 1.0,
+                        },
+                        (false, button::Status::Hovered) => Color {
+                            r: 0.14,
+                            g: 0.14,
+                            b: 0.16,
+                            a: 1.0,
+                        },
+                        _ => Color::TRANSPARENT,
+                    })),
+                    text_color: if is_active {
+                        TEXT
+                    } else {
+                        Color {
+                            r: 0.62,
+                            g: 0.62,
+                            b: 0.62,
+                            a: 1.0,
+                        }
+                    },
+                    border: Border {
+                        color: if is_active { BRAND } else { Color::TRANSPARENT },
+                        width: if is_active { 1.0 } else { 0.0 },
+                        radius: 6.0.into(),
+                    },
+                    ..Default::default()
+                })
+        };
+        let tab_bar = iced::widget::row![
+            tab_btn("Recent Files", super::StartSection::Recent),
+            tab_btn("Welcome", super::StartSection::Welcome),
+            tab_btn("Supporters", super::StartSection::Supporters),
+        ]
+        .spacing(6);
+        let section_body: Element<'a, Message> = match active {
+            super::StartSection::Recent => container(recent)
+                .width(Fill)
+                .height(Fill)
+                .center_x(Fill)
+                .into(),
+            super::StartSection::Welcome => welcome.into(),
+            super::StartSection::Supporters => container(supporters)
+                .width(Fill)
+                .height(Fill)
+                .center_x(Fill)
+                .into(),
+        };
+        column![
+            container(tab_bar).center_x(Fill),
+            Space::new().height(iced::Length::Fixed(12.0)),
+            section_body,
+        ]
         .width(Fill)
         .height(Fill)
         .into()
+    };
+
+    container(body)
+    .style(|_: &Theme| container::Style {
+        background: Some(Background::Color(PAGE_BG)),
+        ..Default::default()
+    })
+    .padding(iced::Padding {
+        top: 16.0,
+        right: 8.0,
+        bottom: 16.0,
+        left: 8.0,
+    })
+    .width(Fill)
+    .height(Fill)
+    .into()
 }
 
 // ── Recent Documents panel (Start tab left rail) ──────────────────────────

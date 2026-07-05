@@ -208,6 +208,15 @@ struct AddSelectedRestore {
     ribbon_lineweight: LineWeight,
 }
 
+/// Which Start-page section a narrow (tabbed) Start page is showing.
+#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub enum StartSection {
+    Recent,
+    #[default]
+    Welcome,
+    Supporters,
+}
+
 pub(super) struct OpenCADStudio {
     start: Instant,
     tabs: Vec<DocumentTab>,
@@ -220,6 +229,9 @@ pub(super) struct OpenCADStudio {
     /// Paying Patreon supporters shown on the Start page (name, pledge cents),
     /// fetched once at boot, highest pledge first.
     patrons: Vec<(String, i64)>,
+    /// Which Start-page section is shown when the page is too narrow for all
+    /// three side by side and falls back to a tab bar.
+    start_section: StartSection,
     /// Read-only editor buffer backing the command-line history dropdown, so
     /// the log can be drag-selected across lines and copied (issue #232).
     /// Rebuilt from the history each time the dropdown is opened.
@@ -1115,6 +1127,8 @@ pub enum Message {
     OpenRecent(PathBuf),
     /// Open a URL in the system browser (start-page intro video, links).
     OpenUrl(String),
+    /// Select which section a narrow (tabbed) Start page shows.
+    StartSectionSelect(StartSection),
     /// Scroll the status-bar layout-tab strip horizontally by `delta` px
     /// (negative = left). Driven by the ‹ › arrows next to the tabs.
     ScrollLayoutTabs(f32),
@@ -1960,6 +1974,7 @@ impl OpenCADStudio {
             recent_files: recent::load_recent_files(),
             command_line: CommandLine::new(),
             patrons: Vec::new(),
+            start_section: StartSection::default(),
             history_content: iced::widget::text_editor::Content::new(),
             status_bar: StatusBar::new(),
             cursor_pos: Point::ORIGIN,
