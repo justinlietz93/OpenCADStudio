@@ -13,6 +13,7 @@ use iced::{Background, Border, Color, Element, Fill, Length, Padding, Theme};
 
 use crate::app::Message;
 use crate::modules::{IconKind, ModuleEvent, RibbonGroup, RibbonItem, StyleKey, ToolDef};
+use crate::ui::wrap_bar::PosReport;
 use crate::ui::icons;
 use crate::ui::properties::{acad_color_display, LwItem};
 
@@ -453,10 +454,11 @@ pub(super) fn render_small<'a>(
                 .delay(Duration::from_millis(400))
                 .style(tip_style);
 
-            row![icon_with_tip, arr_with_tip]
-                .spacing(0)
-                .height(ROW_H)
-                .into()
+            PosReport::new(
+                *id,
+                row![icon_with_tip, arr_with_tip].spacing(0).height(ROW_H),
+            )
+            .into()
         }
 
         _ => text("").into(),
@@ -464,6 +466,109 @@ pub(super) fn render_small<'a>(
 }
 
 // ── Large item renderer ────────────────────────────────────────────────────
+
+/// A large dropdown button: the current icon on top, its ▾ directly beneath the
+/// icon, then the label at the bottom. Shared by `LargeDropdown` / `Dropdown` in
+/// the full ribbon and by a collapsed panel whose representative is a dropdown.
+/// `explicit_label` overrides the derived (current-item) label when given.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn render_large_dropdown<'a>(
+    id: &'static str,
+    icon: IconKind,
+    explicit_label: Option<&str>,
+    items: &[(&'static str, &'static str, IconKind)],
+    default: &'static str,
+    active_tool: &Option<String>,
+    open_dd: &Option<String>,
+    last_cmd: &HashMap<&'static str, &'static str>,
+) -> Element<'a, Message> {
+    let active = active_tool.as_deref() == Some(id)
+        || items
+            .iter()
+            .any(|(cmd, _, _)| active_tool.as_deref() == Some(*cmd));
+    let dd_open = open_dd.as_deref() == Some(id);
+    let last = last_cmd.get(id).copied().unwrap_or(default);
+    let cur_icon = last_cmd
+        .get(id)
+        .copied()
+        .and_then(|cmd| items.iter().find(|(c, _, _)| *c == cmd).map(|(_, _, ik)| *ik))
+        .or_else(|| items.first().map(|(_, _, ik)| *ik))
+        .unwrap_or(icon);
+    let cur_label = last_cmd
+        .get(id)
+        .copied()
+        .and_then(|cmd| items.iter().find(|(c, _, _)| *c == cmd).map(|(_, lbl, _)| *lbl))
+        .or_else(|| items.first().map(|(_, lbl, _)| *lbl))
+        .unwrap_or(id);
+    let label = explicit_label.unwrap_or(cur_label);
+    let tip_text = format!("{}\nCommand: {}", cur_label, last);
+    let arr_tip = format!("{} options", label);
+
+    // Icon on top with the label beneath it, then the ▾ strip at the very bottom.
+    let top_btn = button(
+        column![
+            make_icon(cur_icon, LARGE_ICON),
+            text(label.to_string()).size(10).color(LABEL_COLOR),
+        ]
+        .align_x(iced::Center)
+        .spacing(3),
+    )
+    .on_press(Message::RibbonToolClick {
+        tool_id: last.to_string(),
+        event: ModuleEvent::Command(last.to_string()),
+    })
+    .style(move |_: &Theme, status| tool_btn_style(active, status))
+    .width(Length::Fixed(LARGE_W))
+    .height(Fill)
+    .padding(Padding {
+        top: 6.0,
+        right: 4.0,
+        bottom: 2.0,
+        left: 4.0,
+    });
+
+    let arr_btn = button(
+        container(icons::arrow_down(9.0, ARROW_COLOR))
+            .width(Fill)
+            .height(Fill)
+            .align_x(iced::Center)
+            .align_y(iced::Center),
+    )
+    .on_press(Message::ToggleRibbonDropdown(id.to_string()))
+    .style(move |_: &Theme, status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered | button::Status::Pressed => TOOL_HOVER,
+            _ if dd_open => TOOL_ACTIVE,
+            _ => Color::TRANSPARENT,
+        })),
+        border: Border {
+            radius: 3.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .width(Length::Fixed(LARGE_W))
+    .height(LARGE_ARR)
+    .padding(0);
+
+    let top_with_tip = tooltip(top_btn, make_tip(tip_text), TipPos::Right)
+        .gap(6.0)
+        .delay(Duration::from_millis(400))
+        .style(tip_style);
+    let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Right)
+        .gap(6.0)
+        .delay(Duration::from_millis(400))
+        .style(tip_style);
+
+    PosReport::new(
+        id,
+        column![top_with_tip, arr_with_tip]
+            .spacing(0)
+            .width(Length::Fixed(LARGE_W))
+            .height(Fill),
+    )
+    .into()
+}
 
 /// Render a full-height large button (LargeTool, LargeDropdown, LayerCombo, StyleCombo).
 pub(super) fn render_large<'a>(
@@ -481,7 +586,9 @@ pub(super) fn render_large<'a>(
     style_ctx: &StyleContext,
 ) -> Element<'a, Message> {
     match item {
-        RibbonItem::LargeTool(t) => {
+        // A plain Tool renders large too, so a collapsed panel can show its
+        // representative tool as a big icon.
+        RibbonItem::LargeTool(t) | RibbonItem::Tool(t) => {
             let active = is_active_tool(t.id, active_tool, wireframe, ortho_mode);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
@@ -517,100 +624,27 @@ pub(super) fn render_large<'a>(
             icon,
             items,
             default,
-        } => {
-            let active = active_tool.as_deref() == Some(*id)
-                || items
-                    .iter()
-                    .any(|(cmd, _, _)| active_tool.as_deref() == Some(*cmd));
-            let dd_open = open_dd.as_deref() == Some(*id);
-            let last = last_cmd.get(id).copied().unwrap_or(*default);
-            let cur_icon = last_cmd
-                .get(id)
-                .copied()
-                .and_then(|cmd| {
-                    items
-                        .iter()
-                        .find(|(c, _, _)| *c == cmd)
-                        .map(|(_, _, ik)| *ik)
-                })
-                .or_else(|| items.first().map(|(_, _, ik)| *ik))
-                .unwrap_or(*icon);
+        } => render_large_dropdown(
+            *id,
+            *icon,
+            Some(*label),
+            items,
+            *default,
+            active_tool,
+            open_dd,
+            last_cmd,
+        ),
 
-            let cur_label = last_cmd
-                .get(id)
-                .copied()
-                .and_then(|cmd| {
-                    items
-                        .iter()
-                        .find(|(c, _, _)| *c == cmd)
-                        .map(|(_, lbl, _)| *lbl)
-                })
-                .or_else(|| items.first().map(|(_, lbl, _)| *lbl))
-                .unwrap_or(*label);
-            let tip_text = format!("{}\nCommand: {}", cur_label, last);
-            let arr_tip = format!("{} options", label);
-
-            let top_btn = button(
-                column![
-                    make_icon(cur_icon, LARGE_ICON),
-                    text(*label).size(10).color(LABEL_COLOR),
-                ]
-                .align_x(iced::Center)
-                .spacing(3),
-            )
-            .on_press(Message::RibbonToolClick {
-                tool_id: last.to_string(),
-                event: ModuleEvent::Command(last.to_string()),
-            })
-            .style(move |_: &Theme, status| tool_btn_style(active, status))
-            .width(Length::Fixed(LARGE_W))
-            .height(Fill)
-            .padding(Padding {
-                top: 6.0,
-                right: 4.0,
-                bottom: 2.0,
-                left: 4.0,
-            });
-
-            let arr_btn = button(
-                container(icons::arrow_down(9.0, ARROW_COLOR))
-                    .width(Fill)
-                    .height(Fill)
-                    .align_x(iced::Center)
-                    .align_y(iced::Center),
-            )
-            .on_press(Message::ToggleRibbonDropdown(id.to_string()))
-            .style(move |_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => TOOL_HOVER,
-                    _ if dd_open => TOOL_ACTIVE,
-                    _ => Color::TRANSPARENT,
-                })),
-                border: Border {
-                    radius: 3.0.into(),
-                    ..Default::default()
-                },
-                ..Default::default()
-            })
-            .width(Length::Fixed(LARGE_W))
-            .height(LARGE_ARR)
-            .padding(0);
-
-            let top_with_tip = tooltip(top_btn, make_tip(tip_text), TipPos::Right)
-                .gap(6.0)
-                .delay(Duration::from_millis(400))
-                .style(tip_style);
-            let arr_with_tip = tooltip(arr_btn, make_tip(arr_tip), TipPos::Right)
-                .gap(6.0)
-                .delay(Duration::from_millis(400))
-                .style(tip_style);
-
-            column![top_with_tip, arr_with_tip]
-                .spacing(0)
-                .width(Length::Fixed(LARGE_W))
-                .height(Fill)
-                .into()
-        }
+        // A plain Dropdown renders large too (used by a collapsed panel whose
+        // representative tool is a dropdown).
+        RibbonItem::Dropdown {
+            id,
+            icon,
+            items,
+            default,
+        } => render_large_dropdown(
+            *id, *icon, None, items, *default, active_tool, open_dd, last_cmd,
+        ),
 
         RibbonItem::LayerComboGroup { row2, row3 } => {
             const COMBO_W: f32 = LARGE_W * 2.5;
@@ -953,8 +987,6 @@ pub(super) fn render_large<'a>(
                 })
                 .into()
         }
-
-        _ => text("").into(),
     }
 }
 
@@ -1059,17 +1091,6 @@ pub(super) fn compute_prop_combo_left(groups: &[RibbonGroup], _dd_id: &str) -> f
     base + LARGE_W + 4.0
 }
 
-pub(super) fn compute_history_dropdown_left(open_id: &str) -> f32 {
-    let logo_w = 38.0;
-    let leading_gap = 6.0;
-    let ctrl_w = TOP_HIST_W + TOP_ARR_W;
-
-    match open_id {
-        UNDO_HISTORY_ID => logo_w + leading_gap,
-        REDO_HISTORY_ID => logo_w + leading_gap + ctrl_w + TOP_HIST_GAP,
-        _ => logo_w + leading_gap,
-    }
-}
 
 // ── Message helpers ────────────────────────────────────────────────────────
 

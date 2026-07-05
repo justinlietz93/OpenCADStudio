@@ -1403,6 +1403,8 @@ pub enum Message {
     SnapClearAll,
     /// Toggle a ribbon dropdown open/closed.
     ToggleRibbonDropdown(String),
+    /// Toggle a collapsed ribbon panel's flyout open/closed (by panel title).
+    ToggleRibbonPanel(String),
     /// Close any open ribbon dropdown (click-catcher outside the panel).
     CloseRibbonDropdown,
     /// User selected a specific item from a ribbon dropdown.

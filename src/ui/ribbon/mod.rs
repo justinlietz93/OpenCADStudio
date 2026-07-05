@@ -22,6 +22,8 @@ use crate::ui::properties::{lw_options, LinetypeItem};
 
 mod widgets;
 use widgets::{StyleContext, *};
+mod collapse;
+use collapse::{CollapsePanels, Panel};
 use crate::ui::wrap_bar::{DensitySwap, WrapBar, WrapFlow};
 
 // ── Ribbon state ───────────────────────────────────────────────────────────
@@ -33,6 +35,11 @@ pub struct Ribbon {
     pub wireframe: bool,
     pub ortho_mode: bool,
     pub open_dropdown: Option<String>,
+    /// Title of the collapsed panel whose flyout is currently open, if any.
+    pub collapsed_open: Option<String>,
+    /// Last tool used from each panel (panel title → tool id). A collapsed panel
+    /// shows this tool on its button, defaulting to the panel's first tool.
+    last_panel_tool: HashMap<&'static str, &'static str>,
     last_cmd: HashMap<&'static str, &'static str>,
     pub layer_names: Vec<String>,
     pub active_layer: String,
@@ -93,6 +100,8 @@ impl Ribbon {
             wireframe: false,
             ortho_mode: true,
             open_dropdown: None,
+            collapsed_open: None,
+            last_panel_tool: HashMap::default(),
             last_cmd: HashMap::default(),
             // Empty until a document is open — populated by sync_ribbon_layers.
             layer_names: vec![],
@@ -129,6 +138,17 @@ impl Ribbon {
     /// Current tool-area height as last measured by the `DensitySwap` widget.
     fn tool_bar_height(&self) -> f32 {
         f32::from_bits(self.tool_bar_h.load(Ordering::Relaxed))
+    }
+
+    /// (top, left) screen offset at which to anchor the open dropdown `id`'s
+    /// overlay — just below its widget. Falls back to below the whole ribbon
+    /// when the widget's position hasn't been recorded yet.
+    fn dd_anchor(&self, id: &str) -> (f32, f32) {
+        if let Some(b) = crate::ui::wrap_bar::dropdown_bounds(id) {
+            (b.y + b.height, b.x)
+        } else {
+            (self.tab_bar_height() + self.tool_bar_height(), 0.0)
+        }
     }
 
     pub fn set_styles(
@@ -209,6 +229,34 @@ impl Ribbon {
     }
     pub fn close_dropdown(&mut self) {
         self.open_dropdown = None;
+        self.collapsed_open = None;
+    }
+
+    /// Toggle the flyout of a collapsed ribbon panel (identified by its title).
+    pub fn toggle_collapsed_panel(&mut self, id: &str) {
+        if self.collapsed_open.as_deref() == Some(id) {
+            self.collapsed_open = None;
+        } else {
+            self.collapsed_open = Some(id.to_string());
+        }
+    }
+
+    /// Record `tool_id` as the last-used tool of whichever active-module panel
+    /// contains it, so a collapsed panel shows that tool on its button.
+    pub fn note_panel_tool(&mut self, tool_id: &str) {
+        if let Some(module) = self.modules.get(self.active) {
+            for group in module.ribbon_groups() {
+                if let Some(id) = group
+                    .tools
+                    .iter()
+                    .filter_map(item_id)
+                    .find(|id| *id == tool_id)
+                {
+                    self.last_panel_tool.insert(group.title, id);
+                    return;
+                }
+            }
+        }
     }
 
     /// Returns the index of the Layout module in the modules list.
@@ -386,9 +434,10 @@ impl Ribbon {
                 };
 
                 // Adaptive tool area, widest→narrowest:
-                //   1. full   — full-size panels on one row
-                //   2. compact — large buttons shrink to icon-only columns
-                //   3. wrapped — compact panels flex-wrap onto extra rows
+                //   1. full     — full-size panels on one row
+                //   2. compact  — large buttons shrink to icon-only columns
+                //   3. collapse — panels that still don't fit collapse to title
+                //                 buttons that open the full panel as a flyout
                 // DensitySwap shows the widest variant that fits the width.
                 let build = |compact: bool| {
                     build_tool_groups(
@@ -419,9 +468,72 @@ impl Ribbon {
                         r.push(w)
                     })
                     .into();
-                let wrapped: Element<'_, Message> =
-                    WrapFlow::new(build(true)).spacing_x(0.0).row_h(TOOL_BAR_H).into();
-                DensitySwap::new(vec![full, compact, wrapped])
+
+                let panels: Vec<Panel<'_>> = groups
+                    .iter()
+                    .map(|g| Panel {
+                        id: g.title.to_string(),
+                        inline: render_group(
+                            true,
+                            g,
+                            &self.active_tool,
+                            &self.open_dropdown,
+                            &self.last_cmd,
+                            self.wireframe,
+                            self.ortho_mode,
+                            &self.layer_infos,
+                            &self.active_layer,
+                            self.active_color,
+                            &self.active_linetype,
+                            self.active_lineweight,
+                            &style_ctx,
+                        ),
+                        button: collapse_button(
+                            g,
+                            self.last_panel_tool.get(g.title).copied(),
+                            &self.active_tool,
+                            &self.open_dropdown,
+                            &self.last_cmd,
+                            self.wireframe,
+                            self.ortho_mode,
+                            &self.layer_infos,
+                            &self.active_layer,
+                            self.active_color,
+                            &self.active_linetype,
+                            self.active_lineweight,
+                            &style_ctx,
+                        ),
+                        flyout: container(render_group(
+                            false,
+                            g,
+                            &self.active_tool,
+                            &self.open_dropdown,
+                            &self.last_cmd,
+                            self.wireframe,
+                            self.ortho_mode,
+                            &self.layer_infos,
+                            &self.active_layer,
+                            self.active_color,
+                            &self.active_linetype,
+                            self.active_lineweight,
+                            &style_ctx,
+                        ))
+                        .style(|_: &Theme| container::Style {
+                            background: Some(Background::Color(RIBBON_BG)),
+                            border: Border {
+                                color: BORDER_DARK,
+                                width: 1.0,
+                                radius: 0.0.into(),
+                            },
+                            ..Default::default()
+                        })
+                        .into(),
+                    })
+                    .collect();
+                let collapse: Element<'_, Message> =
+                    CollapsePanels::new(panels, self.collapsed_open.clone(), TOOL_BAR_H).into();
+
+                DensitySwap::new(vec![full, compact, collapse])
                     .report_height(self.tool_bar_h.clone())
                     .into()
             } else {
@@ -495,12 +607,13 @@ impl Ribbon {
                 })
                 .width(Length::Fixed(170.0));
 
+            let (top, left) = self.dd_anchor(open_id);
             let positioned = container(panel)
                 .align_left(Fill)
                 .align_top(Fill)
                 .padding(Padding {
-                    top: 28.0,
-                    left: compute_history_dropdown_left(open_id),
+                    top,
+                    left,
                     ..Default::default()
                 })
                 .width(Fill)
@@ -619,8 +732,7 @@ impl Ribbon {
             })
             .width(Length::Fixed(190.0));
 
-        let top_offset = self.tab_bar_height() + self.tool_bar_height();
-        let left_offset = compute_dropdown_left(&groups, open_id);
+        let (top_offset, left_offset) = self.dd_anchor(open_id);
         let positioned = container(panel)
             .align_left(Fill)
             .align_top(Fill)
@@ -1113,83 +1225,221 @@ fn build_tool_groups<'a>(
 
     for group in groups {
         if !first_group {
-            widgets.push(
-                container(text(""))
-                    .width(1)
-                    .height(Length::Fixed(TOOL_BAR_H))
-                    .style(|_: &Theme| container::Style {
-                        background: Some(Background::Color(BORDER_DARK)),
-                        ..Default::default()
-                    })
-                    .into(),
-            );
+            widgets.push(tool_divider());
         }
         first_group = false;
-
-        let mut items_row: Vec<Element<Message>> = Vec::new();
-        let mut small_buf: Vec<Element<Message>> = Vec::new();
-
-        for item in &group.tools {
-            let is_large = match item {
-                RibbonItem::LargeTool(_) | RibbonItem::LargeDropdown { .. } => !compact,
-                RibbonItem::LayerComboGroup { .. }
-                | RibbonItem::PropertiesGroup { .. }
-                | RibbonItem::StyleComboGroup { .. } => true,
-                _ => false,
-            };
-
-            if is_large {
-                flush_small_col(&mut small_buf, &mut items_row);
-                items_row.push(render_large(
-                    item,
-                    active_tool,
-                    open_dd,
-                    last_cmd,
-                    wireframe,
-                    ortho_mode,
-                    layer_infos,
-                    active_layer,
-                    active_color,
-                    active_linetype,
-                    active_lineweight,
-                    style_ctx,
-                ));
-            } else {
-                small_buf.push(render_small(
-                    item,
-                    active_tool,
-                    open_dd,
-                    last_cmd,
-                    wireframe,
-                    ortho_mode,
-                ));
-                if small_buf.len() == 3 {
-                    flush_small_col(&mut small_buf, &mut items_row);
-                }
-            }
-        }
-        flush_small_col(&mut small_buf, &mut items_row);
-
-        let tools_el = items_row
-            .into_iter()
-            .fold(row![].spacing(2).height(Fill).align_y(iced::Top), |r, e| {
-                r.push(e)
-            });
-
-        widgets.push(
-            column![
-                tools_el,
-                container(text(group.title).size(9).color(GROUP_LABEL)).padding([1, 4]),
-            ]
-            .align_x(iced::Center)
-            .spacing(0)
-            .padding([3u16, 4])
-            .height(Length::Fixed(TOOL_BAR_H))
-            .into(),
-        );
+        widgets.push(render_group(
+            compact,
+            group,
+            active_tool,
+            open_dd,
+            last_cmd,
+            wireframe,
+            ortho_mode,
+            layer_infos,
+            active_layer,
+            active_color,
+            active_linetype,
+            active_lineweight,
+            style_ctx,
+        ));
     }
 
     widgets
+}
+
+/// A 1px vertical divider between ribbon panels, full tool-area height.
+fn tool_divider<'a>() -> Element<'a, Message> {
+    container(text(""))
+        .width(1)
+        .height(Length::Fixed(TOOL_BAR_H))
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(BORDER_DARK)),
+            ..Default::default()
+        })
+        .into()
+}
+
+/// Render a single ribbon panel (tools + group label), fixed `TOOL_BAR_H` tall.
+/// When `compact`, large tools/dropdowns are drawn as small icon columns.
+#[allow(clippy::too_many_arguments)]
+fn render_group<'a>(
+    compact: bool,
+    group: &RibbonGroup,
+    active_tool: &Option<String>,
+    open_dd: &Option<String>,
+    last_cmd: &HashMap<&'static str, &'static str>,
+    wireframe: bool,
+    ortho_mode: bool,
+    layer_infos: &'a [LayerInfo],
+    active_layer: &'a str,
+    active_color: AcadColor,
+    active_linetype: &'a str,
+    active_lineweight: LineWeight,
+    style_ctx: &StyleContext,
+) -> Element<'a, Message> {
+    let mut items_row: Vec<Element<Message>> = Vec::new();
+    let mut small_buf: Vec<Element<Message>> = Vec::new();
+
+    for item in &group.tools {
+        let is_large = match item {
+            RibbonItem::LargeTool(_) | RibbonItem::LargeDropdown { .. } => !compact,
+            RibbonItem::LayerComboGroup { .. }
+            | RibbonItem::PropertiesGroup { .. }
+            | RibbonItem::StyleComboGroup { .. } => true,
+            _ => false,
+        };
+
+        if is_large {
+            flush_small_col(&mut small_buf, &mut items_row);
+            items_row.push(render_large(
+                item,
+                active_tool,
+                open_dd,
+                last_cmd,
+                wireframe,
+                ortho_mode,
+                layer_infos,
+                active_layer,
+                active_color,
+                active_linetype,
+                active_lineweight,
+                style_ctx,
+            ));
+        } else {
+            small_buf.push(render_small(
+                item,
+                active_tool,
+                open_dd,
+                last_cmd,
+                wireframe,
+                ortho_mode,
+            ));
+            if small_buf.len() == 3 {
+                flush_small_col(&mut small_buf, &mut items_row);
+            }
+        }
+    }
+    flush_small_col(&mut small_buf, &mut items_row);
+
+    let tools_el = items_row
+        .into_iter()
+        .fold(row![].spacing(2).height(Fill).align_y(iced::Top), |r, e| {
+            r.push(e)
+        });
+
+    column![
+        tools_el,
+        container(text(group.title).size(9).color(GROUP_LABEL)).padding([1, 4]),
+    ]
+    .align_x(iced::Center)
+    .spacing(0)
+    .padding([3u16, 4])
+    .height(Length::Fixed(TOOL_BAR_H))
+    .into()
+}
+
+/// The top-level command id of a ribbon item, if it has one.
+fn item_id(it: &RibbonItem) -> Option<&'static str> {
+    match it {
+        RibbonItem::Tool(t) | RibbonItem::LargeTool(t) => Some(t.id),
+        RibbonItem::Dropdown { id, .. } | RibbonItem::LargeDropdown { id, .. } => Some(*id),
+        _ => None,
+    }
+}
+
+/// The tool a collapsed panel shows on its button: the last-used one, else the
+/// panel's first tool-like item.
+fn representative<'g>(group: &'g RibbonGroup, last_used: Option<&str>) -> Option<&'g RibbonItem> {
+    if let Some(want) = last_used {
+        if let Some(found) = group
+            .tools
+            .iter()
+            .find(|&it| item_id(it).map_or(false, |id| id == want))
+        {
+            return Some(found);
+        }
+    }
+    group.tools.iter().find(|&it| item_id(it).is_some())
+}
+
+/// A collapsed panel: its representative tool (a live button that updates to the
+/// last-used tool) plus a title + ▾ opener for the full flyout. Fixed
+/// `TOOL_BAR_H` tall so it lines up with inline panels.
+#[allow(clippy::too_many_arguments)]
+fn collapse_button<'a>(
+    group: &RibbonGroup,
+    last_used: Option<&str>,
+    active_tool: &Option<String>,
+    open_dd: &Option<String>,
+    last_cmd: &HashMap<&'static str, &'static str>,
+    wireframe: bool,
+    ortho_mode: bool,
+    layer_infos: &'a [LayerInfo],
+    active_layer: &'a str,
+    active_color: AcadColor,
+    active_linetype: &'a str,
+    active_lineweight: LineWeight,
+    style_ctx: &StyleContext,
+) -> Element<'a, Message> {
+    let title = group.title;
+
+    // Show the representative tool with a large icon (Tool/Dropdown alike —
+    // render_large handles every tool-like item).
+    let face: Element<'_, Message> = match representative(group, last_used) {
+        Some(item) => render_large(
+            item,
+            active_tool,
+            open_dd,
+            last_cmd,
+            wireframe,
+            ortho_mode,
+            layer_infos,
+            active_layer,
+            active_color,
+            active_linetype,
+            active_lineweight,
+            style_ctx,
+        ),
+        None => text("").into(),
+    };
+
+    let opener = button(
+        row![
+            text(title.to_string()).size(9).color(GROUP_LABEL),
+            crate::ui::icons::arrow_down(8.0, GROUP_LABEL),
+        ]
+        .spacing(3)
+        .align_y(iced::Center),
+    )
+    .on_press(Message::ToggleRibbonPanel(title.to_string()))
+    .style(|_: &Theme, status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered => Color {
+                r: 0.25,
+                g: 0.25,
+                b: 0.25,
+                a: 1.0,
+            },
+            _ => Color::TRANSPARENT,
+        })),
+        border: Border {
+            radius: 2.0.into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    })
+    .padding([1, 4]);
+
+    column![
+        container(face).height(Fill).align_y(iced::Center),
+        opener,
+    ]
+    .align_x(iced::Center)
+    .spacing(2)
+    .padding([3u16, 4])
+    .height(Length::Fixed(TOOL_BAR_H))
+    .into()
 }
 
 impl Default for Ribbon {

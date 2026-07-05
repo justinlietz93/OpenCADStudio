@@ -14,9 +14,11 @@
 //! The measured total height is written to `height_out` (if set) so callers can
 //! anchor overlays below the possibly-taller bar.
 
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::cell::Cell;
 use std::sync::Arc;
+
+use rustc_hash::FxHashMap;
 
 use iced::advanced::layout::{self, Layout};
 use iced::advanced::widget::{self, Widget};
@@ -24,6 +26,19 @@ use iced::advanced::{mouse, overlay, renderer, Clipboard, Shell};
 use iced::{Element, Event, Length, Point, Rectangle, Renderer, Size, Theme, Vector};
 
 use crate::app::Message;
+
+thread_local! {
+    /// Screen bounds of every ribbon dropdown button, keyed by dropdown id, so
+    /// an open dropdown's overlay can anchor directly below its widget at any
+    /// size. Written by `PosReport` on draw, read by `dropdown_bounds`.
+    static DD_BOUNDS: RefCell<FxHashMap<&'static str, Rectangle>> =
+        RefCell::new(FxHashMap::default());
+}
+
+/// Last-drawn screen bounds of the dropdown button with this id.
+pub fn dropdown_bounds(id: &str) -> Option<Rectangle> {
+    DD_BOUNDS.with(|m| m.borrow().get(id).copied())
+}
 
 pub struct WrapBar<'a> {
     lead: Element<'a, Message>,
@@ -799,6 +814,146 @@ impl<'a> Widget<Message, Theme, Renderer> for DensitySwap<'a> {
 
 impl<'a> From<DensitySwap<'a>> for Element<'a, Message> {
     fn from(w: DensitySwap<'a>) -> Self {
+        Element::new(w)
+    }
+}
+
+/// A transparent wrapper that records its child's screen bounds under `id` on
+/// every draw, so an open dropdown can anchor its overlay just below the widget.
+pub struct PosReport<'a> {
+    id: &'static str,
+    child: Element<'a, Message>,
+}
+
+impl<'a> PosReport<'a> {
+    pub fn new(id: &'static str, child: impl Into<Element<'a, Message>>) -> Self {
+        Self {
+            id,
+            child: child.into(),
+        }
+    }
+}
+
+impl<'a> Widget<Message, Theme, Renderer> for PosReport<'a> {
+    fn children(&self) -> Vec<widget::Tree> {
+        vec![widget::Tree::new(&self.child)]
+    }
+
+    fn diff(&self, tree: &mut widget::Tree) {
+        tree.diff_children(&[self.child.as_widget()]);
+    }
+
+    fn size(&self) -> Size<Length> {
+        self.child.as_widget().size()
+    }
+
+    fn size_hint(&self) -> Size<Length> {
+        self.child.as_widget().size_hint()
+    }
+
+    fn layout(
+        &mut self,
+        tree: &mut widget::Tree,
+        renderer: &Renderer,
+        limits: &layout::Limits,
+    ) -> layout::Node {
+        self.child
+            .as_widget_mut()
+            .layout(&mut tree.children[0], renderer, limits)
+    }
+
+    fn update(
+        &mut self,
+        tree: &mut widget::Tree,
+        event: &Event,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        renderer: &Renderer,
+        clipboard: &mut dyn Clipboard,
+        shell: &mut Shell<'_, Message>,
+        viewport: &Rectangle,
+    ) {
+        self.child.as_widget_mut().update(
+            &mut tree.children[0],
+            event,
+            layout,
+            cursor,
+            renderer,
+            clipboard,
+            shell,
+            viewport,
+        );
+    }
+
+    fn mouse_interaction(
+        &self,
+        tree: &widget::Tree,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+        renderer: &Renderer,
+    ) -> mouse::Interaction {
+        self.child
+            .as_widget()
+            .mouse_interaction(&tree.children[0], layout, cursor, viewport, renderer)
+    }
+
+    fn operate(
+        &mut self,
+        tree: &mut widget::Tree,
+        layout: Layout<'_>,
+        renderer: &Renderer,
+        operation: &mut dyn widget::Operation,
+    ) {
+        self.child
+            .as_widget_mut()
+            .operate(&mut tree.children[0], layout, renderer, operation);
+    }
+
+    fn draw(
+        &self,
+        tree: &widget::Tree,
+        renderer: &mut Renderer,
+        theme: &Theme,
+        style: &renderer::Style,
+        layout: Layout<'_>,
+        cursor: mouse::Cursor,
+        viewport: &Rectangle,
+    ) {
+        DD_BOUNDS.with(|m| {
+            m.borrow_mut().insert(self.id, layout.bounds());
+        });
+        self.child.as_widget().draw(
+            &tree.children[0],
+            renderer,
+            theme,
+            style,
+            layout,
+            cursor,
+            viewport,
+        );
+    }
+
+    fn overlay<'b>(
+        &'b mut self,
+        tree: &'b mut widget::Tree,
+        layout: Layout<'b>,
+        renderer: &Renderer,
+        viewport: &Rectangle,
+        translation: Vector,
+    ) -> Option<overlay::Element<'b, Message, Theme, Renderer>> {
+        self.child.as_widget_mut().overlay(
+            &mut tree.children[0],
+            layout,
+            renderer,
+            viewport,
+            translation,
+        )
+    }
+}
+
+impl<'a> From<PosReport<'a>> for Element<'a, Message> {
+    fn from(w: PosReport<'a>) -> Self {
         Element::new(w)
     }
 }

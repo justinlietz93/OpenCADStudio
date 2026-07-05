@@ -96,6 +96,10 @@ impl OpenCADStudio {
 
 
 pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEvent) -> Task<Message> {
+                // Dismiss any open dropdown / collapsed-panel flyout on tool use,
+                // and remember this tool as its panel's last-used one.
+                self.ribbon.close_dropdown();
+                self.ribbon.note_panel_tool(&tool_id);
                 self.ribbon.activate_tool(&tool_id);
                 match event {
                     ModuleEvent::Command(cmd) => return self.dispatch_command(&cmd),

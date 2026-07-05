@@ -1655,6 +1655,10 @@ impl OpenCADStudio {
                 self.ribbon.toggle_dropdown(&id);
                 Task::none()
             }
+            Message::ToggleRibbonPanel(id) => {
+                self.ribbon.toggle_collapsed_panel(&id);
+                Task::none()
+            }
             Message::CloseRibbonDropdown => {
                 self.ribbon.close_dropdown();
                 Task::none()
