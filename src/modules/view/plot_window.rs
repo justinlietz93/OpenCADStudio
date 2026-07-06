@@ -22,6 +22,10 @@ impl CadCommand for PlotWindowCommand {
         "PLOTWINDOW"
     }
 
+    fn forces_endpoint_snap(&self) -> bool {
+        true
+    }
+
     fn prompt(&self) -> String {
         if self.p1.is_none() {
             "PLOTWINDOW  Specify first corner of plot window:".into()
@@ -81,3 +85,14 @@ impl CadCommand for PlotWindowCommand {
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["PLOTWINDOW", "PW"] });  // PlotWindowCommand
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn plot_window_forces_endpoint_snap() {
+        let cmd = PlotWindowCommand::new();
+        assert!(cmd.forces_endpoint_snap());
+    }
+}
