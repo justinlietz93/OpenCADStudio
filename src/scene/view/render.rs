@@ -792,6 +792,8 @@ impl Scene {
         &self,
         enabled: bool,
     ) -> Vec<crate::scene::pipeline::text_gpu::TextVertex> {
+        use crate::scene::convert::acad_to_truck::{convert, TruckObject};
+        use crate::scene::convert::tessellate::entity_z;
         use crate::scene::pipeline::text_gpu;
         use crate::scene::text::{glyph_quads, sdf_atlas};
         if !enabled {
@@ -800,26 +802,62 @@ impl Scene {
         let Ok(mut atlas) = sdf_atlas::text_atlas().lock() else {
             return Vec::new();
         };
+        // Annotation scale matches the stroke path (tessellate): model-space
+        // text scales, paper/layout text does not.
+        let anno = if self.current_layout == "Model" {
+            self.annotation_scale as f64
+        } else {
+            1.0
+        };
         let mut out = Vec::new();
         for e in self.document.entities() {
-            if let acadrust::EntityType::Text(t) = e {
-                let p = crate::entities::text::text_run_placement(t, &self.document);
-                let color = self.render_style(e).0;
+            // Only text-producing entities — converting solids/hatches here
+            // would re-tessellate the whole document every frame.
+            if !matches!(
+                e,
+                acadrust::EntityType::Text(_) | acadrust::EntityType::MText(_)
+            ) {
+                continue;
+            }
+            let Some(te) = convert(e, &self.document) else {
+                continue;
+            };
+            let TruckObject::Text(groups) = te.object else {
+                continue;
+            };
+            let base_color = self.render_style(e).0;
+            let elev = entity_z(e) as f64;
+            // Annotation scale anchors at the first run's origin (matches the
+            // stroke path so multi-line MText spreads identically).
+            let ref_origin = groups.first().map(|g| g.origin).unwrap_or([0.0, 0.0]);
+            for g in &groups {
+                let Some(run) = &g.run else {
+                    continue;
+                };
+                let slx = (g.origin[0] - ref_origin[0]) * anno + ref_origin[0];
+                let sly = (g.origin[1] - ref_origin[1]) * anno + ref_origin[1];
+                let color = g
+                    .color
+                    .map(|c| [c[0], c[1], c[2], 1.0])
+                    .unwrap_or(base_color);
                 let quads = glyph_quads::layout_glyph_quads(
                     &mut atlas,
-                    p.height,
-                    p.rotation,
-                    p.width_factor,
-                    p.oblique_angle,
-                    1.0,
-                    &p.font,
-                    &p.value,
+                    run.height,
+                    run.rotation,
+                    run.width_factor,
+                    run.oblique,
+                    run.tracking,
+                    &run.font,
+                    &run.text,
                 );
+                // `anno` scales the run-local quads; `slx/sly` is the
+                // annotation-scaled run origin — exactly as tessellate places
+                // the stroke geometry.
                 text_gpu::push_glyph_vertices(
                     &mut out,
                     &quads,
-                    [p.origin[0], p.origin[1], p.elevation],
-                    1.0,
+                    [slx, sly, elev],
+                    anno,
                     color,
                     0.0,
                 );

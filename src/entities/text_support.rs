@@ -1,7 +1,7 @@
 use acadrust::types::aci_table::aci_to_rgb;
 use acadrust::{CadDocument, EntityType};
 
-use crate::scene::convert::acad_to_truck::TextStroke;
+use crate::scene::convert::acad_to_truck::{GlyphRun, TextStroke};
 use crate::scene::text::font_face::Face;
 use crate::scene::text::lff;
 
@@ -1175,6 +1175,17 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         origin,
                         color,
                         fill_tris,
+                        // `text` is the plain word (specials already resolved,
+                        // no decoration markers); `run_h` is raw like the strokes.
+                        run: Some(GlyphRun {
+                            text: text.clone(),
+                            font: font_name.to_string(),
+                            height: run_h,
+                            rotation: rot,
+                            width_factor: signed_wf,
+                            oblique,
+                            tracking,
+                        }),
                     });
                     if opts.want_glyph_boxes {
                         // Per-character boxes, advancing exactly as

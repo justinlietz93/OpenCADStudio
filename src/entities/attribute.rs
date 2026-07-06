@@ -292,6 +292,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             origin,
             color: None,
             fill_tris,
+            run: None,
         });
     }
     let _ = input.line_count; // round-trip only — recomputed above

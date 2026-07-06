@@ -70,11 +70,22 @@ pub fn layout_glyph_quads(
     let mut cursor_x = 0.0f32;
     let mut quads = Vec::new();
 
-    for ch in text.chars() {
-        if ch == ' ' {
-            cursor_x += face.word_spacing();
-            continue;
-        }
+    // Same token walk as `tessellate_text_run` (LFF branch): DXF `%%` specials
+    // resolve to glyphs, spaces/missing advance the pen, decoration toggles emit
+    // no glyph (they render as lines on the stroke path).
+    for tok in crate::scene::text::lff::tokenize_run(text) {
+        let ch = match tok {
+            crate::scene::text::lff::Tok::Glyph(c) => c,
+            crate::scene::text::lff::Tok::Space => {
+                cursor_x += face.word_spacing();
+                continue;
+            }
+            crate::scene::text::lff::Tok::Missing => {
+                cursor_x += 6.0 + face.letter_spacing() * tracking;
+                continue;
+            }
+            crate::scene::text::lff::Tok::Deco(..) => continue,
+        };
         match atlas.get_or_insert(font_name, ch) {
             Some(e) => {
                 let (lo, hi) = (e.plane_min, e.plane_max);
@@ -91,8 +102,7 @@ pub fn layout_glyph_quads(
                 cursor_x += e.advance + face.letter_spacing() * tracking;
             }
             None => {
-                // No ink (whitespace glyph) or atlas full: advance only, using
-                // the glyph's own advance when the font knows it.
+                // No ink (whitespace glyph) or atlas full: advance only.
                 let adv = face.glyph(ch).map(|g| g.advance).unwrap_or(6.0);
                 cursor_x += adv + face.letter_spacing() * tracking;
             }

@@ -19,6 +19,25 @@ pub struct TextStroke {
     pub origin: [f64; 2],
     pub color: Option<[f32; 3]>,
     pub fill_tris: Vec<[f32; 2]>,
+    /// Layout inputs to rebuild this run as per-glyph SDF quads (see
+    /// `scene::text::glyph_quads`). `Some` on runs wired for the SDF text
+    /// renderer; `None` leaves the run to the stroke path only. Heights are
+    /// raw (pre annotation-scale), matching `strokes` — the SDF collector
+    /// applies annotation scale the same way `tessellate` does for strokes.
+    pub run: Option<GlyphRun>,
+}
+
+/// Per-run text-layout inputs needed to reproduce a run as SDF glyph quads.
+#[derive(Clone, Debug)]
+pub struct GlyphRun {
+    pub text: String,
+    pub font: String,
+    /// Raw height in drawing units (annotation scale applied later).
+    pub height: f32,
+    pub rotation: f32,
+    pub width_factor: f32,
+    pub oblique: f32,
+    pub tracking: f32,
 }
 
 #[allow(dead_code)]

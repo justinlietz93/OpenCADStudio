@@ -6,7 +6,7 @@ use crate::entities::text_support::{
     resolve_dxf_special_chars, resolve_text_style, text_local_bounds,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
-use crate::scene::convert::acad_to_truck::{TextStroke, TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{GlyphRun, TextStroke, TruckEntity, TruckObject};
 use crate::scene::text::lff;
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
@@ -66,9 +66,41 @@ pub struct TextPlacement {
     pub wcs_insertion: [f64; 3],
 }
 
+/// Parse a TEXT value's `%%` control codes through acadrust's `parse_plain_text`
+/// (the same parser MTEXT uses), then re-encode into the stroke tessellator's
+/// inline grammar: specials arrive resolved to Unicode, and `%%u`/`%%o`
+/// underline/overline become `\L…\l` / `\O…\o` decoration markers. This keeps
+/// TEXT parsing in acadrust rather than OCS's own tokenizer.
+fn acad_text_encode(value: &str) -> String {
+    use acadrust::entities::mtext_format::parse_plain_text;
+    let doc = parse_plain_text(value);
+    let mut out = String::new();
+    for para in &doc.paragraphs {
+        for span in &para.spans {
+            let (u, o) = (span.properties.underline(), span.properties.overline());
+            if u {
+                out.push_str("\\L");
+            }
+            if o {
+                out.push_str("\\O");
+            }
+            out.push_str(&span.text);
+            if o {
+                out.push_str("\\o");
+            }
+            if u {
+                out.push_str("\\l");
+            }
+        }
+    }
+    out
+}
+
 fn to_truck(t: &Text, document: &acadrust::CadDocument) -> TruckEntity {
     let p = text_run_placement(t, document);
     let snap_pt = glam::DVec3::new(p.wcs_insertion[0], p.wcs_insertion[1], p.wcs_insertion[2]);
+    // Parse `%%` codes via acadrust, re-encoded for the stroke tessellator.
+    let value = acad_text_encode(&p.value);
     // Strokes are in glyph-local space (origin = [0,0]).
     let (strokes, fill_tris) = lff::tessellate_text_ex(
         [0.0, 0.0],
@@ -77,7 +109,7 @@ fn to_truck(t: &Text, document: &acadrust::CadDocument) -> TruckEntity {
         p.width_factor,
         p.oblique_angle,
         &p.font,
-        &p.value,
+        &value,
     );
     TruckEntity {
         object: TruckObject::Text(vec![TextStroke {
@@ -85,6 +117,15 @@ fn to_truck(t: &Text, document: &acadrust::CadDocument) -> TruckEntity {
             origin: p.origin,
             color: None,
             fill_tris,
+            run: Some(GlyphRun {
+                text: value,
+                font: p.font.clone(),
+                height: p.height,
+                rotation: p.rotation,
+                width_factor: p.width_factor,
+                oblique: p.oblique_angle,
+                tracking: 1.0,
+            }),
         }]),
         snap_pts: vec![(snap_pt, SnapHint::Insertion)],
         tangent_geoms: vec![],

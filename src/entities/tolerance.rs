@@ -249,6 +249,7 @@ impl TruckConvertible for Tolerance {
                 origin,
                 color: None,
                 fill_tris: vec![],
+                run: None,
             }]),
             snap_pts: vec![(snap_pt, SnapHint::Insertion)],
             tangent_geoms: vec![],

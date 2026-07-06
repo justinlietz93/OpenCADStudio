@@ -193,7 +193,7 @@ pub fn get_font(name: &str) -> &'static Font {
 
 /// Decoration line a token toggles.
 #[derive(Clone, Copy)]
-enum Deco {
+pub(crate) enum Deco {
     Under,
     Over,
     Strike,
@@ -202,7 +202,7 @@ enum Deco {
 /// How a decoration token changes state. `\L`/`\O`/`\K` turn on (idempotent),
 /// `\l`/`\o`/`\k` turn off; `%%u`/`%%o` flip.
 #[derive(Clone, Copy)]
-enum Op {
+pub(crate) enum Op {
     On,
     Off,
     Toggle,
@@ -211,7 +211,7 @@ enum Op {
 /// One unit of a text run after inline-code resolution. Shared by the stroke
 /// (LFF) and shaped (TTF) renderers so both interpret the DXF inline grammar
 /// — `\L…\l` decorations and `%%` specials — identically.
-enum Tok {
+pub(crate) enum Tok {
     /// A renderable character (DXF `%%d`/`%%p`/`%%c`/`%%nnn` already resolved).
     Glyph(char),
     /// A literal space.
@@ -225,7 +225,7 @@ enum Tok {
 
 /// Resolve a run's inline codes into a flat token stream. Mirrors the original
 /// inline parser in `tessellate_text_run` exactly (verified by the golden test).
-fn tokenize_run(text: &str) -> Vec<Tok> {
+pub(crate) fn tokenize_run(text: &str) -> Vec<Tok> {
     let mut toks = Vec::new();
     let mut chars = text.chars().peekable();
     while let Some(ch) = chars.next() {
