@@ -492,10 +492,8 @@ pub fn tessellate_table(
 
     // Accumulators keyed by quantised colour (+ weight for borders).
     let mut fills: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>)> = HashMap::default();
-    let mut texts: HashMap<[u8; 4], ([f32; 4], Vec<[f32; 3]>, Vec<[f32; 3]>)> = HashMap::default();
     // SDF cell text: glyph quads (per-vertex coloured) collected across all
-    // cells; emitted as one text-carrying wire at the end. Empty when SDF off.
-    let sdf_on = crate::scene::text::sdf_atlas::sdf_text_enabled();
+    // cells; emitted as one text-carrying wire at the end.
     let mut text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
     let mut borders: HashMap<([u8; 4], u32), ([f32; 4], f32, Vec<[f32; 3]>)> = HashMap::default();
     let mut emitted: rustc_hash::FxHashSet<(i32, i32, i32, i32)> = rustc_hash::FxHashSet::default();
@@ -713,55 +711,29 @@ pub fn tessellate_table(
             } else {
                 entity_color
             };
-            if sdf_on {
-                // SDF: glyph quads per run at its placed origin (rotation baked
-                // in by layout_glyph_quads), coloured by the cell's text colour.
-                if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
-                    for ts in &layout.strokes {
-                        let Some(run) = &ts.run else { continue };
-                        let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
-                            &mut atlas,
-                            run.height,
-                            run.rotation,
-                            run.width_factor,
-                            run.oblique,
-                            run.tracking,
-                            &run.font,
-                            &run.text,
-                        );
-                        crate::scene::pipeline::text_gpu::push_glyph_vertices(
-                            &mut text_verts,
-                            &quads,
-                            [ts.origin[0], ts.origin[1], to.z as f64],
-                            1.0,
-                            tcol,
-                            0.0,
-                        );
-                    }
-                }
-            } else {
-                let entry = texts
-                    .entry(key4(tcol))
-                    .or_insert_with(|| (tcol, Vec::new(), Vec::new()));
-                let buf = &mut entry.1;
-                let tris_buf = &mut entry.2;
+            // SDF glyph quads per run at its placed origin (rotation baked in by
+            // layout_glyph_quads), coloured by the cell's text colour.
+            if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
                 for ts in &layout.strokes {
-                    let sx = ts.origin[0] as f32;
-                    let sy = ts.origin[1] as f32;
-                    for stroke in &ts.strokes {
-                        if stroke.len() < 2 {
-                            continue;
-                        }
-                        if !buf.is_empty() {
-                            buf.push([f32::NAN; 3]);
-                        }
-                        for &[x, y] in stroke {
-                            buf.push([x + sx, y + sy, (to.z as f64) as f32]);
-                        }
-                    }
-                    for &[x, y] in &ts.fill_tris {
-                        tris_buf.push([x + sx, y + sy, (to.z as f64) as f32]);
-                    }
+                    let Some(run) = &ts.run else { continue };
+                    let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
+                        &mut atlas,
+                        run.height,
+                        run.rotation,
+                        run.width_factor,
+                        run.oblique,
+                        run.tracking,
+                        &run.font,
+                        &run.text,
+                    );
+                    crate::scene::pipeline::text_gpu::push_glyph_vertices(
+                        &mut text_verts,
+                        &quads,
+                        [ts.origin[0], ts.origin[1], to.z as f64],
+                        1.0,
+                        tcol,
+                        0.0,
+                    );
                 }
             }
         }
@@ -807,14 +779,6 @@ pub fn tessellate_table(
     for (_, (color, lw, pts)) in borders {
         if !pts.is_empty() {
             out.push(mk(color, pts, vec![], lw));
-        }
-    }
-    for (_, (color, pts, tris)) in texts {
-        if !pts.is_empty() {
-            out.push(mk(color, pts, vec![], line_weight_px));
-        }
-        if !tris.is_empty() {
-            out.push(mk(color, vec![], tris, line_weight_px));
         }
     }
     // SDF cell text: one wire carrying the glyph quads (per-vertex coloured) +

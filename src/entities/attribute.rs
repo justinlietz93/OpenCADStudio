@@ -11,7 +11,7 @@ use crate::entities::text_support::{
     MTextRenderOpts, MTextVAnchor, ResolvedTextStyle,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
-use crate::scene::convert::acad_to_truck::{TextStroke, TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{GlyphRun, TextStroke, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
 use crate::scene::text::lff;
@@ -295,7 +295,18 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             origin,
             color: None,
             fill_tris,
-            run: None,
+            // Carry a GlyphRun so the attribute renders as SDF glyph quads
+            // (same as TEXT); the strokes above are the historical fallback and
+            // are suppressed by the per-group SDF path.
+            run: Some(GlyphRun {
+                text: encoded,
+                font: resolved.font_name.clone(),
+                height: input.height as f32,
+                rotation,
+                width_factor,
+                oblique: oblique_angle,
+                tracking: 1.0,
+            }),
         });
     }
     let _ = input.line_count; // round-trip only — recomputed above

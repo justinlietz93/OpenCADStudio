@@ -69,10 +69,8 @@ pub fn apply_along(
 
     let mut strokes: Vec<Vec<[f32; 3]>> = Vec::new();
     let mut cur_stroke: Vec<[f32; 3]> = Vec::new();
-    // When SDF text is on, embedded linetype text (LtSeg::Text) renders as glyph
-    // quads collected here instead of stroke polylines; emitted as one extra
-    // text-carrying WireModel at the end.
-    let sdf_on = crate::scene::text::sdf_atlas::sdf_text_enabled();
+    // Embedded linetype text (LtSeg::Text) renders as SDF glyph quads collected
+    // here; emitted as one extra text-carrying WireModel at the end.
     let mut text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
 
     let mut elem_idx: usize = 0;
@@ -180,46 +178,27 @@ pub fn apply_along(
                     let insert = offset_pt(insert, fwd, perp, *x, *y);
                     let fwd_angle = fwd[1].atan2(fwd[0]) + rot_deg.to_radians();
                     let resolved = resolve_dxf_special_chars(text);
-                    if sdf_on {
-                        // SDF: glyph quads at the insert point (rotation baked in
-                        // by layout_glyph_quads), collected for the text wire.
-                        if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
-                            let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
-                                &mut atlas,
-                                *tx_scale,
-                                fwd_angle,
-                                1.0,
-                                0.0,
-                                0.0,
-                                style,
-                                &resolved,
-                            );
-                            crate::scene::pipeline::text_gpu::push_glyph_vertices(
-                                &mut text_verts,
-                                &quads,
-                                [insert[0] as f64, insert[1] as f64, insert[2] as f64],
-                                1.0,
-                                color,
-                                0.0,
-                            );
-                        }
-                    } else {
-                        let (text_strokes, _) = lff::tessellate_text_ex(
-                            [insert[0], insert[1]],
+                    // SDF: glyph quads at the insert point (rotation baked in by
+                    // layout_glyph_quads), collected for the text wire.
+                    if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
+                        let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
+                            &mut atlas,
                             *tx_scale,
                             fwd_angle,
                             1.0,
                             0.0,
+                            0.0,
                             style,
                             &resolved,
                         );
-                        for stroke in &text_strokes {
-                            if stroke.len() >= 2 {
-                                let pts: Vec<[f32; 3]> =
-                                    stroke.iter().map(|&[sx, sy]| [sx, sy, insert[2]]).collect();
-                                strokes.push(pts);
-                            }
-                        }
+                        crate::scene::pipeline::text_gpu::push_glyph_vertices(
+                            &mut text_verts,
+                            &quads,
+                            [insert[0] as f64, insert[1] as f64, insert[2] as f64],
+                            1.0,
+                            color,
+                            0.0,
+                        );
                     }
 
                     elem_idx += 1;

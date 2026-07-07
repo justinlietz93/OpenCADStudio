@@ -76,16 +76,6 @@ pub struct LocalWire {
     /// expand-time: transform corners by the Insert transform → world AABB
     /// → test against the camera's world-space view rect.
     pub aabb_local: [f32; 4],
-    /// For Text / MText subs: the entity's anno-scaled glyph height in
-    /// local units. Lets `emit_wire` apply the same LOD ladder used for
-    /// top-level text (cull / greek / full) to text that's been baked into
-    /// a block defn. `None` for non-text entities.
-    pub text_height_local: Option<f32>,
-    /// For Text / MText subs: the 4 OBB corners in block-local coords
-    /// (rotation, anchor offsets and width-approximation already applied).
-    /// Emitted at greek time so the rect matches the text's orientation
-    /// instead of falling back to the axis-aligned bbox.
-    pub text_obb_local: Option<[[f64; 3]; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -435,35 +425,6 @@ fn tessellate_sub_local(
         return vec![];
     }
 
-    // With SDF text on, block-internal TEXT/MTEXT renders as glyph quads
-    // (carried on the wire's `text_verts`), so skip the greek/baseline LOD
-    // ladder — leaving `text_height_local` None routes the sub to `emit_wire`,
-    // which transforms and emits those quads.
-    let text_height_local: Option<f32> = if crate::scene::text::sdf_atlas::sdf_text_enabled() {
-        None
-    } else {
-        match sub {
-            EntityType::Text(t) => Some((t.height * anno_scale as f64) as f32),
-            EntityType::MText(m) => Some((m.height * anno_scale as f64) as f32),
-            _ => None,
-        }
-    };
-
-    // Pre-compute the OBB corners (absolute f64) for Text / MText so the greek
-    // path can emit a rect that matches the entity's rotation instead of
-    // falling back to the axis-aligned `aabb_local`. Kept in f64 so it stays
-    // precise at UTM scale (the emit path splits to double-single). For MText
-    // the OBB height is built from the wrap-expanded line count so
-    // emit_greeked_text can split it into per-line rows.
-    let mtext_lines = match sub {
-        EntityType::MText(m) => Some(
-            crate::entities::text_support::mtext_line_count(m, doc, anno_scale),
-        ),
-        _ => None,
-    };
-    let text_obb_local: Option<[[f64; 3]; 4]> =
-        crate::entities::text_support::text_obb_corners_native(sub, anno_scale, mtext_lines);
-
     let mut result = Vec::with_capacity(wires_out.len());
     for wire in wires_out {
         // Per-wire point-count cap: a single wire that exceeds this is skipped
@@ -475,8 +436,15 @@ fn tessellate_sub_local(
 
         // Geometry is stored absolute; the double-single (high/low) render path
         // keeps it precise at UTM scale, so no per-defn offset is subtracted.
+        // SDF text wires have no points/fills — fold in the glyph-quad positions
+        // so the view-frustum cull uses the text's real box, not a degenerate
+        // point at the block origin (which would drop the text entirely).
         let aabb_local = aabb_from_points_iter(
-            wire.points.iter().copied().chain(wire.fill_tris.iter().copied()),
+            wire.points
+                .iter()
+                .copied()
+                .chain(wire.fill_tris.iter().copied())
+                .chain(wire.text_verts.iter().map(|v| v.pos)),
         );
         let is_fill_only = wire.points.is_empty() && !wire.fill_tris.is_empty();
 
@@ -503,8 +471,6 @@ fn tessellate_sub_local(
             lt_l0,
             lw_l0,
             aabb_local,
-            text_height_local,
-            text_obb_local,
         });
     }
     result
@@ -676,230 +642,6 @@ pub fn expand_insert(
         expand_defn(defn, &base_xform, &ctx, &mut batches, &mut visited, 0);
     }
     Some(batches.finalize(&name, selected, bg_color))
-}
-
-/// Emit a greeked filled rect (2 triangles) for a text LocalWire. Stays in
-/// the text's own color — the face3d pipeline skips its 0.45 dim for wires
-/// whose `points` are empty, so the rect lands at full intensity. Clamped
-/// to a single line's height so multi-line MText doesn't blow the box up
-/// to the full block. Mirrors `text_greek_obb_tris` in scene/mod.rs.
-/// Falls back to the axis-aligned `local_aabb` when no OBB was cached;
-/// xref fade still applies via the shared color resolution.
-fn emit_greeked_text(
-    lw: &LocalWire,
-    local_aabb: [f32; 4],
-    accum_xform: &Transform,
-    ctx: &ExpandCtx,
-    out: &mut Batches,
-) {
-    // Transform absolute f64 corners and keep the result in f64 so the
-    // per-vertex double-single split below stays precise at UTM-scale coords.
-    let xf = |p: [f64; 3]| -> [f64; 3] {
-        let w = accum_xform.apply(Vector3::new(p[0], p[1], p[2]));
-        [w.x, w.y, w.z]
-    };
-
-    // Per-line rects: split the OBB by `h_local` so each visible wrap
-    // line gets its own box. Falls back to the axis-aligned AABB when no
-    // OBB / height was cached.
-    let tris: Vec<[f64; 3]> = if let (Some(obb), Some(h_local)) =
-        (lw.text_obb_local, lw.text_height_local)
-    {
-        if h_local <= 0.0 {
-            return;
-        }
-        let h = h_local as f64;
-        let (ux, uy, uz) = (
-            obb[3][0] - obb[0][0],
-            obb[3][1] - obb[0][1],
-            obb[3][2] - obb[0][2],
-        );
-        let ulen = (ux * ux + uy * uy + uz * uz).sqrt();
-        if ulen < 1e-9 {
-            return;
-        }
-        let n_lines = ((ulen / h).round() as usize).max(1);
-        let (nx, ny, nz) = (ux / ulen, uy / ulen, uz / ulen);
-        let bl_local = obb[0];
-        let br_local = obb[1];
-        let mut acc = Vec::with_capacity(n_lines * 6);
-        for i in 0..n_lines {
-            let top_along = (ulen - (i as f64) * h).max(0.0);
-            let bot_along = (ulen - ((i + 1) as f64) * h).max(0.0);
-            let tl = xf([
-                bl_local[0] + nx * top_along,
-                bl_local[1] + ny * top_along,
-                bl_local[2] + nz * top_along,
-            ]);
-            let tr = xf([
-                br_local[0] + nx * top_along,
-                br_local[1] + ny * top_along,
-                br_local[2] + nz * top_along,
-            ]);
-            let bl = xf([
-                bl_local[0] + nx * bot_along,
-                bl_local[1] + ny * bot_along,
-                bl_local[2] + nz * bot_along,
-            ]);
-            let br = xf([
-                br_local[0] + nx * bot_along,
-                br_local[1] + ny * bot_along,
-                br_local[2] + nz * bot_along,
-            ]);
-            acc.extend_from_slice(&[bl, br, tr, bl, tr, tl]);
-        }
-        acc
-    } else {
-        let [x0, y0, x1, y1] = local_aabb;
-        let bl = xf([x0 as f64, y0 as f64, 0.0]);
-        let br = xf([x1 as f64, y0 as f64, 0.0]);
-        let tr = xf([x1 as f64, y1 as f64, 0.0]);
-        let tl = xf([x0 as f64, y1 as f64, 0.0]);
-        vec![bl, br, tr, bl, tr, tl]
-    };
-    if tris.is_empty() {
-        return;
-    }
-
-    let final_color = resolve_wire_color(lw, ctx);
-
-    let key = style_key(final_color, 0.0, [0.0; 8], 1.0, lw.aci, true, true);
-    let entry = out
-        .by_style
-        .entry(key)
-        .or_insert_with(|| BatchEntry::new(final_color, 0.0, [0.0; 8], 1.0, lw.aci, true, true));
-
-    for p in tris {
-        let (hx, lx) = WireModel::split_ds(p[0]);
-        let (hy, ly) = WireModel::split_ds(p[1]);
-        let (hz, lz) = WireModel::split_ds(p[2]);
-        if hx < entry.min_x {
-            entry.min_x = hx;
-        }
-        if hy < entry.min_y {
-            entry.min_y = hy;
-        }
-        if hx > entry.max_x {
-            entry.max_x = hx;
-        }
-        if hy > entry.max_y {
-            entry.max_y = hy;
-        }
-        entry.fill_tris.push([hx, hy, hz]);
-        entry.fill_tris_low.push([lx, ly, lz]);
-    }
-}
-
-/// Emit a 2-point baseline line for a sub-pixel text LocalWire — same color
-/// resolution as `emit_wire`, but the wire's stored glyph points are
-/// replaced with the OBB's baseline edge (`obb[0] → obb[1]`). Falls back to
-/// a no-op when no OBB is cached (rotation/attachment unknown).
-fn emit_text_baseline(
-    lw: &LocalWire,
-    accum_xform: &Transform,
-    ctx: &ExpandCtx,
-    out: &mut Batches,
-    wpp: f32,
-) {
-    let Some(obb) = lw.text_obb_local else {
-        return;
-    };
-    let Some(h_local) = lw.text_height_local else {
-        return;
-    };
-    if h_local <= 0.0 {
-        return;
-    }
-    let xf = |p: [f64; 3]| -> [f64; 3] {
-        let w = accum_xform.apply(Vector3::new(p[0], p[1], p[2]));
-        [w.x, w.y, w.z]
-    };
-
-    // Single line: just obb[0] → obb[1]. Skip when the projected length
-    // falls under 2 px (single-char text seen edge-on). All wrap lines
-    // share the same baseline length, so checking once is enough.
-    let p0_world = xf(obb[0]);
-    let p1_world = xf(obb[1]);
-    let dx = p1_world[0] - p0_world[0];
-    let dy = p1_world[1] - p0_world[1];
-    let len_px = (dx * dx + dy * dy).sqrt() / wpp as f64;
-    if len_px < 2.0 {
-        return;
-    }
-
-    // Compute the per-line baseline endpoints in *local* frame, then
-    // transform — keeps precision for distant text and matches the
-    // greek/baseline math used by the rect path.
-    let (ux, uy, uz) = (
-        obb[3][0] - obb[0][0],
-        obb[3][1] - obb[0][1],
-        obb[3][2] - obb[0][2],
-    );
-    let ulen = (ux * ux + uy * uy + uz * uz).sqrt();
-    let n_lines = if ulen < 1e-9 {
-        1
-    } else {
-        ((ulen / h_local as f64).round() as usize).max(1)
-    };
-    let (nx, ny, nz) = if ulen < 1e-9 {
-        (0.0, 0.0, 0.0)
-    } else {
-        (ux / ulen, uy / ulen, uz / ulen)
-    };
-
-    let final_color = resolve_wire_color(lw, ctx);
-
-    let key = style_key(final_color, 0.0, [0.0; 8], 1.0, lw.aci, true, false);
-    let entry = out
-        .by_style
-        .entry(key)
-        .or_insert_with(|| BatchEntry::new(final_color, 0.0, [0.0; 8], 1.0, lw.aci, true, false));
-
-    let bl_local = obb[0];
-    let br_local = obb[1];
-    for i in 0..n_lines {
-        let along = if ulen < 1e-9 {
-            0.0
-        } else {
-            (ulen - ((i + 1) as f64) * h_local as f64).max(0.0)
-        };
-        let p0 = xf([
-            bl_local[0] + nx * along,
-            bl_local[1] + ny * along,
-            bl_local[2] + nz * along,
-        ]);
-        let p1 = xf([
-            br_local[0] + nx * along,
-            br_local[1] + ny * along,
-            br_local[2] + nz * along,
-        ]);
-
-        let needs_sep = !entry.points.is_empty()
-            && !entry.points.last().map(|p| p[0].is_nan()).unwrap_or(false);
-        if needs_sep {
-            entry.points.push([f32::NAN; 3]);
-            entry.points_low.push([0.0; 3]);
-        }
-        for q in [p0, p1] {
-            let (hx, lx) = WireModel::split_ds(q[0]);
-            let (hy, ly) = WireModel::split_ds(q[1]);
-            let (hz, lz) = WireModel::split_ds(q[2]);
-            if hx < entry.min_x {
-                entry.min_x = hx;
-            }
-            if hy < entry.min_y {
-                entry.min_y = hy;
-            }
-            if hx > entry.max_x {
-                entry.max_x = hx;
-            }
-            if hy > entry.max_y {
-                entry.max_y = hy;
-            }
-            entry.points.push([hx, hy, hz]);
-            entry.points_low.push([lx, ly, lz]);
-        }
-    }
 }
 
 fn aabb_pixel_size(local_aabb: [f32; 4], world_per_pixel: f32) -> f32 {
@@ -1135,12 +877,6 @@ fn expand_defn(
         eprintln!("block_cache: nested-block depth > {MAX_NESTING_DEPTH}, truncating");
         return;
     }
-    // Track the last text OBB that received a LOD substitute (baseline line
-    // or greeked box). Colour-split MTEXT produces one outline wire per
-    // \C/\c segment; only the first outline from a source entity should
-    // emit the substitute — subsequent segments use the same full-document
-    // OBB and would draw overlapping rectangles with the wrong colour.
-    let mut last_lod_obb: Option<[[f64; 3]; 4]> = None;
     for sub in &defn.subs {
         match sub {
             LocalSub::Wire(lw) => {
@@ -1160,65 +896,12 @@ fn expand_defn(
                     }
                 }
                 if let Some(wpp) = ctx.world_per_pixel {
-                    // Text/MText follows its own ladder below (baseline-line
-                    // / greek / full) — must reach it even when the wire's
-                    // AABB falls under MIN_PIXEL_SIZE.
-                    let is_text = lw.text_height_local.is_some();
+                    // SDF text wires carry glyph quads but no points; they
+                    // render at every zoom (no text LOD), so exempt them from
+                    // the sub-pixel cull that drops tiny stroke / fill geometry.
+                    let is_text = !lw.text_verts.is_empty();
                     if !is_text && aabb_pixel_size(local, wpp) < MIN_PIXEL_SIZE {
                         continue;
-                    }
-                    // Text LOD ladder: text inside a block follows the same
-                    // 1 / 5 px baseline/greek/full rules as top-level text.
-                    // We apply the Insert's transform scale to the stored
-                    // local glyph height to get the screen height.
-                    if let Some(h_local) = lw.text_height_local {
-                        let m = &accum_xform.matrix.m;
-                        let sy = ((m[1][0] * m[1][0]
-                            + m[1][1] * m[1][1]
-                            + m[1][2] * m[1][2]) as f64)
-                            .sqrt() as f32;
-                        let h_world = h_local * sy;
-                        let h_px = h_world / wpp;
-                        if lw.is_fill_only {
-                            // Fill-only wire: suppress at text LOD thresholds.
-                            // The outline sibling carries the LOD substitute
-                            // (baseline line or greeked box). Emitting every
-                            // glyph triangle at sub-pixel zoom defeats the
-                            // purpose of the LOD ladder.
-                            if h_px < 5.0 {
-                                continue;
-                            }
-                        } else {
-                            if h_px < 1.0 {
-                                // Colour-split MTEXT: only the first outline
-                                // wire from a source entity emits the baseline
-                                // substitute. Siblings share the same
-                                // text_obb_local and would stack identical
-                                // overlapping lines (last colour wins) — the
-                                // same dedup the greek branch does, one tier
-                                // down.
-                                if lw.text_obb_local == last_lod_obb {
-                                    continue;
-                                }
-                                last_lod_obb = lw.text_obb_local;
-                                emit_text_baseline(lw, accum_xform, ctx, out, wpp);
-                                continue;
-                            }
-                            if h_px < 5.0 {
-                                // Colour-split MTEXT: only the first outline
-                                // wire from a source entity emits the greek
-                                // substitute. Subsequent segments share the
-                                // same text_obb_local and would draw
-                                // overlapping rectangles with the wrong
-                                // (last-wins) colour.
-                                if lw.text_obb_local == last_lod_obb {
-                                    continue;
-                                }
-                                last_lod_obb = lw.text_obb_local;
-                                emit_greeked_text(lw, local, accum_xform, ctx, out);
-                                continue;
-                            }
-                        }
                     }
                 }
                 emit_wire(lw, accum_xform, ctx, out);

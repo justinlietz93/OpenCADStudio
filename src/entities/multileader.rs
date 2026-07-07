@@ -1084,7 +1084,7 @@ impl MultiLeaderTess for MultiLeader {
         entity_color: [f32; 4],
         line_weight_px: f32,
         anno_scale: f32,
-        world_per_pixel: Option<f32>,
+        _world_per_pixel: Option<f32>,
         bg_color: [f32; 4],
     ) -> Vec<crate::scene::model::wire_model::WireModel> {
         use crate::scene::convert::tessellate::{
@@ -1508,28 +1508,7 @@ impl MultiLeaderTess for MultiLeader {
                 color_or_inherit(&ctx.text_color, entity_color)
             };
 
-            // Same LOD ladder used for top-level Text / MText (see scene/mod.rs):
-            //   h_px < 1   → baseline line (skip glyphs)
-            //   1 ≤ h < 5  → greeked rect in text color (skip glyphs)
-            //   h_px ≥ 5   → full per-glyph stroke tessellation
-            let lod_h_px = world_per_pixel.map(|wpp| height / wpp);
-            let lod_mode = match lod_h_px {
-                Some(h) if h < 1.0 => 0,
-                Some(h) if h < 5.0 => 1,
-                _ => 2,
-            };
-
-            // Helper: map a (local_x, local_y) in the text's pre-rotation frame
-            // (origin at the insertion point) into WCS render space.
-            let to_wcs = |lx: f32, ly: f32| -> [f32; 3] {
-                [
-                    local_ins_x + lx * cos_r - ly * sin_r,
-                    local_ins_y + lx * sin_r + ly * cos_r,
-                    z,
-                ]
-            };
-
-            if crate::scene::text::sdf_atlas::sdf_text_enabled() {
+            {
                 // SDF text: emit glyph quads instead of strokes (crisp at every
                 // zoom, so no baseline/greek LOD). `layout_mtext` already placed
                 // each run at its final position/rotation with a `GlyphRun`, so
@@ -1594,169 +1573,6 @@ impl MultiLeaderTess for MultiLeader {
                         plinegen: true,
                         vp_scissor: None,
                         fill_tris: vec![],
-                        fill_tris_low: Vec::new(),
-                    });
-                }
-            } else if lod_mode == 0 {
-                // Baseline of the top line only.
-                let line_w = line_widths.first().copied().unwrap_or(0.0);
-                let len_px = world_per_pixel
-                    .map(|wpp| line_w / wpp)
-                    .unwrap_or(f32::INFINITY);
-                if len_px >= 2.0 {
-                    let line_y_local = v_offset;
-                    let p0 = to_wcs(-line_w * h_anchor, line_y_local);
-                    let p1 = to_wcs(line_w * (1.0 - h_anchor), line_y_local);
-                    wires.push(WireModel {
-            text_verts: Vec::new(),
-                        name: name.clone(),
-                        points: vec![p0, p1],
-                        points_low: Vec::new(),
-                        color: text_color,
-                        selected,
-                        aci: 0,
-                        pattern_length: 0.0,
-                        pattern: [0.0; 8],
-                        line_weight_px,
-                        snap_pts: vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)],
-                        tangent_geoms: vec![],
-                        key_vertices: vec![],
-                        aabb: WireModel::UNBOUNDED_AABB,
-                        plinegen: true,
-                        vp_scissor: None,
-                        fill_tris: vec![],
-                        fill_tris_low: Vec::new(),
-                    });
-                }
-            } else if lod_mode == 1 {
-                // One filled rect per line — keeps the visual "text lives here
-                // per row" hint that multi-line MText carries, in the text's
-                // own color. Empty `points` opts out of the face3d 0.45 dim so
-                // the fill renders at full intensity.
-                let mut greek_tris: Vec<[f32; 3]> = Vec::with_capacity(line_widths.len() * 6);
-                for (i, &line_w) in line_widths.iter().enumerate() {
-                    let li = i as f32;
-                    let line_y_bottom = -li * line_h + v_offset;
-                    let line_y_top = line_y_bottom + height;
-                    if line_w <= 0.0 {
-                        continue;
-                    }
-                    let left = -line_w * h_anchor;
-                    let right = line_w * (1.0 - h_anchor);
-                    let bl = to_wcs(left, line_y_bottom);
-                    let br = to_wcs(right, line_y_bottom);
-                    let tr = to_wcs(right, line_y_top);
-                    let tl = to_wcs(left, line_y_top);
-                    greek_tris.extend_from_slice(&[bl, br, tr, bl, tr, tl]);
-                }
-                if !greek_tris.is_empty() {
-                    wires.push(WireModel {
-            text_verts: Vec::new(),
-                        name: name.clone(),
-                        points: vec![],
-                        points_low: Vec::new(),
-                        color: text_color,
-                        selected,
-                        aci: 0,
-                        pattern_length: 0.0,
-                        pattern: [0.0; 8],
-                        line_weight_px: 1.0,
-                        snap_pts: vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)],
-                        tangent_geoms: vec![],
-                        key_vertices: vec![],
-                        aabb: WireModel::UNBOUNDED_AABB,
-                        plinegen: true,
-                        vp_scissor: None,
-                        fill_tris: greek_tris,
-                        // fill_tris_low intentionally empty: this fill renders on
-                        // the top-level path, where consumers treat a short low
-                        // half as all-zero, so it draws at f32 precision (sub-
-                        // metre error at UTM scale) — not a crash. Follow-up:
-                        // double-single-split via points_to_ds to match emit_wire.
-                        fill_tris_low: Vec::new(),
-                    });
-                }
-            } else {
-                // Pre-tessellated by `layout_mtext`. Each TextStroke is in
-                // local glyph space with its world origin (already offset-
-                // relative because we passed local_ins_x/y) stored as f64.
-                let mut text_points: Vec<[f32; 3]> = Vec::new();
-                let mut text_fill_tris: Vec<[f32; 3]> = Vec::new();
-                for ts in &layout.strokes {
-                    let ox = ts.origin[0] as f32;
-                    let oy = ts.origin[1] as f32;
-                    for stroke in &ts.strokes {
-                        if stroke.len() < 2 {
-                            continue;
-                        }
-                        text_points.push(nan);
-                        for &[x, y] in stroke {
-                            text_points.push([x + ox, y + oy, z]);
-                        }
-                    }
-                    for &[x, y] in &ts.fill_tris {
-                        text_fill_tris.push([x + ox, y + oy, z]);
-                    }
-                }
-
-                let mut is_first = true;
-                if !text_points.is_empty() {
-                    let snap = if is_first {
-                        is_first = false;
-                        vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)]
-                    } else {
-                        vec![]
-                    };
-                    wires.push(WireModel {
-            text_verts: Vec::new(),
-                        name: name.clone(),
-                        points: text_points,
-                        points_low: Vec::new(),
-                        color: text_color,
-                        selected,
-                        aci: 0,
-                        pattern_length: 0.0,
-                        pattern: [0.0; 8],
-                        line_weight_px,
-                        snap_pts: snap,
-                        tangent_geoms: vec![],
-                        key_vertices: vec![],
-                        aabb: WireModel::UNBOUNDED_AABB,
-                        plinegen: true,
-                        vp_scissor: None,
-                        fill_tris: vec![],
-                        fill_tris_low: Vec::new(),
-                    });
-                }
-                if !text_fill_tris.is_empty() {
-                    let snap = if is_first {
-                        vec![(glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64), SnapHint::Node)]
-                    } else {
-                        vec![]
-                    };
-                    wires.push(WireModel {
-            text_verts: Vec::new(),
-                        name: name.clone(),
-                        points: vec![],
-                        points_low: Vec::new(),
-                        color: text_color,
-                        selected,
-                        aci: 0,
-                        pattern_length: 0.0,
-                        pattern: [0.0; 8],
-                        line_weight_px,
-                        snap_pts: snap,
-                        tangent_geoms: vec![],
-                        key_vertices: vec![],
-                        aabb: WireModel::UNBOUNDED_AABB,
-                        plinegen: true,
-                        vp_scissor: None,
-                        fill_tris: text_fill_tris,
-                        // fill_tris_low intentionally empty: this fill renders on
-                        // the top-level path, where consumers treat a short low
-                        // half as all-zero, so it draws at f32 precision (sub-
-                        // metre error at UTM scale) — not a crash. Follow-up:
-                        // double-single-split via points_to_ds to match emit_wire.
                         fill_tris_low: Vec::new(),
                     });
                 }

@@ -798,9 +798,6 @@ impl Scene {
         wire_content_id: u64,
     ) -> std::sync::Arc<Vec<crate::scene::pipeline::text_gpu::TextVertex>> {
         use std::sync::Arc;
-        if !crate::scene::text::sdf_atlas::sdf_text_enabled() {
-            return Arc::new(Vec::new());
-        }
         {
             let cache = self.sdf_text_cache.borrow();
             if let Some((id, verts)) = cache.as_ref() {

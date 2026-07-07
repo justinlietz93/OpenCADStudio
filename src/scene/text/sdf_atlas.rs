@@ -39,18 +39,9 @@ pub fn text_atlas() -> &'static Mutex<GlyphAtlas> {
     ATLAS.get_or_init(|| Mutex::new(GlyphAtlas::new(1024, 1024)))
 }
 
-/// Whether SDF text rendering is enabled, read once. Default ON — text draws
-/// as SDF glyph quads (crisp at every zoom, no LOD; the wire path suppresses
-/// the glyph strokes and keeps the insertion snap). Set `OCS_TEXT_SDF=0` to
-/// fall back to the legacy stroke path (kill switch for the stroke renderer).
-pub fn sdf_text_enabled() -> bool {
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var("OCS_TEXT_SDF").map_or(true, |v| v != "0"))
-}
-
 /// Debug: when env `OCS_TEXT_BOX` is set, each SDF text run also emits a
 /// rectangle outline around its glyph bounds so the text pick box is visible.
-/// Read once. Only meaningful together with [`sdf_text_enabled`].
+/// Read once.
 pub fn text_box_debug() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("OCS_TEXT_BOX").is_some())

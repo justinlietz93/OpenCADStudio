@@ -93,10 +93,17 @@ pub(crate) fn tessellate_entity(
                         let w_px = (ab[2] - ab[0]).abs();
                         let h_px = (ab[3] - ab[1]).abs();
                         // Keep in sync with `cache::block_cache::MIN_PIXEL_SIZE`.
-                        // Text/MText have their own LOD ladder below
-                        // (baseline-line / greek / full) and must reach it
-                        // even when projected size is sub-5 px.
-                        let is_text = matches!(e, EntityType::Text(_) | EntityType::MText(_));
+                        // Text entities render as SDF glyph quads (crisp at every
+                        // zoom, no LOD), so they must reach the full path even at
+                        // sub-5 px — never substitute the stub.
+                        let is_text = matches!(
+                            e,
+                            EntityType::Text(_)
+                                | EntityType::MText(_)
+                                | EntityType::AttributeDefinition(_)
+                                | EntityType::AttributeEntity(_)
+                                | EntityType::Tolerance(_)
+                        );
                         // Face3D is exempt from the sub-pixel stub: it is trivially
                         // cheap to tessellate (4 corners → 2 tris), so there is no
                         // cost to draw it full at any zoom, and the cube-stub
@@ -618,137 +625,9 @@ pub(crate) fn tessellate_entity(
 
     let aabb = entity_aabb(e);
 
-    // Text-specific LOD ladder, keyed off the entity's glyph height in
-    // pixels (anno-scaled):
-    //   < 1 px  → baseline line in the text's color (text-here hint)
-    //   1–5 px  → greeked OBB rect in the text's color
-    //   ≥ 5 px  → full per-glyph stroke tessellation
-    //
-    // Applies to every entity that is "primarily a piece of text" — Text,
-    // MText, ATTDEF, ATTRIB, Tolerance — so far-out drawings don't pay the
-    // full glyph-tessellation cost. Composite entities (Dimension, Table,
-    // MultiLeader) carry non-text geometry and have their own LOD paths.
-    if let Some(wpp) = world_per_pixel {
-        let text_height: Option<f64> = match e {
-            EntityType::Text(t) => Some(t.height * anno_scale as f64),
-            EntityType::MText(m) => Some(m.height * anno_scale as f64),
-            EntityType::AttributeDefinition(a) => Some(a.height * anno_scale as f64),
-            EntityType::AttributeEntity(a) => Some(a.height * anno_scale as f64),
-            EntityType::Tolerance(t) => {
-                // Tolerance text_height defaults to 0.18 from creation; treat
-                // 0 as missing and fall back to the AutoCAD default so the
-                // pixel check still kicks in for legitimately tiny dimensions.
-                let raw = if t.text_height > 0.0 { t.text_height } else { 2.5 };
-                Some(raw * anno_scale as f64)
-            }
-            _ => None,
-        };
-        // SDF text renders crisply at every zoom, so bypass the baseline/greek
-        // LOD ladder entirely — fall through to the full path, which produces
-        // the SDF glyph quads (carried on the wire) plus a snap-only wire while
-        // SDF is on. Applies to every TEXT/MTEXT, top-level or composite.
-        let sdf_here = crate::scene::text::sdf_atlas::sdf_text_enabled()
-            && matches!(e, EntityType::Text(_) | EntityType::MText(_));
-        let text_height = if sdf_here { None } else { text_height };
-        if let Some(h_world) = text_height {
-            let h_px = (h_world as f32) / wpp;
-            // Wrap-expanded line count for MText (Text = 1).
-            let n_lines = match e {
-                EntityType::MText(m) => {
-                    crate::entities::text_support::mtext_line_count(m, document, anno_scale)
-                }
-                _ => 1,
-            };
-            if h_px < 1.0 {
-                let pts = crate::entities::text_support::text_baseline_points(e, anno_scale, n_lines);
-                if pts.len() < 2 {
-                    return vec![];
-                }
-                // Skip the baseline too if the line itself projects under
-                // 2 px (e.g. a 1-char text seen edge-on). All wrap lines
-                // share the same baseline length, so the first segment is
-                // a representative sample.
-                let dx = pts[1][0] - pts[0][0];
-                let dy = pts[1][1] - pts[0][1];
-                let len_px = (dx * dx + dy * dy).sqrt() / wpp;
-                if len_px < 2.0 {
-                    // Text projects to under 2 px — fall back to the
-                    // generic LOD stub so the entity stays visible /
-                    // selectable. #19. Text is 2-D in the XY plane so
-                    // z_min = z_max = 0 keeps the historical behaviour.
-                    return vec![lod_stub_wire(
-                        h.value().to_string(),
-                        entity_color,
-                        sel,
-                        aci,
-                        aabb,
-                        0.0,
-                        0.0,
-                    )];
-                }
-                return vec![WireModel {
-            text_verts: Vec::new(),
-                    name: h.value().to_string(),
-                    points: pts,
-                    points_low: Vec::new(),
-                    color: entity_color,
-                    selected: sel,
-                    aci,
-                    pattern_length: 0.0,
-                    pattern: [0.0; 8],
-                    line_weight_px: 1.0,
-                    snap_pts: vec![],
-                    tangent_geoms: vec![],
-                    key_vertices: vec![],
-                    aabb,
-                    plinegen: true,
-                    vp_scissor: None,
-                    fill_tris: vec![],
-                    fill_tris_low: Vec::new(),
-                }];
-            }
-            if h_px < 5.0 && aabb != WireModel::UNBOUNDED_AABB {
-                let fill_tris = crate::entities::text_support::text_greek_obb_tris(e, anno_scale, n_lines);
-                if fill_tris.is_empty() {
-                    // Text greek fallback: also 2-D, keep stub at z=0.
-                    return vec![lod_stub_wire(
-                        h.value().to_string(),
-                        entity_color,
-                        sel,
-                        aci,
-                        aabb,
-                        0.0,
-                        0.0,
-                    )];
-                }
-                // Greek text renders via the face3d fill batch, which colours
-                // each tri with `wire.color`. Bake the selected colour in so
-                // a selected text stays highlighted across the LOD boundary.
-                // hit_test's AABB fallback handles window / crossing. #19.
-                let fill_color = if sel { WireModel::SELECTED } else { entity_color };
-                return vec![WireModel {
-            text_verts: Vec::new(),
-                    name: h.value().to_string(),
-                    points: vec![],
-                    points_low: Vec::new(),
-                    color: fill_color,
-                    selected: sel,
-                    aci,
-                    pattern_length: 0.0,
-                    pattern: [0.0; 8],
-                    line_weight_px: 1.0,
-                    snap_pts: vec![],
-                    tangent_geoms: vec![],
-                    key_vertices: vec![],
-                    aabb,
-                    plinegen: true,
-                    vp_scissor: None,
-                    fill_tris,
-                    fill_tris_low: Vec::new(),
-                }];
-            }
-        }
-    }
+    // TEXT / MTEXT / ATTDEF / ATTRIB / Tolerance all render as SDF glyph quads
+    // (crisp at every zoom), so there is no text LOD ladder — they fall through
+    // to the full tessellation path below.
 
     let mut bases = convert::tessellate::tessellate(
         document,

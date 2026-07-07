@@ -53,8 +53,6 @@ pub(crate) fn sync_text_alignment_point(t: &mut Text) {
 pub struct TextPlacement {
     /// Run-local origin (glyph space `[0,0]` maps here), WCS xy, kept f64.
     pub origin: [f64; 2],
-    /// Entity elevation (WCS z).
-    pub elevation: f64,
     pub height: f32,
     pub rotation: f32,
     pub width_factor: f32,
@@ -232,7 +230,6 @@ pub fn text_run_placement(t: &Text, document: &acadrust::CadDocument) -> TextPla
     ];
     TextPlacement {
         origin,
-        elevation: wsz,
         height: t.height as f32,
         rotation,
         width_factor,

@@ -210,8 +210,7 @@ pub fn tessellate(
                 // and text into one Text object (a tolerance frame: box lines =
                 // run-less, cell text = run-groups) keeps the geometry as
                 // strokes and draws only the text as SDF.
-                let sdf_on = crate::scene::text::sdf_atlas::sdf_text_enabled();
-                for group in stroke_groups.iter().filter(|g| !(sdf_on && g.run.is_some())) {
+                for group in stroke_groups.iter().filter(|g| g.run.is_none()) {
                     let lx_v = group.origin[0];
                     let ly_v = group.origin[1];
                     let slx_v = (lx_v - ref_lx_v) * anno + ref_lx_v;
@@ -249,12 +248,12 @@ pub fn tessellate(
                 }
 
                 // ── SDF glyph quads ──────────────────────────────────────
-                // When SDF text is on, build this run's glyph quads here and
-                // carry them on the wire. They ride with the wire through the
-                // tess memo, hit-materialisation and (for block content) the
-                // block-expand transform — no separate document-wide collector.
+                // Build each run's glyph quads here and carry them on the wire.
+                // They ride with the wire through the tess memo, hit-
+                // materialisation and (for block content) the block-expand
+                // transform — no separate document-wide collector.
                 let mut sdf_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
-                if sdf_on {
+                {
                     if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
                         // Selection tints the whole run; otherwise inline `\C`
                         // colours (bin key) win, falling back to entity colour.
@@ -309,7 +308,7 @@ pub fn tessellate(
                 // guards on `text_verts`). Computed here so both the bins-empty
                 // and the bins-non-empty (tolerance box + text) paths can stamp
                 // it on the SDF text wire.
-                let text_aabb = if sdf_on && !sdf_verts.is_empty() {
+                let text_aabb = if !sdf_verts.is_empty() {
                     let (mut nx, mut ny, mut xx, mut xy) =
                         (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
                     for v in &sdf_verts {
@@ -337,7 +336,7 @@ pub fn tessellate(
                     // the drawing-window (canvas) colour, which masks geometry
                     // behind the text like a wipeout. Box = glyph bounds padded
                     // by (background_scale - 1) × text height.
-                    if sdf_on && text_aabb != WireModel::UNBOUNDED_AABB {
+                    if text_aabb != WireModel::UNBOUNDED_AABB {
                         if let EntityType::MText(m) = entity {
                             let has_fill = m.background_fill_flags & 0x03 != 0;
                             let has_frame = m.background_fill_flags & 0x10 != 0;
@@ -429,8 +428,7 @@ pub fn tessellate(
                     // bounds as a separate outline wire so the text box is
                     // visible for testing. The empty text wire below is left
                     // untouched (still the SDF + pick target).
-                    if sdf_on
-                        && !sdf_verts.is_empty()
+                    if !sdf_verts.is_empty()
                         && crate::scene::text::sdf_atlas::text_box_debug()
                     {
                         let [nx, ny, xx, xy] = text_aabb;
