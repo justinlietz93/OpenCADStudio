@@ -1,19 +1,23 @@
 // Phase 4-B — batched hatch shader. All hatches in one draw call;
 // per-instance data fetched from storage buffers indexed by the
 // `instance_index` vertex attribute (passed from the per-vertex
-// (corner, instance_index) stream so we don't depend on
-// @builtin(instance_index) edge cases across backends).
+// (local_xy, instance_index) stream of tessellated boundary-triangle
+// positions so we don't depend on @builtin(instance_index) edge cases
+// across backends).
 //
 // Layout — matches `hatch_batched_gpu.rs`:
-//   group 1 binding 0  InstanceBuffer  HatchInstance[]   (112 B / inst)
+//   group 1 binding 0  InstanceBuffer  HatchInstance[]   (128 B / inst)
 //   group 1 binding 1  BoundaryBuffer  vec4<f32>[]       (xy in .xy)
 //   group 1 binding 2  FamilyBuffer    LineFamilyGpu[]   (48 B / fam)
 //   group 1 binding 3  DashBuffer      f32[]
 //
-// Vertex shader emits a per-instance AABB quad (two triangles). A
-// `visible == 0` instance gets a NaN clip position so the fragment
-// shader never runs for it — that's the GPU-side cull (Phase 4-B
-// equivalent of `compute_hatch_lod` writing `hatch_skip_flags`).
+// The vertex shader emits tessellated boundary triangles in local space
+// (an instance whose boundary failed to tessellate falls back to an
+// AABB quad with `poly_test == 1`, so the fragment shader still runs
+// `in_polygon` to clip it to the real shape). A `visible == 0` instance
+// gets an out-of-NDC clip position so the fragment shader never runs
+// for it — that's the GPU-side cull (Phase 4-B equivalent of
+// `compute_hatch_lod` writing `hatch_skip_flags`).
 
 // ── Group 0: shared frame uniforms (matches hatch.wgsl) ──────────────────
 
@@ -54,7 +58,7 @@ struct HatchInstance {
     family_offset:   u32,
     family_count:    u32,
     draw_depth:      f32,          // signed (-1,1) draw-order bias; 0 = neutral
-    _pad0:           u32,
+    poly_test:       u32,         // 1 = run in_polygon (fallback), 0 = skip
     _pad1:           u32,
     _pad2:           u32,
 }
@@ -91,7 +95,7 @@ struct LineFamily {
 // ── Vertex shader ────────────────────────────────────────────────────────
 
 struct VIn {
-    @location(0) corner:         u32,
+    @location(0) local_xy:       vec2<f32>,
     @location(1) instance_index: u32,
 }
 
@@ -99,21 +103,6 @@ struct VOut {
     @builtin(position) clip:           vec4<f32>,
     @location(0)       xz:             vec2<f32>,
     @location(1) @interpolate(flat) instance_index: u32,
-}
-
-fn corner_xy(c: u32, aabb: vec4<f32>) -> vec2<f32> {
-    // Two-triangle quad covering the AABB:
-    //   0 BL, 1 BR, 2 TL, 3 BR, 4 TR, 5 TL
-    let xmin = aabb.x; let ymin = aabb.y;
-    let xmax = aabb.z; let ymax = aabb.w;
-    switch c {
-        case 0u: { return vec2<f32>(xmin, ymin); }
-        case 1u: { return vec2<f32>(xmax, ymin); }
-        case 2u: { return vec2<f32>(xmin, ymax); }
-        case 3u: { return vec2<f32>(xmax, ymin); }
-        case 4u: { return vec2<f32>(xmax, ymax); }
-        default: { return vec2<f32>(xmin, ymax); }
-    }
 }
 
 @vertex fn vs_main(v: VIn) -> VOut {
@@ -132,7 +121,7 @@ fn corner_xy(c: u32, aabb: vec4<f32>) -> vec2<f32> {
         return o;
     }
 
-    let local = corner_xy(v.corner, inst.aabb);
+    let local = v.local_xy;
     // Double-single relative-to-eye: the anchor high half cancels exactly
     // against eye_high (Sterbenz); local + anchor low + (−eye_low) carry the
     // residual. `local` is small (boundary-relative), so adding it in the low
@@ -270,9 +259,12 @@ fn check_family(
 @fragment fn fs_main(v: VOut) -> @location(0) vec4<f32> {
     let inst = instances[v.instance_index];
 
-    // 1. Boundary test.
-    if !in_polygon(v.xz, inst.boundary_offset, inst.boundary_count) {
-        discard;
+    // 1. Boundary test — only on the fallback path (poly_test==1). On the
+    //    tessellated fast path the triangles already bound the fill.
+    if inst.poly_test == 1u {
+        if !in_polygon(v.xz, inst.boundary_offset, inst.boundary_count) {
+            discard;
+        }
     }
 
     // 2. Mode dispatch.

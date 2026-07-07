@@ -1198,6 +1198,16 @@ impl Scene {
             .map_or(false, |t| t.elapsed().as_millis() < Self::NAV_SETTLE_MS)
     }
 
+    /// Whether the interaction-LOD hatch suppression is enabled (env
+    /// `OCS_HATCH_LOD`), read once. Default OFF: the tessellated hatch pass is
+    /// cheap enough that suppression — and its zoom flicker (#258) — is not
+    /// needed. Kept behind the flag as a safety net for pathological drawings.
+    pub fn hatch_lod_enabled(&self) -> bool {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("OCS_HATCH_LOD").is_some())
+    }
+
     /// True for a short window around navigation — used by the subscription to
     /// keep requesting frames just past the settle point so the one full-quality
     /// (hatched) frame actually renders after the cursor stops, even when no

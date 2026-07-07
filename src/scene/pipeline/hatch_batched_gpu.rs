@@ -5,7 +5,7 @@
 //
 // Data layout — three storage buffers fed from `HatchModel`s:
 //
-//   InstanceBuffer  (binding 0)   :  HatchInstance[]      (~96 B each)
+//   InstanceBuffer  (binding 0)   :  HatchInstance[]      (128 B each)
 //                                    color, color2, mode, gradient,
 //                                    pattern angle/scale, world_origin,
 //                                    boundary_offset, boundary_count,
@@ -22,13 +22,17 @@
 //   DashBuffer      (binding 3)   :  f32[]                (all dash
 //                                    lengths concatenated)
 //
-// The vertex buffer holds 6 corner indices repeated per-instance and a
-// per-vertex `instance_index` (u32 attribute) — instance_index lets us
-// avoid relying on `@builtin(instance_index)` for portability. The
-// vertex shader reads the per-instance AABB from the InstanceBuffer
-// and emits the quad corner for that instance. When the visibility
-// flag is 0, it returns a degenerate position and the fragment shader
-// runs zero times for that instance.
+// The vertex buffer holds each hatch's tessellated boundary triangles as
+// per-vertex local-space positions (`local_xy`) plus a per-vertex
+// `instance_index` (u32 attribute) — instance_index lets us avoid relying
+// on `@builtin(instance_index)` for portability. An instance whose
+// boundary failed to tessellate instead gets an AABB quad here, with
+// `poly_test == 1` on its `HatchInstance` so the fragment shader still
+// runs the `in_polygon` test to clip the quad to the real shape; on the
+// tessellated fast path (`poly_test == 0`) the triangles already bound
+// the fill and the fragment shader skips that test. When the visibility
+// flag is 0, the vertex shader returns a degenerate position and the
+// fragment shader runs zero times for that instance.
 //
 // Two storage usages — vertex shader reads InstanceBuffer + Boundary
 // for the AABB / boundary range; fragment shader reads
@@ -68,7 +72,10 @@ pub struct HatchInstance {
     /// Signed draw-order depth (-1,1); 0.0 = neutral. Applied as a clip-z
     /// bias in the vertex shader so this fill orders against other types.
     pub draw_depth: f32,            // 112
-    pub _pad0: u32,                 // 116  (pad to 128 = 16-byte stride)
+    /// 1 = run the per-fragment `in_polygon` boundary test (fallback path for
+    /// an instance whose boundary failed to tessellate); 0 = the rasterized
+    /// triangles already bound the fill, skip the test.
+    pub poly_test: u32,             // 116
     pub _pad1: u32,                 // 120
     pub _pad2: u32,                 // 124
 }
@@ -107,18 +114,18 @@ pub struct LineFamilyGpu {
 
 const _: () = assert!(std::mem::size_of::<LineFamilyGpu>() == 48);
 
-/// Per-vertex data — 6 verts per instance. Instance_index here so we
-/// can match WebGL2 backends that don't expose builtin(instance_index)
-/// uniformly.
+/// Per-vertex data — tessellated boundary triangles in local (world_origin-
+/// relative) space, each carrying its instance index (avoids relying on
+/// `@builtin(instance_index)` across backends). Instances whose boundary
+/// failed to tessellate emit an AABB quad here instead (see `build`).
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct HatchBatchedVertex {
-    pub corner: u32,         // 0..6 — which AABB corner
-    pub instance_index: u32, // index into InstanceBuffer
+    pub local_xy: [f32; 2],  // 0  — local-space position
+    pub instance_index: u32, // 8  — index into InstanceBuffer
 }
 
 impl HatchBatchedVertex {
-    #[allow(dead_code)]
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         wgpu::VertexBufferLayout {
             array_stride: std::mem::size_of::<HatchBatchedVertex>() as u64,
@@ -127,10 +134,10 @@ impl HatchBatchedVertex {
                 wgpu::VertexAttribute {
                     offset: 0,
                     shader_location: 0,
-                    format: wgpu::VertexFormat::Uint32,
+                    format: wgpu::VertexFormat::Float32x2,
                 },
                 wgpu::VertexAttribute {
-                    offset: 4,
+                    offset: 8,
                     shader_location: 1,
                     format: wgpu::VertexFormat::Uint32,
                 },
@@ -167,7 +174,7 @@ pub struct HatchBatchedGpu {
     #[allow(dead_code)] pub instance_count: u32,
     /// CPU mirror — `update_visibility` re-uploads this whole slice
     /// when any flag changes. ~4 B per hatch, so 40 KB / 10 k hatches
-    /// per pan tick. Far cheaper than touching the 112 B-per-instance
+    /// per pan tick. Far cheaper than touching the 128 B-per-instance
     /// data.
     pub visibility: Vec<u32>,
     /// CPU-side mirror of each instance's local-space AABB (world-
@@ -192,6 +199,7 @@ impl HatchBatchedGpu {
         }
 
         let mut instances: Vec<HatchInstance> = Vec::with_capacity(hatches.len());
+        let mut instance_tris: Vec<Vec<[f32; 2]>> = Vec::with_capacity(hatches.len());
         let mut boundary: Vec<[f32; 4]> = Vec::new();
         let mut families: Vec<LineFamilyGpu> = Vec::new();
         let mut dashes: Vec<f32> = Vec::new();
@@ -202,6 +210,12 @@ impl HatchBatchedGpu {
                 boundary.push([x, y, 0.0, 0.0]);
             }
             let boundary_count = boundary.len() as u32 - boundary_offset;
+
+            // Triangulate this boundary once (cached with the whole build, which
+            // only re-runs when geometry_epoch advances). Empty → fall back to the
+            // AABB-quad + in_polygon path for this instance.
+            let tris = crate::scene::pipeline::hatch_tess::tessellate_boundary(&h.boundary);
+            instance_tris.push(tris);
 
             let family_offset = families.len() as u32;
             let mut family_count = 0u32;
@@ -293,7 +307,7 @@ impl HatchBatchedGpu {
                     family_offset,
                     family_count,
                     draw_depth: h.draw_depth,
-                    _pad0: 0,
+                    poly_test: 1,
                     _pad1: 0,
                     _pad2: 0,
                 });
@@ -336,7 +350,7 @@ impl HatchBatchedGpu {
                 family_offset,
                 family_count,
                 draw_depth: h.draw_depth,
-                _pad0: 0,
+                poly_test: if instance_tris.last().map_or(true, |t| t.is_empty()) { 1 } else { 0 },
                 _pad1: 0,
                 _pad2: 0,
             });
@@ -353,15 +367,26 @@ impl HatchBatchedGpu {
             dashes.push(0.0);
         }
 
-        // Vertex buffer — 6 verts per instance (two triangles for the
-        // AABB quad), indexed by (corner, instance_index).
-        let mut verts: Vec<HatchBatchedVertex> = Vec::with_capacity(instances.len() * 6);
-        for (i, _) in instances.iter().enumerate() {
-            for corner in 0u32..6 {
-                verts.push(HatchBatchedVertex {
-                    corner,
-                    instance_index: i as u32,
-                });
+        // Vertex buffer — tessellated triangles per instance, or an AABB quad
+        // fallback (poly_test==1) when tessellation produced nothing.
+        let mut verts: Vec<HatchBatchedVertex> = Vec::new();
+        for (i, inst) in instances.iter().enumerate() {
+            let tris = &instance_tris[i];
+            if !tris.is_empty() {
+                for &[x, y] in tris.iter() {
+                    verts.push(HatchBatchedVertex { local_xy: [x, y], instance_index: i as u32 });
+                }
+            } else {
+                // Fallback: two triangles over the local-space AABB, same corner
+                // order as the old shader (BL,BR,TL, BR,TR,TL).
+                let [xmin, ymin, xmax, ymax] = inst.aabb;
+                let quad = [
+                    [xmin, ymin], [xmax, ymin], [xmin, ymax],
+                    [xmax, ymin], [xmax, ymax], [xmin, ymax],
+                ];
+                for c in quad {
+                    verts.push(HatchBatchedVertex { local_xy: c, instance_index: i as u32 });
+                }
             }
         }
 

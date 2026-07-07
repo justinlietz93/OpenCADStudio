@@ -1202,7 +1202,7 @@ impl Scene {
             // actively moving; the scene-render cache holds the full-quality
             // (hatched) frame once it settles. Only applied to the on-screen
             // Model / paper content — the paper *sheet* keeps its fills.
-            skip_hatch: !inst.paper_sheet && self.navigating_lod(),
+            skip_hatch: self.hatch_lod_enabled() && !inst.paper_sheet && self.navigating_lod(),
             geometry_epoch: self.geometry_epoch,
             camera_generation: self.camera_generation,
             wire_content_id,
