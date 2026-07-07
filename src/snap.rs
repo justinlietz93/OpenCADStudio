@@ -1832,6 +1832,7 @@ mod ext_tests {
         // A single line segment (0,0)-(10,0): its endpoints are vertices, its
         // midpoint and any extension foot are not.
         let wire = WireModel {
+            text_verts: Vec::new(),
             points: vec![[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]],
             ..Default::default()
         };

@@ -179,6 +179,7 @@ fn v3(p: Vec3) -> Vector3 {
 
 fn preview_line(a: Vec3, b: Vec3) -> WireModel {
     WireModel {
+            text_verts: Vec::new(),
         name: "dimdia_preview".into(),
         points: vec![[a.x, a.y, a.z], [b.x, b.y, b.z]],
         points_low: Vec::new(),

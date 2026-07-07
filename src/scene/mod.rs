@@ -710,11 +710,14 @@ pub struct Scene {
     pub(crate) model_tiles: RefCell<Vec<ModelTile>>,
     /// Index of the active model tile (camera input + overlays target it).
     pub(crate) active_model_tile: std::cell::Cell<usize>,
-    /// Cache of the SDF text vertex list, keyed on `(geometry_epoch,
-    /// anno_scale.to_bits())`, so the per-frame collector is not re-laid-out on
-    /// pan / zoom. See [`Scene::sdf_text_vertices`].
+    /// Cache of the gathered SDF text vertex list for one viewport, keyed on
+    /// the wire-buffer content id. The glyph quads ride on each entity's wire
+    /// (built by the tessellator); this caches the per-viewport gather so it is
+    /// not re-walked every frame while the wire set is unchanged. Keyed on the
+    /// wire content id so it re-gathers exactly when the wires (geometry or
+    /// selection) change. See [`Scene::gather_text_verts`].
     sdf_text_cache:
-        RefCell<Option<(u64, u32, std::sync::Arc<Vec<crate::scene::pipeline::text_gpu::TextVertex>>)>>,
+        RefCell<Option<(u64, std::sync::Arc<Vec<crate::scene::pipeline::text_gpu::TextVertex>>)>>,
     /// pane_grid layout tree for the Model tab — the source of truth for the
     /// tile split layout, resize and focus. `model_tiles` (the renderer's
     /// per-pane data: camera / render-mode / grid) is kept in lock-step with

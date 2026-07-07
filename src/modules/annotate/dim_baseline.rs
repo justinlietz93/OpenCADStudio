@@ -169,6 +169,7 @@ impl CadCommand for DimBaselineCommand {
         let p1 = self.base_p1;
         let (dim_line_pt, dim_line_pt2) = self.dim_line_pts(pt);
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "dimbase_preview".into(),
             points: vec![
                 [p1.x, p1.y, p1.z],

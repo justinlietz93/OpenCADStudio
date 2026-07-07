@@ -208,6 +208,7 @@ pub fn apply_along(
         .into_iter()
         .filter(|s| s.len() >= 2)
         .map(|pts| WireModel {
+            text_verts: Vec::new(),
             name: name.to_string(),
             points: pts,
             points_low: Vec::new(),

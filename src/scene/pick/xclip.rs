@@ -610,6 +610,7 @@ mod tests {
 
         // A polyline half inside, half outside the 0..10 square.
         let mut wires = vec![WireModel {
+            text_verts: Vec::new(),
             points: vec![[5.0, 5.0, 0.0], [15.0, 5.0, 0.0]],
             ..Default::default()
         }];

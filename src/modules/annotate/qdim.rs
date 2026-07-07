@@ -88,6 +88,7 @@ impl CadCommand for QdimCommand {
         }
         let d = 0.5_f32;
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "qdim_preview".into(),
             points: vec![[pt.x - d * 3.0, pt.y, pt.z], [pt.x + d * 3.0, pt.y, pt.z]],
             points_low: Vec::new(),

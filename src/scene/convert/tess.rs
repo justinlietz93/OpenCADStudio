@@ -287,7 +287,12 @@ pub(crate) fn tessellate_entity(
                     if !wires.is_empty() {
                         let aabb = entity_aabb(e);
                         for w in &mut wires {
-                            w.aabb = aabb;
+                            // Empty SDF-text cells keep their tight glyph-box
+                            // AABB; only stroke/fill wires take the whole-block
+                            // box as a broad-phase pick hint.
+                            if !w.points.is_empty() || !w.fill_tris.is_empty() {
+                                w.aabb = aabb;
+                            }
                         }
                         return wires;
                     }
@@ -315,7 +320,14 @@ pub(crate) fn tessellate_entity(
         );
         for w in &mut wires {
             w.aci = aci;
-            w.aabb = aabb;
+            // The whole-dimension box is a broad-phase hint for stroke/fill
+            // wires (picked by proximity). An empty SDF-text wire instead
+            // keeps its own tight glyph-box AABB so the text pick box hugs the
+            // text — clicking empty space inside the dimension selects nothing,
+            // only the lines or the text do.
+            if !w.points.is_empty() || !w.fill_tris.is_empty() {
+                w.aabb = aabb;
+            }
         }
         return wires;
     }
@@ -334,7 +346,11 @@ pub(crate) fn tessellate_entity(
         );
         for w in &mut wires {
             w.aci = aci;
-            w.aabb = aabb;
+            // As with dimensions: keep the whole-leader box only on stroke/fill
+            // wires; empty SDF-text wires keep their tight glyph-box AABB.
+            if !w.points.is_empty() || !w.fill_tris.is_empty() {
+                w.aabb = aabb;
+            }
         }
         return wires;
     }
@@ -397,7 +413,12 @@ pub(crate) fn tessellate_entity(
                     if !wires.is_empty() {
                         let aabb = entity_aabb(e);
                         for w in &mut wires {
-                            w.aabb = aabb;
+                            // Empty SDF-text cells keep their tight glyph-box
+                            // AABB; only stroke/fill wires take the whole-block
+                            // box as a broad-phase pick hint.
+                            if !w.points.is_empty() || !w.fill_tris.is_empty() {
+                                w.aabb = aabb;
+                            }
                         }
                         return wires;
                     }
@@ -437,6 +458,7 @@ pub(crate) fn tessellate_entity(
             (ins.insert_point.z) as f32,
         );
         let marker = WireModel {
+            text_verts: Vec::new(),
             name: h.value().to_string(),
             points: vec![],
             points_low: Vec::new(),
@@ -614,13 +636,12 @@ pub(crate) fn tessellate_entity(
             _ => None,
         };
         // SDF text renders crisply at every zoom, so bypass the baseline/greek
-        // LOD ladder entirely — fall through to the full path, which is itself
-        // suppressed to an empty (snap-only) wire while SDF is on.
-        let text_height = if crate::scene::text::sdf_atlas::sdf_text_enabled() {
-            None
-        } else {
-            text_height
-        };
+        // LOD ladder entirely — fall through to the full path, which produces
+        // the SDF glyph quads (carried on the wire) plus a snap-only wire while
+        // SDF is on. Applies to every TEXT/MTEXT, top-level or composite.
+        let sdf_here = crate::scene::text::sdf_atlas::sdf_text_enabled()
+            && matches!(e, EntityType::Text(_) | EntityType::MText(_));
+        let text_height = if sdf_here { None } else { text_height };
         if let Some(h_world) = text_height {
             let h_px = (h_world as f32) / wpp;
             // Wrap-expanded line count for MText (Text = 1).
@@ -658,6 +679,7 @@ pub(crate) fn tessellate_entity(
                     )];
                 }
                 return vec![WireModel {
+            text_verts: Vec::new(),
                     name: h.value().to_string(),
                     points: pts,
                     points_low: Vec::new(),
@@ -697,6 +719,7 @@ pub(crate) fn tessellate_entity(
                 // hit_test's AABB fallback handles window / crossing. #19.
                 let fill_color = if sel { WireModel::SELECTED } else { entity_color };
                 return vec![WireModel {
+            text_verts: Vec::new(),
                     name: h.value().to_string(),
                     points: vec![],
                     points_low: Vec::new(),
@@ -733,7 +756,12 @@ pub(crate) fn tessellate_entity(
     );
     for b in &mut bases {
         b.aci = aci;
-        b.aabb = aabb;
+        // SDF text wires carry a glyph-bounds AABB (the true text extent) set
+        // in the Text arm; entity_aabb would mis-place the pick box for MTEXT,
+        // so don't clobber it. Every other wire takes the entity AABB.
+        if b.text_verts.is_empty() {
+            b.aabb = aabb;
+        }
     }
 
     // Complex linetypes (with embedded shapes / text) expand the *base*
@@ -801,6 +829,7 @@ fn lod_stub_wire(
     // LOD boundary. #19.
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+            text_verts: Vec::new(),
         name,
         // Diagonal of the entity's 3D AABB so depth tests against
         // shaded / hidden-line geometry are correct — the stub doesn't
@@ -863,6 +892,7 @@ fn lod_stub_wire_3d(
     }
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+            text_verts: Vec::new(),
         name,
         points,
         points_low: Vec::new(),

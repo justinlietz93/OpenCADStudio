@@ -82,6 +82,13 @@ pub struct WireModel {
     /// Low residual paired with [`fill_tris`] (double-single). Empty = all-zero;
     /// tessellation from CAD f64 fills it so fills stay precise at UTM scale.
     pub fill_tris_low: Vec<[f32; 3]>,
+    /// SDF glyph quads for this entity's text (TEXT / MTEXT / dimension text /
+    /// block-internal text). Non-empty only when SDF text is enabled and this
+    /// wire carries a text run. Rides with the wire so it is cached by the
+    /// tess memo, cloned on hit, and transformed by the block-expand loop
+    /// exactly like `points` — no separate collector pass. The renderer
+    /// gathers these across all wires into the text vertex buffer.
+    pub text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>,
 }
 
 impl WireModel {
@@ -129,6 +136,7 @@ impl WireModel {
     /// Create a solid wire (no dash pattern, 1px weight).
     pub fn solid(name: String, points: Vec<[f32; 3]>, color: [f32; 4], selected: bool) -> Self {
         Self {
+            text_verts: Vec::new(),
             name,
             points,
             points_low: Vec::new(),
@@ -261,6 +269,7 @@ impl WireModel {
 impl Default for WireModel {
     fn default() -> Self {
         Self {
+            text_verts: Vec::new(),
             name: String::new(),
             points: Vec::new(),
             points_low: Vec::new(),

@@ -163,6 +163,7 @@ fn preview_wire(pts: &[Vec3]) -> WireModel {
         points.push([w2.x, w2.y, w2.z]);
     }
     WireModel {
+            text_verts: Vec::new(),
         name: "leader_preview".into(),
         points,
         points_low: Vec::new(),

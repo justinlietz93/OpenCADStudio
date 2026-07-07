@@ -116,6 +116,7 @@ fn ordinate_elbow(feature: Vec3, leader: Vec3, is_x: bool) -> Vec3 {
 
 fn preview_wire(points: Vec<Vec3>) -> WireModel {
     WireModel {
+            text_verts: Vec::new(),
         name: "dimordinate_preview".into(),
         points: points.into_iter().map(|p| [p.x, p.y, p.z]).collect(),
         points_low: Vec::new(),

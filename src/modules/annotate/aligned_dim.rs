@@ -183,6 +183,7 @@ impl CadCommand for AlignedDimensionCommand {
             }
         };
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "dimaligned_preview".into(),
             points: vec![[p1.x, p1.y, p1.z], [p2.x, p2.y, p2.z]],
             points_low: Vec::new(),
@@ -224,6 +225,7 @@ fn preview_aligned(p1: Vec3, p2: Vec3, dim_pt: Vec3) -> WireModel {
     // Show ext lines + dim line.
     let (d1, d2) = dim_line_endpoints(p1, p2, dim_pt);
     WireModel {
+            text_verts: Vec::new(),
         name: "dimaligned_preview".into(),
         points: vec![
             [p1.x, p1.y, p1.z],

@@ -1345,6 +1345,7 @@ fn tessellate_dimension_inner(
             let (ext1, ext2) = split_ext_lines(&geom.ext_lines);
             if !ext1.is_empty() {
                 wires.push(WireModel {
+            text_verts: Vec::new(),
                     name: name.clone(),
                     points: ext1,
                     points_low: Vec::new(),
@@ -1366,6 +1367,7 @@ fn tessellate_dimension_inner(
             }
             if !ext2.is_empty() {
                 wires.push(WireModel {
+            text_verts: Vec::new(),
                     name: name.clone(),
                     points: ext2,
                     points_low: Vec::new(),
@@ -1387,6 +1389,7 @@ fn tessellate_dimension_inner(
             }
         } else {
             wires.push(WireModel {
+            text_verts: Vec::new(),
                 name: name.clone(),
                 points: geom.ext_lines,
                 points_low: Vec::new(),
@@ -1409,6 +1412,7 @@ fn tessellate_dimension_inner(
     }
 
     wires.push(WireModel {
+            text_verts: Vec::new(),
         name: name.clone(),
         points: geom.dim_lines,
         points_low: Vec::new(),
@@ -1447,6 +1451,7 @@ fn tessellate_dimension_inner(
                     aci_to_rgba(&c)
                 };
                 wires.push(WireModel {
+            text_verts: Vec::new(),
                     name: name.clone(),
                     points: vec![],
                     points_low: Vec::new(),

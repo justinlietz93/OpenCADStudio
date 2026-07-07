@@ -345,6 +345,15 @@ impl shader::Primitive for Primitive {
                     vp.hover_handle,
                     &vp.draw_depths,
                 );
+                // Text highlight rides the same selection key: a pick / rollover
+                // recolours the selected / hovered glyphs without touching the
+                // base text buffer.
+                inner.upload_text_highlight(
+                    device,
+                    &vp.wires[..],
+                    &vp.selected_handles,
+                    vp.hover_handle,
+                );
                 inner.cached_selection = sel_key;
             }
             // Batched solid meshes — geometry-only, so they ride the geometry
@@ -775,118 +784,40 @@ pub(crate) fn adapt_to_bg(color: [f32; 4], bg: [f32; 4]) -> [f32; 4] {
 // ── Primitive builder helpers (called by ViewportPane's shader::Program impl) ──
 
 impl Scene {
-    /// SDF text-quad vertices for the current document's TEXT entities. Behind
-    /// the `OCS_TEXT_SDF` env flag (Phase 2b bring-up) so the default render
-    /// path is untouched; empty otherwise. Glyphs are baked into the shared
-    /// atlas as a side effect. Both the stroke path and this share
-    /// `text_run_placement`, so quads land exactly where the strokes do.
-    #[allow(dead_code)] // consumed by the text render pass in the GPU integration step
-    pub(in crate::scene) fn sdf_text_vertices(
+    /// Gather the SDF glyph quads carried on a viewport's wire set into one
+    /// flat vertex list for the text render pass. The tessellator attaches the
+    /// quads to each entity's own wire (and the block-expand loop transforms
+    /// block-instance quads to world), so gathering is a cheap walk. Cached on
+    /// `wire_content_id` — the wire-buffer content id — so an unchanged wire
+    /// set (pan / zoom) is walked once, not every frame; the id changes when
+    /// geometry or selection rebuilds the wires, re-tinting selected glyphs.
+    /// Empty when SDF text is disabled.
+    pub(in crate::scene) fn gather_text_verts(
         &self,
+        wires: &[WireModel],
+        wire_content_id: u64,
     ) -> std::sync::Arc<Vec<crate::scene::pipeline::text_gpu::TextVertex>> {
         use std::sync::Arc;
         if !crate::scene::text::sdf_atlas::sdf_text_enabled() {
             return Arc::new(Vec::new());
         }
-        // Cache keyed on (geometry_epoch, annotation scale): the run layout only
-        // changes when geometry or the scale changes, so pan / zoom reuses it
-        // instead of re-laying-out every glyph each frame.
-        let anno = if self.current_layout == "Model" {
-            self.annotation_scale
-        } else {
-            1.0
-        };
-        let key = (self.geometry_epoch, anno.to_bits());
         {
             let cache = self.sdf_text_cache.borrow();
-            if let Some((epoch, anno_bits, verts)) = cache.as_ref() {
-                if *epoch == key.0 && *anno_bits == key.1 {
+            if let Some((id, verts)) = cache.as_ref() {
+                if *id == wire_content_id {
                     return verts.clone();
                 }
             }
         }
-        let verts = Arc::new(self.sdf_text_vertices_enabled(true));
-        *self.sdf_text_cache.borrow_mut() = Some((key.0, key.1, verts.clone()));
+        let mut out: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
+        for w in wires {
+            if !w.text_verts.is_empty() {
+                out.extend_from_slice(&w.text_verts);
+            }
+        }
+        let verts = Arc::new(out);
+        *self.sdf_text_cache.borrow_mut() = Some((wire_content_id, verts.clone()));
         verts
-    }
-
-    #[allow(dead_code)]
-    fn sdf_text_vertices_enabled(
-        &self,
-        enabled: bool,
-    ) -> Vec<crate::scene::pipeline::text_gpu::TextVertex> {
-        use crate::scene::convert::acad_to_truck::{convert, TruckObject};
-        use crate::scene::convert::tessellate::entity_z;
-        use crate::scene::pipeline::text_gpu;
-        use crate::scene::text::{glyph_quads, sdf_atlas};
-        if !enabled {
-            return Vec::new();
-        }
-        let Ok(mut atlas) = sdf_atlas::text_atlas().lock() else {
-            return Vec::new();
-        };
-        // Annotation scale matches the stroke path (tessellate): model-space
-        // text scales, paper/layout text does not.
-        let anno = if self.current_layout == "Model" {
-            self.annotation_scale as f64
-        } else {
-            1.0
-        };
-        let mut out = Vec::new();
-        for e in self.document.entities() {
-            // Only text-producing entities — converting solids/hatches here
-            // would re-tessellate the whole document every frame.
-            if !matches!(
-                e,
-                acadrust::EntityType::Text(_) | acadrust::EntityType::MText(_)
-            ) {
-                continue;
-            }
-            let Some(te) = convert(e, &self.document) else {
-                continue;
-            };
-            let TruckObject::Text(groups) = te.object else {
-                continue;
-            };
-            let base_color = self.render_style(e).0;
-            let elev = entity_z(e) as f64;
-            // Annotation scale anchors at the first run's origin (matches the
-            // stroke path so multi-line MText spreads identically).
-            let ref_origin = groups.first().map(|g| g.origin).unwrap_or([0.0, 0.0]);
-            for g in &groups {
-                let Some(run) = &g.run else {
-                    continue;
-                };
-                let slx = (g.origin[0] - ref_origin[0]) * anno + ref_origin[0];
-                let sly = (g.origin[1] - ref_origin[1]) * anno + ref_origin[1];
-                let color = g
-                    .color
-                    .map(|c| [c[0], c[1], c[2], 1.0])
-                    .unwrap_or(base_color);
-                let quads = glyph_quads::layout_glyph_quads(
-                    &mut atlas,
-                    run.height,
-                    run.rotation,
-                    run.width_factor,
-                    run.oblique,
-                    run.tracking,
-                    &run.font,
-                    &run.text,
-                );
-                // `anno` scales the run-local quads; `slx/sly` is the
-                // annotation-scaled run origin — exactly as tessellate places
-                // the stroke geometry.
-                text_gpu::push_glyph_vertices(
-                    &mut out,
-                    &quads,
-                    [slx, sly, elev],
-                    anno,
-                    color,
-                    0.0,
-                );
-            }
-        }
-        out
     }
 
     /// Build the unified multi-viewport `Primitive` for the current layout.
@@ -1170,13 +1101,14 @@ impl Scene {
             self.meshes_arc()
         };
 
-        // SDF text quads (Phase 2b, behind OCS_TEXT_SDF). Model/content only —
-        // the paper sheet must not draw model-space text onto the sheet.
-        let text_verts = if inst.paper_sheet {
-            Arc::new(Vec::new())
-        } else {
-            self.sdf_text_vertices()
-        };
+        // SDF text quads (behind OCS_TEXT_SDF). The glyph quads ride on each
+        // entity's own wire (produced by the tessellator, transformed for
+        // block instances by the block-expand loop), so here we simply gather
+        // them from this viewport's wire set. This covers model text, block-
+        // internal text and the paper sheet's own annotation alike — each set
+        // draws only the text that belongs to it. Cached on the wire content
+        // id so an unchanged wire set is not re-walked every frame.
+        let text_verts = self.gather_text_verts(&all_wires, wire_content_id);
         Some(ViewportData {
             wires: all_wires,
             preview_wires,

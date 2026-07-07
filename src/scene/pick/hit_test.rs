@@ -134,7 +134,48 @@ pub fn click_hit<'a>(
             }
         }
     }
-    best_fill.map(|(_, n)| n)
+    if let Some((_, n)) = best_fill {
+        return Some(n);
+    }
+
+    // SDF text renders as glyph quads, not strokes — its only pick target is
+    // the empty wire that carries the quads (`text_verts`) and the text's own
+    // tight AABB. Fall back to AABB containment so such text stays click-
+    // selectable, and use `text_verts` as the exact discriminator so only real
+    // text boxes qualify (never some other empty wire). Lowest priority — real
+    // edges and fills above always win. Prefer the tightest box so a click over
+    // overlapping text picks the smallest.
+    if crate::scene::text::sdf_atlas::sdf_text_enabled() {
+        let mut best_area = f32::MAX;
+        let mut best_box: Option<&str> = None;
+        for wire in wires {
+            if wire.text_verts.is_empty()
+                || !wire.points.is_empty()
+                || !wire.fill_tris.is_empty()
+                || wire.aabb == WireModel::UNBOUNDED_AABB
+            {
+                continue;
+            }
+            let [minx, miny, maxx, maxy] = wire.aabb;
+            let (mut sx0, mut sy0, mut sx1, mut sy1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for (cx, cy) in [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)] {
+                let s = world_to_screen(glam::DVec3::new(cx as f64, cy as f64, 0.0), view_rot, eye, bounds);
+                sx0 = sx0.min(s.x);
+                sx1 = sx1.max(s.x);
+                sy0 = sy0.min(s.y);
+                sy1 = sy1.max(s.y);
+            }
+            if cursor.x >= sx0 && cursor.x <= sx1 && cursor.y >= sy0 && cursor.y <= sy1 {
+                let area = (sx1 - sx0) * (sy1 - sy0);
+                if area < best_area {
+                    best_area = area;
+                    best_box = Some(wire.name.as_str());
+                }
+            }
+        }
+        return best_box;
+    }
+    None
 }
 
 /// Like `click_hit` but returns every wire within the click threshold,

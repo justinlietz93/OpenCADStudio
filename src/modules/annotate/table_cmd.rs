@@ -139,6 +139,7 @@ impl CadCommand for TableCommand {
             let y = pt.y;
             let z = pt.z;
             Some(WireModel {
+            text_verts: Vec::new(),
                 name: "table_preview".into(),
                 points: vec![
                     [x, y, z],

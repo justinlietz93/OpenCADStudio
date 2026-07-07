@@ -131,6 +131,7 @@ impl CadCommand for MlineCommand {
         let mut pts: Vec<[f32; 3]> = self.points.iter().map(|p| [p.x, p.y, p.z]).collect();
         pts.push([pt.x, pt.y, pt.z]);
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "mline_preview".into(),
             points: pts,
             points_low: Vec::new(),

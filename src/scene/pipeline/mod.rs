@@ -85,6 +85,11 @@ pub struct Pipeline {
     /// All glyph-quad vertices for the frame, one buffer, `None` when empty.
     text_vbuf: Option<wgpu::Buffer>,
     text_vcount: u32,
+    /// Tinted glyph quads of just the selected / hovered text, drawn over the
+    /// base text pass so a selection / rollover recolours the glyphs (the text
+    /// analogue of the selected-wire xray overlay). Rebuilt on selection change.
+    text_highlight_vbuf: Option<wgpu::Buffer>,
+    text_highlight_vcount: u32,
     depth_texture_size: Size<u32>,
     depth_view: wgpu::TextureView,
     /// 4× MSAA color buffer for the main drawing passes.
@@ -1146,6 +1151,8 @@ impl Pipeline {
             text_atlas_gpu: None,
             text_vbuf: None,
             text_vcount: 0,
+            text_highlight_vbuf: None,
+            text_highlight_vcount: 0,
             mesh_pipeline,
             mesh_transparent_pipeline,
             mesh_highlight_pipeline,
@@ -1304,6 +1311,49 @@ impl Pipeline {
         }
         self.gpu_selected_wires =
             WireGpu::from_run(device, &out, depth_map, None, false, self.wire_const_bgl.as_ref());
+    }
+
+    /// Build the text-highlight overlay: the glyph quads of just the selected /
+    /// hovered text, recoloured (selection blue, hover orange) and drawn over
+    /// the base text pass. Uses the same handle→wire index as the selected-wire
+    /// overlay, so it is O(highlighted). Empty when nothing is highlighted.
+    pub fn upload_text_highlight(
+        &mut self,
+        device: &wgpu::Device,
+        wires: &[WireModel],
+        selected: &rustc_hash::FxHashSet<acadrust::Handle>,
+        hover: Option<acadrust::Handle>,
+    ) {
+        let hover = hover.filter(|h| !selected.contains(h));
+        if selected.is_empty() && hover.is_none() {
+            self.text_highlight_vbuf = None;
+            self.text_highlight_vcount = 0;
+            return;
+        }
+        let mut out: Vec<text_gpu::TextVertex> = Vec::new();
+        let push =
+            |handle_val: u64, tint: [f32; 4], wires: &[WireModel], out: &mut Vec<text_gpu::TextVertex>| {
+                if let Some(idxs) = self.wire_handle_index.get(&handle_val) {
+                    for &i in idxs {
+                        if let Some(w) = wires.get(i as usize) {
+                            for v in &w.text_verts {
+                                out.push(text_gpu::TextVertex {
+                                    color: [tint[0], tint[1], tint[2], v.color[3]],
+                                    ..*v
+                                });
+                            }
+                        }
+                    }
+                }
+            };
+        for h in selected {
+            push(h.value(), WireModel::SELECTED, wires, &mut out);
+        }
+        if let Some(h) = hover {
+            push(h.value(), WireModel::HOVER, wires, &mut out);
+        }
+        self.text_highlight_vcount = out.len() as u32;
+        self.text_highlight_vbuf = text_gpu::upload_vertices(device, &out);
     }
 
     /// Upload the live overlay (command preview / interim / grip-drag) wires.
@@ -2066,8 +2116,12 @@ impl Pipeline {
         }
 
         // ── Pass 5c: SDF text quads (drawn over wires) ────────────────────
-        if let (Some(vbuf), Some(atlas)) = (&self.text_vbuf, &self.text_atlas_gpu) {
-            if self.text_vcount > 0 {
+        // The highlight buffer (selected / hovered text, tinted) is drawn in
+        // the same pass right after the base text so it recolours those glyphs.
+        if let Some(atlas) = &self.text_atlas_gpu {
+            let have_base = self.text_vbuf.is_some() && self.text_vcount > 0;
+            let have_hl = self.text_highlight_vbuf.is_some() && self.text_highlight_vcount > 0;
+            if have_base || have_hl {
                 let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     label: Some("text.render_pass"),
                     color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -2094,8 +2148,18 @@ impl Pipeline {
                 pass.set_pipeline(&self.text_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                 pass.set_bind_group(1, &atlas.bind_group, &[]);
-                pass.set_vertex_buffer(0, vbuf.slice(..));
-                pass.draw(0..self.text_vcount, 0..1);
+                if let Some(vbuf) = &self.text_vbuf {
+                    if self.text_vcount > 0 {
+                        pass.set_vertex_buffer(0, vbuf.slice(..));
+                        pass.draw(0..self.text_vcount, 0..1);
+                    }
+                }
+                if let Some(hlbuf) = &self.text_highlight_vbuf {
+                    if self.text_highlight_vcount > 0 {
+                        pass.set_vertex_buffer(0, hlbuf.slice(..));
+                        pass.draw(0..self.text_highlight_vcount, 0..1);
+                    }
+                }
             }
         }
 

@@ -305,6 +305,7 @@ inventory::submit!(crate::command::CommandRegistration {
 
 fn wire(name: &str, points: Vec<[f32; 3]>) -> WireModel {
     WireModel {
+            text_verts: Vec::new(),
         name: name.into(),
         points,
         points_low: Vec::new(),

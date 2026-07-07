@@ -47,6 +47,14 @@ pub fn sdf_text_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("OCS_TEXT_SDF").is_some())
 }
 
+/// Debug: when env `OCS_TEXT_BOX` is set, each SDF text run also emits a
+/// rectangle outline around its glyph bounds so the text pick box is visible.
+/// Read once. Only meaningful together with [`sdf_text_enabled`].
+pub fn text_box_debug() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("OCS_TEXT_BOX").is_some())
+}
+
 // ── Bake configuration ──────────────────────────────────────────────────────
 
 /// Texels per glyph unit. Glyphs live in a 9-unit cap-height space, so a cap

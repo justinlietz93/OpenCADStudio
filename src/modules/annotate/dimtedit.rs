@@ -101,6 +101,7 @@ impl CadCommand for DimTeditCommand {
         }
         let d = 0.2_f32;
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "dimtedit_preview".into(),
             // Marker box in the XY drawing plane (Z is elevation, ~0). The old
             // box varied Z, so in the top-down view it collapsed to a flat line

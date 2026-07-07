@@ -1166,6 +1166,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                 let far_pos = base + dir * far;
                                 let far_neg = base - dir * far;
                                 let guide = crate::scene::WireModel {
+            text_verts: Vec::new(),
                                     name: "__polar_guide__".into(),
                                     points: vec![
                                         [far_neg.x, far_neg.y, far_neg.z],
@@ -1199,6 +1200,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             let far_pos = h.base + h.dir * far;
                             let far_neg = h.base - h.dir * far;
                             previews.push(crate::scene::WireModel {
+            text_verts: Vec::new(),
                                 name: "__otrack_guide__".into(),
                                 points: vec![
                                     [far_neg.x, far_neg.y, far_neg.z],

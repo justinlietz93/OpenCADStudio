@@ -85,6 +85,7 @@ impl CadCommand for DimJogLineCommand {
         }
         let d = 0.3_f32;
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "dimjog_preview".into(),
             // Jog zigzag in the XY drawing plane (Z is elevation, ~0). The old
             // marker varied Z, so in the top-down view it collapsed to a flat

@@ -80,6 +80,7 @@ impl CadCommand for RevCloudCommand {
         preview_pts.push([pt.x, pt.y, pt.z]);
         preview_pts.push([self.points[0].x, self.points[0].y, self.points[0].z]);
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "revcloud_preview".into(),
             points: preview_pts,
             points_low: Vec::new(),

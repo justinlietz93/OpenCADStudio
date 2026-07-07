@@ -456,6 +456,7 @@ impl CadCommand for MLeaderCollectCommand {
 
 fn preview_wire(pts: &[Vec3]) -> WireModel {
     WireModel {
+            text_verts: Vec::new(),
         name: "mleader_edit_preview".into(),
         points: pts.iter().map(|p| [p.x, p.y, p.z]).collect(),
         points_low: Vec::new(),

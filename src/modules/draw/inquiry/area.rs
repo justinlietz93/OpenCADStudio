@@ -69,6 +69,7 @@ impl CadCommand for AreaCommand {
         pts.push(f(pt));
         pts.push(f(self.points[0]));
         Some(WireModel {
+            text_verts: Vec::new(),
             name: "area_preview".into(),
             points: pts,
             points_low: Vec::new(),

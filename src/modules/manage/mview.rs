@@ -74,6 +74,7 @@ impl CadCommand for MviewCommand {
     fn on_mouse_move(&mut self, pt: Vec3) -> Option<WireModel> {
         let c1 = self.corner1?;
         Some(WireModel {
+            text_verts: Vec::new(),
             name:           "mview_preview".to_string(),
             points:         vec![
                 [c1.x, c1.y, c1.z],

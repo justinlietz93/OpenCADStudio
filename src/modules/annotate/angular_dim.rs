@@ -124,6 +124,7 @@ fn v3(pt: Vec3) -> Vector3 {
 
 fn preview_wire(points: Vec<Vec3>) -> WireModel {
     WireModel {
+            text_verts: Vec::new(),
         name: "dimangular_preview".to_string(),
         points: points.into_iter().map(|p| [p.x, p.y, p.z]).collect(),
         points_low: Vec::new(),

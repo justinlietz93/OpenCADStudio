@@ -38,6 +38,11 @@ pub struct LocalWire {
     /// Low-bit residual paired with `points` so block-instance wires keep
     /// sub-f32 precision once the renderer translates them to world space.
     pub points_low: Vec<[f32; 3]>,
+    /// SDF glyph quads for block-internal text, in block-local coordinates.
+    /// Non-empty only when SDF text is on and this sub is a TEXT/MTEXT. The
+    /// expand-time transform (`emit_wire`) maps each vertex to world exactly
+    /// like `points`, so block-instance text lands at the right place/scale.
+    pub text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>,
     pub key_vertices: Vec<[f64; 3]>,
     pub snap_pts: Vec<(glam::DVec3, SnapHint)>,
     pub tangent_geoms: Vec<TangentGeom>,
@@ -430,10 +435,18 @@ fn tessellate_sub_local(
         return vec![];
     }
 
-    let text_height_local: Option<f32> = match sub {
-        EntityType::Text(t) => Some((t.height * anno_scale as f64) as f32),
-        EntityType::MText(m) => Some((m.height * anno_scale as f64) as f32),
-        _ => None,
+    // With SDF text on, block-internal TEXT/MTEXT renders as glyph quads
+    // (carried on the wire's `text_verts`), so skip the greek/baseline LOD
+    // ladder — leaving `text_height_local` None routes the sub to `emit_wire`,
+    // which transforms and emits those quads.
+    let text_height_local: Option<f32> = if crate::scene::text::sdf_atlas::sdf_text_enabled() {
+        None
+    } else {
+        match sub {
+            EntityType::Text(t) => Some((t.height * anno_scale as f64) as f32),
+            EntityType::MText(m) => Some((m.height * anno_scale as f64) as f32),
+            _ => None,
+        }
     };
 
     // Pre-compute the OBB corners (absolute f64) for Text / MText so the greek
@@ -470,6 +483,7 @@ fn tessellate_sub_local(
         result.push(LocalWire {
             points: wire.points,
             points_low: wire.points_low,
+            text_verts: wire.text_verts,
             key_vertices: wire.key_vertices,
             snap_pts: wire.snap_pts,
             tangent_geoms: wire.tangent_geoms,
@@ -965,6 +979,8 @@ struct BatchEntry {
     /// reconstructs `high + low`). Without it absolute f32 fills quantize to
     /// ~0.5 m and the greek-text rectangles shear.
     fill_tris_low: Vec<[f32; 3]>,
+    /// Accumulated SDF glyph quads (world space) for block-instance text.
+    text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>,
     min_x: f32,
     min_y: f32,
     max_x: f32,
@@ -1041,6 +1057,7 @@ impl Batches {
                 // the cached defn.
                 let color = crate::scene::view::render::adapt_to_bg(b.color, bg_color);
                 WireModel {
+                    text_verts: b.text_verts,
                     name: name.to_string(),
                     points: b.points,
                     points_low: b.points_low,
@@ -1357,7 +1374,7 @@ fn emit_wire(
     ctx: &ExpandCtx,
     out: &mut Batches,
 ) {
-    if lw.points.is_empty() && lw.fill_tris.is_empty() {
+    if lw.points.is_empty() && lw.fill_tris.is_empty() && lw.text_verts.is_empty() {
         return;
     }
 
@@ -1506,6 +1523,40 @@ fn emit_wire(
         let (hz, lz) = WireModel::split_ds(v.z);
         entry.fill_tris.push([hx, hy, hz]);
         entry.fill_tris_low.push([lx, ly, lz]);
+    }
+    // SDF glyph quads: reconstruct each block-local f64 position, apply the
+    // insert transform, re-split — same path as points/fills so block-instance
+    // text lands at the right world place and scale. Colour resolves to the
+    // batch's final colour (ByBlock / layer-0 block text follows the insert).
+    for tv in &lw.text_verts {
+        let wx = tv.pos[0] as f64 + tv.pos_low[0] as f64;
+        let wy = tv.pos[1] as f64 + tv.pos_low[1] as f64;
+        let wz = tv.pos[2] as f64 + tv.pos_low[2] as f64;
+        let v = accum_xform.apply(Vector3::new(wx, wy, wz));
+        let (hx, lx) = WireModel::split_ds(v.x);
+        let (hy, ly) = WireModel::split_ds(v.y);
+        let (hz, lz) = WireModel::split_ds(v.z);
+        // Grow the batch AABB by the glyph extent so a text-only block wire
+        // (no points) still finalizes to a bounded pick box.
+        if hx < entry.min_x {
+            entry.min_x = hx;
+        }
+        if hy < entry.min_y {
+            entry.min_y = hy;
+        }
+        if hx > entry.max_x {
+            entry.max_x = hx;
+        }
+        if hy > entry.max_y {
+            entry.max_y = hy;
+        }
+        entry.text_verts.push(crate::scene::pipeline::text_gpu::TextVertex {
+            pos: [hx, hy, hz],
+            pos_low: [lx, ly, lz],
+            uv: tv.uv,
+            color: [final_color[0], final_color[1], final_color[2], tv.color[3]],
+            draw_depth: tv.draw_depth,
+        });
     }
 }
 

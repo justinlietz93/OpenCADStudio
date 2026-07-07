@@ -1284,6 +1284,7 @@ impl MultiLeaderTess for MultiLeader {
         // WireModels so the renderer respects per-piece coloring.
         let mut wires: Vec<WireModel> = Vec::new();
         wires.push(WireModel {
+            text_verts: Vec::new(),
             name: name.clone(),
             points,
             points_low: Vec::new(),
@@ -1525,7 +1526,75 @@ impl MultiLeaderTess for MultiLeader {
                 ]
             };
 
-            if lod_mode == 0 {
+            if crate::scene::text::sdf_atlas::sdf_text_enabled() {
+                // SDF text: emit glyph quads instead of strokes (crisp at every
+                // zoom, so no baseline/greek LOD). `layout_mtext` already placed
+                // each run at its final position/rotation with a `GlyphRun`, so
+                // this mirrors the top-level Text arm (anno = 1, origin as-is).
+                // Base colour stays neutral — selection / hover recolouring is
+                // done by the text-highlight overlay.
+                let neutral = color_or_inherit(&ctx.text_color, entity_color);
+                let mut sdf_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
+                if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
+                    for ts in &layout.strokes {
+                        let Some(run) = &ts.run else { continue };
+                        let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
+                            &mut atlas,
+                            run.height,
+                            run.rotation,
+                            run.width_factor,
+                            run.oblique,
+                            run.tracking,
+                            &run.font,
+                            &run.text,
+                        );
+                        crate::scene::pipeline::text_gpu::push_glyph_vertices(
+                            &mut sdf_verts,
+                            &quads,
+                            [ts.origin[0], ts.origin[1], z as f64],
+                            1.0,
+                            neutral,
+                            0.0,
+                        );
+                    }
+                }
+                if !sdf_verts.is_empty() {
+                    // Pick box from the glyph quads (f64 accumulate → f32).
+                    let (mut nx, mut ny, mut xx, mut xy) =
+                        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                    for v in &sdf_verts {
+                        let x = v.pos[0] as f64 + v.pos_low[0] as f64;
+                        let y = v.pos[1] as f64 + v.pos_low[1] as f64;
+                        nx = nx.min(x);
+                        xx = xx.max(x);
+                        ny = ny.min(y);
+                        xy = xy.max(y);
+                    }
+                    wires.push(WireModel {
+                        text_verts: sdf_verts,
+                        name: name.clone(),
+                        points: vec![],
+                        points_low: Vec::new(),
+                        color: neutral,
+                        selected,
+                        aci: 0,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: vec![(
+                            glam::DVec3::new(local_ins_x as f64, local_ins_y as f64, z as f64),
+                            SnapHint::Node,
+                        )],
+                        tangent_geoms: vec![],
+                        key_vertices: vec![],
+                        aabb: [nx as f32, ny as f32, xx as f32, xy as f32],
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris: vec![],
+                        fill_tris_low: Vec::new(),
+                    });
+                }
+            } else if lod_mode == 0 {
                 // Baseline of the top line only.
                 let line_w = line_widths.first().copied().unwrap_or(0.0);
                 let len_px = world_per_pixel
@@ -1536,6 +1605,7 @@ impl MultiLeaderTess for MultiLeader {
                     let p0 = to_wcs(-line_w * h_anchor, line_y_local);
                     let p1 = to_wcs(line_w * (1.0 - h_anchor), line_y_local);
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: vec![p0, p1],
                         points_low: Vec::new(),
@@ -1578,6 +1648,7 @@ impl MultiLeaderTess for MultiLeader {
                 }
                 if !greek_tris.is_empty() {
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: vec![],
                         points_low: Vec::new(),
@@ -1634,6 +1705,7 @@ impl MultiLeaderTess for MultiLeader {
                         vec![]
                     };
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: text_points,
                         points_low: Vec::new(),
@@ -1660,6 +1732,7 @@ impl MultiLeaderTess for MultiLeader {
                         vec![]
                     };
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: vec![],
                         points_low: Vec::new(),
@@ -1724,6 +1797,7 @@ impl MultiLeaderTess for MultiLeader {
                         wcs_corners[3],
                     ];
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: vec![],
                         points_low: Vec::new(),
@@ -1754,6 +1828,7 @@ impl MultiLeaderTess for MultiLeader {
                         wcs_corners[0],
                     ];
                     wires.push(WireModel {
+            text_verts: Vec::new(),
                         name,
                         points: frame_points,
                         points_low: Vec::new(),

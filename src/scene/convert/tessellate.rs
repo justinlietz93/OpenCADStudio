@@ -198,12 +198,16 @@ pub fn tessellate(
                     };
 
                 let anno = anno_scale as f64;
-                // With SDF text on, glyphs render as quads elsewhere — skip
-                // building the stroke geometry so text is not double-drawn.
-                // `bins` stays empty, so the empty-wire path below still emits
-                // the insertion snap point (text stays snappable, no glyph
-                // strokes polluting snap/pick).
-                let sdf_text = crate::scene::text::sdf_atlas::sdf_text_enabled();
+                // With SDF text on, glyphs render as textured quads carried on
+                // this entity's own wire (built below) — skip the stroke
+                // geometry so text is not double-drawn. `bins` stays empty, so
+                // the empty-wire path emits the insertion snap point and the
+                // glyph quads. Applies to every TEXT/MTEXT the tessellator
+                // sees, whether a top-level entity, a dimension's text, or a
+                // block-internal string — each owns its glyphs, no central
+                // collector, no re-explosion.
+                let sdf_text = crate::scene::text::sdf_atlas::sdf_text_enabled()
+                    && matches!(entity, EntityType::Text(_) | EntityType::MText(_));
                 for group in stroke_groups.iter().filter(|_| !sdf_text) {
                     let lx_v = group.origin[0];
                     let ly_v = group.origin[1];
@@ -241,6 +245,52 @@ pub fn tessellate(
                     }
                 }
 
+                // ── SDF glyph quads ──────────────────────────────────────
+                // When SDF text is on, build this run's glyph quads here and
+                // carry them on the wire. They ride with the wire through the
+                // tess memo, hit-materialisation and (for block content) the
+                // block-expand transform — no separate document-wide collector.
+                let mut sdf_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
+                if sdf_text {
+                    if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
+                        // Selection tints the whole run; otherwise inline `\C`
+                        // colours (bin key) win, falling back to entity colour.
+                        for group in &stroke_groups {
+                            let Some(run) = &group.run else { continue };
+                            let slx_v = (group.origin[0] - ref_lx_v) * anno + ref_lx_v;
+                            let sly_v = (group.origin[1] - ref_ly_v) * anno + ref_ly_v;
+                            // Base colour only (inline `\C` wins). Selection /
+                            // hover recolouring is done by the text-highlight
+                            // overlay, so the base glyphs stay neutral — else a
+                            // deselect would leave stale-tinted glyphs until the
+                            // next geometry rebuild (the base text buffer only
+                            // rebuilds on geometry, not on a pick).
+                            let gcolor = group
+                                .color
+                                .map(|c| [c[0], c[1], c[2], entity_color[3]])
+                                .unwrap_or(entity_color);
+                            let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
+                                &mut atlas,
+                                run.height,
+                                run.rotation,
+                                run.width_factor,
+                                run.oblique,
+                                run.tracking,
+                                &run.font,
+                                &run.text,
+                            );
+                            crate::scene::pipeline::text_gpu::push_glyph_vertices(
+                                &mut sdf_verts,
+                                &quads,
+                                [slx_v, sly_v, elev_v],
+                                anno,
+                                gcolor,
+                                0.0,
+                            );
+                        }
+                    }
+                }
+
                 let snap_pts = te.snap_pts;
                 let key_vertices: Vec<[f64; 3]> = te
                     .key_vertices
@@ -249,9 +299,74 @@ pub fn tessellate(
                     .collect();
 
                 // Empty input (no glyphs) → emit a single empty wire so the
-                // entity still has a hit-test target via snap_pts.
+                // entity still has a hit-test target via snap_pts. With SDF on
+                // this is the normal path (strokes suppressed) and the wire
+                // also carries the glyph quads built above.
                 if bins.is_empty() {
-                    return vec![WireModel {
+                    let mut wires: Vec<WireModel> = Vec::new();
+                    // Pick box straight from the rendered glyph quads — the true
+                    // text extent. entity_aabb is unreliable for MTEXT (its box
+                    // sits beside the laid-out glyphs), so we derive the AABB
+                    // from `sdf_verts` and stop the generic stamp from
+                    // clobbering it (tess.rs guards on `text_verts`).
+                    let text_aabb = if sdf_text && !sdf_verts.is_empty() {
+                        // Accumulate in f64 (reconstruct high + low) so the box
+                        // stays accurate at UTM scale, then cast the corners to
+                        // f32 once for storage.
+                        let (mut nx, mut ny, mut xx, mut xy) =
+                            (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                        for v in &sdf_verts {
+                            let x = v.pos[0] as f64 + v.pos_low[0] as f64;
+                            let y = v.pos[1] as f64 + v.pos_low[1] as f64;
+                            nx = nx.min(x);
+                            xx = xx.max(x);
+                            ny = ny.min(y);
+                            xy = xy.max(y);
+                        }
+                        [nx as f32, ny as f32, xx as f32, xy as f32]
+                    } else {
+                        WireModel::UNBOUNDED_AABB
+                    };
+                    // Debug (env OCS_TEXT_BOX): draw a rectangle around the glyph
+                    // bounds as a separate outline wire so the text box is
+                    // visible for testing. The empty text wire below is left
+                    // untouched (still the SDF + pick target).
+                    if sdf_text
+                        && !sdf_verts.is_empty()
+                        && crate::scene::text::sdf_atlas::text_box_debug()
+                    {
+                        let [nx, ny, xx, xy] = text_aabb;
+                        let (nx, ny, xx, xy) = (nx as f64, ny as f64, xx as f64, xy as f64);
+                        let mut pts = Vec::with_capacity(5);
+                        let mut low = Vec::with_capacity(5);
+                        for (x, y) in [(nx, ny), (xx, ny), (xx, xy), (nx, xy), (nx, ny)] {
+                            let (hh, ll) = split_ds_xyz(x, y, elev_v);
+                            pts.push(hh);
+                            low.push(ll);
+                        }
+                        wires.push(WireModel {
+                            text_verts: Vec::new(),
+                            name: name.clone(),
+                            points: pts,
+                            points_low: low,
+                            color: [1.0, 0.0, 1.0, 1.0],
+                            selected,
+                            pattern_length: 0.0,
+                            pattern: [0.0; 8],
+                            line_weight_px,
+                            snap_pts: Vec::new(),
+                            tangent_geoms: Vec::new(),
+                            aci: 0,
+                            key_vertices: Vec::new(),
+                            aabb: WireModel::UNBOUNDED_AABB,
+                            plinegen: true,
+                            vp_scissor: None,
+                            fill_tris: vec![],
+                            fill_tris_low: Vec::new(),
+                        });
+                    }
+                    wires.push(WireModel {
+                        text_verts: sdf_verts,
                         name,
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -264,12 +379,13 @@ pub fn tessellate(
                         tangent_geoms: te.tangent_geoms,
                         aci: 0,
                         key_vertices,
-                        aabb: WireModel::UNBOUNDED_AABB,
+                        aabb: text_aabb,
                         plinegen: true,
                         vp_scissor: None,
                         fill_tris: vec![],
                         fill_tris_low: Vec::new(),
-                    }];
+                    });
+                    return wires;
                 }
 
                 let mut out: Vec<WireModel> = Vec::new();
@@ -292,6 +408,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+            text_verts: Vec::new(),
                             name: name.clone(),
                             points: bin.pts,
                             points_low: bin.pts_low,
@@ -324,6 +441,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+            text_verts: Vec::new(),
                             name: name.clone(),
                             points: Vec::new(),
                             points_low: Vec::new(),
@@ -347,6 +465,7 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+            text_verts: Vec::new(),
                         name,
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -391,6 +510,7 @@ pub fn tessellate(
                             .map(|[kx, ky, kz]| [kx, ky, kz])
                             .collect();
                         return vec![WireModel {
+            text_verts: Vec::new(),
                             name,
                             points: vec![
                                 [x - s, y, z],
@@ -434,6 +554,7 @@ pub fn tessellate(
                         .map(|[x, y, z]| [x, y, z])
                         .collect();
                     return vec![WireModel {
+            text_verts: Vec::new(),
                         name,
                         points,
                         points_low,
@@ -466,6 +587,7 @@ pub fn tessellate(
                         .map(|[x, y, z]| [x, y, z])
                         .collect();
                     return vec![WireModel {
+            text_verts: Vec::new(),
                         name,
                         points,
                         points_low,
@@ -517,6 +639,7 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: local_pts,
                         points_low: local_pts_low,
@@ -548,6 +671,7 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+            text_verts: Vec::new(),
                         name: name.clone(),
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -570,6 +694,7 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+            text_verts: Vec::new(),
                         name,
                         points: Vec::new(),
                         points_low: Vec::new(),
@@ -602,6 +727,7 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
                 return vec![WireModel {
+            text_verts: Vec::new(),
                     name,
                     points: local_pts,
                     points_low: local_pts_low,
@@ -665,6 +791,7 @@ pub fn tessellate(
     let snap_pts: Vec<(glam::DVec3, SnapHint)> =
         snap_pts.into_iter().map(|(p, h)| (p.as_dvec3(), h)).collect();
     vec![WireModel {
+            text_verts: Vec::new(),
         name,
         points,
         points_low,
