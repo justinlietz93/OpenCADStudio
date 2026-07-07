@@ -69,6 +69,11 @@ pub fn apply_along(
 
     let mut strokes: Vec<Vec<[f32; 3]>> = Vec::new();
     let mut cur_stroke: Vec<[f32; 3]> = Vec::new();
+    // When SDF text is on, embedded linetype text (LtSeg::Text) renders as glyph
+    // quads collected here instead of stroke polylines; emitted as one extra
+    // text-carrying WireModel at the end.
+    let sdf_on = crate::scene::text::sdf_atlas::sdf_text_enabled();
+    let mut text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
 
     let mut elem_idx: usize = 0;
     let mut elem_consumed: f32 = 0.0;
@@ -175,20 +180,45 @@ pub fn apply_along(
                     let insert = offset_pt(insert, fwd, perp, *x, *y);
                     let fwd_angle = fwd[1].atan2(fwd[0]) + rot_deg.to_radians();
                     let resolved = resolve_dxf_special_chars(text);
-                    let (text_strokes, _) = lff::tessellate_text_ex(
-                        [insert[0], insert[1]],
-                        *tx_scale,
-                        fwd_angle,
-                        1.0,
-                        0.0,
-                        style,
-                        &resolved,
-                    );
-                    for stroke in &text_strokes {
-                        if stroke.len() >= 2 {
-                            let pts: Vec<[f32; 3]> =
-                                stroke.iter().map(|&[sx, sy]| [sx, sy, insert[2]]).collect();
-                            strokes.push(pts);
+                    if sdf_on {
+                        // SDF: glyph quads at the insert point (rotation baked in
+                        // by layout_glyph_quads), collected for the text wire.
+                        if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
+                            let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
+                                &mut atlas,
+                                *tx_scale,
+                                fwd_angle,
+                                1.0,
+                                0.0,
+                                0.0,
+                                style,
+                                &resolved,
+                            );
+                            crate::scene::pipeline::text_gpu::push_glyph_vertices(
+                                &mut text_verts,
+                                &quads,
+                                [insert[0] as f64, insert[1] as f64, insert[2] as f64],
+                                1.0,
+                                color,
+                                0.0,
+                            );
+                        }
+                    } else {
+                        let (text_strokes, _) = lff::tessellate_text_ex(
+                            [insert[0], insert[1]],
+                            *tx_scale,
+                            fwd_angle,
+                            1.0,
+                            0.0,
+                            style,
+                            &resolved,
+                        );
+                        for stroke in &text_strokes {
+                            if stroke.len() >= 2 {
+                                let pts: Vec<[f32; 3]> =
+                                    stroke.iter().map(|&[sx, sy]| [sx, sy, insert[2]]).collect();
+                                strokes.push(pts);
+                            }
                         }
                     }
 
@@ -204,7 +234,7 @@ pub fn apply_along(
 
     flush(&mut cur_stroke, &mut strokes);
 
-    strokes
+    let mut out: Vec<WireModel> = strokes
         .into_iter()
         .filter(|s| s.len() >= 2)
         .map(|pts| WireModel {
@@ -227,7 +257,43 @@ pub fn apply_along(
             fill_tris: vec![],
             fill_tris_low: Vec::new(),
         })
-        .collect()
+        .collect();
+
+    // Embedded linetype text (SDF): one extra wire carrying the glyph quads,
+    // with a glyph-bounds AABB (f64 accumulate → f32) so it stays precise at
+    // UTM scale. Empty points so it doesn't add stroke geometry.
+    if !text_verts.is_empty() {
+        let (mut nx, mut ny, mut xx, mut xy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+        for v in &text_verts {
+            let x = v.pos[0] as f64 + v.pos_low[0] as f64;
+            let y = v.pos[1] as f64 + v.pos_low[1] as f64;
+            nx = nx.min(x);
+            xx = xx.max(x);
+            ny = ny.min(y);
+            xy = xy.max(y);
+        }
+        out.push(WireModel {
+            text_verts,
+            name: name.to_string(),
+            points: Vec::new(),
+            points_low: Vec::new(),
+            color,
+            selected,
+            pattern_length: 0.0,
+            pattern: [0.0; 8],
+            line_weight_px,
+            snap_pts: vec![],
+            tangent_geoms: vec![],
+            aci: 0,
+            key_vertices: vec![],
+            aabb: [nx as f32, ny as f32, xx as f32, xy as f32],
+            plinegen: true,
+            vp_scissor: None,
+            fill_tris: vec![],
+            fill_tris_low: Vec::new(),
+        });
+    }
+    out
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

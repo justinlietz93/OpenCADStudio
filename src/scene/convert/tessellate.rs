@@ -202,17 +202,16 @@ pub fn tessellate(
                     };
 
                 let anno = anno_scale as f64;
-                // With SDF text on, glyphs render as textured quads carried on
-                // this entity's own wire (built below) — skip the stroke
-                // geometry so text is not double-drawn. `bins` stays empty, so
-                // the empty-wire path emits the insertion snap point and the
-                // glyph quads. Applies to every TEXT/MTEXT the tessellator
-                // sees, whether a top-level entity, a dimension's text, or a
-                // block-internal string — each owns its glyphs, no central
-                // collector, no re-explosion.
-                let sdf_text = crate::scene::text::sdf_atlas::sdf_text_enabled()
-                    && matches!(entity, EntityType::Text(_) | EntityType::MText(_));
-                for group in stroke_groups.iter().filter(|_| !sdf_text) {
+                // SDF text is decided PER GROUP by whether the group carries a
+                // `GlyphRun`: a run-group renders as textured quads (built
+                // below) so its strokes are suppressed; a run-less group keeps
+                // its strokes. TEXT / MTEXT / dim / block / mleader text are all
+                // run-groups → fully SDF; a composite object that packs geometry
+                // and text into one Text object (a tolerance frame: box lines =
+                // run-less, cell text = run-groups) keeps the geometry as
+                // strokes and draws only the text as SDF.
+                let sdf_on = crate::scene::text::sdf_atlas::sdf_text_enabled();
+                for group in stroke_groups.iter().filter(|g| !(sdf_on && g.run.is_some())) {
                     let lx_v = group.origin[0];
                     let ly_v = group.origin[1];
                     let slx_v = (lx_v - ref_lx_v) * anno + ref_lx_v;
@@ -255,7 +254,7 @@ pub fn tessellate(
                 // tess memo, hit-materialisation and (for block content) the
                 // block-expand transform — no separate document-wide collector.
                 let mut sdf_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
-                if sdf_text {
+                if sdf_on {
                     if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
                         // Selection tints the whole run; otherwise inline `\C`
                         // colours (bin key) win, falling back to entity colour.
@@ -302,42 +301,43 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
 
+                // Pick box straight from the rendered glyph quads — the true
+                // text extent. entity_aabb is unreliable for MTEXT (its box sits
+                // beside the laid-out glyphs), so derive the AABB from
+                // `sdf_verts` (accumulate in f64, reconstruct high+low, then cast
+                // to f32 once) and stop the generic stamp clobbering it (tess.rs
+                // guards on `text_verts`). Computed here so both the bins-empty
+                // and the bins-non-empty (tolerance box + text) paths can stamp
+                // it on the SDF text wire.
+                let text_aabb = if sdf_on && !sdf_verts.is_empty() {
+                    let (mut nx, mut ny, mut xx, mut xy) =
+                        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+                    for v in &sdf_verts {
+                        let x = v.pos[0] as f64 + v.pos_low[0] as f64;
+                        let y = v.pos[1] as f64 + v.pos_low[1] as f64;
+                        nx = nx.min(x);
+                        xx = xx.max(x);
+                        ny = ny.min(y);
+                        xy = xy.max(y);
+                    }
+                    [nx as f32, ny as f32, xx as f32, xy as f32]
+                } else {
+                    WireModel::UNBOUNDED_AABB
+                };
+
                 // Empty input (no glyphs) → emit a single empty wire so the
                 // entity still has a hit-test target via snap_pts. With SDF on
                 // this is the normal path (strokes suppressed) and the wire
                 // also carries the glyph quads built above.
                 if bins.is_empty() {
                     let mut wires: Vec<WireModel> = Vec::new();
-                    // Pick box straight from the rendered glyph quads — the true
-                    // text extent. entity_aabb is unreliable for MTEXT (its box
-                    // sits beside the laid-out glyphs), so we derive the AABB
-                    // from `sdf_verts` and stop the generic stamp from
-                    // clobbering it (tess.rs guards on `text_verts`).
-                    let text_aabb = if sdf_text && !sdf_verts.is_empty() {
-                        // Accumulate in f64 (reconstruct high + low) so the box
-                        // stays accurate at UTM scale, then cast the corners to
-                        // f32 once for storage.
-                        let (mut nx, mut ny, mut xx, mut xy) =
-                            (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-                        for v in &sdf_verts {
-                            let x = v.pos[0] as f64 + v.pos_low[0] as f64;
-                            let y = v.pos[1] as f64 + v.pos_low[1] as f64;
-                            nx = nx.min(x);
-                            xx = xx.max(x);
-                            ny = ny.min(y);
-                            xy = xy.max(y);
-                        }
-                        [nx as f32, ny as f32, xx as f32, xy as f32]
-                    } else {
-                        WireModel::UNBOUNDED_AABB
-                    };
                     // MTEXT background fill / mask: an opaque rectangle behind
                     // the glyphs, emitted first so it renders under the text.
                     // Flag 0x01 → the entity's background-fill colour; 0x02 →
                     // the drawing-window (canvas) colour, which masks geometry
                     // behind the text like a wipeout. Box = glyph bounds padded
                     // by (background_scale - 1) × text height.
-                    if sdf_text && text_aabb != WireModel::UNBOUNDED_AABB {
+                    if sdf_on && text_aabb != WireModel::UNBOUNDED_AABB {
                         if let EntityType::MText(m) = entity {
                             let has_fill = m.background_fill_flags & 0x03 != 0;
                             let has_frame = m.background_fill_flags & 0x10 != 0;
@@ -429,7 +429,7 @@ pub fn tessellate(
                     // bounds as a separate outline wire so the text box is
                     // visible for testing. The empty text wire below is left
                     // untouched (still the SDF + pick target).
-                    if sdf_text
+                    if sdf_on
                         && !sdf_verts.is_empty()
                         && crate::scene::text::sdf_atlas::text_box_debug()
                     {
@@ -559,6 +559,35 @@ pub fn tessellate(
                             fill_tris_low: bin.fill_tris_low,
                         });
                     }
+                }
+
+                // Composite Text objects (e.g. a tolerance frame) keep geometry
+                // in `bins` (run-less groups) and text in `sdf_verts` (run
+                // groups). Emit the glyphs on their own wire carrying the tight
+                // glyph-box AABB so the text draws + picks alongside the box
+                // strokes. TEXT / MTEXT never reach here with SDF on (their bins
+                // are empty → the early-return path above).
+                if !sdf_verts.is_empty() {
+                    out.push(WireModel {
+                        text_verts: sdf_verts,
+                        name: name.clone(),
+                        points: Vec::new(),
+                        points_low: Vec::new(),
+                        color,
+                        selected,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: Vec::new(),
+                        tangent_geoms: Vec::new(),
+                        aci: 0,
+                        key_vertices: Vec::new(),
+                        aabb: text_aabb,
+                        plinegen: true,
+                        vp_scissor: None,
+                        fill_tris: vec![],
+                        fill_tris_low: Vec::new(),
+                    });
                 }
 
                 if out.is_empty() {

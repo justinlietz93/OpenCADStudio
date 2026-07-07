@@ -3,7 +3,7 @@ use acadrust::entities::Tolerance;
 use crate::command::EntityTransform;
 use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
-use crate::scene::convert::acad_to_truck::{TextStroke, TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{GlyphRun, TextStroke, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 use crate::scene::model::wire_model::SnapHint;
 use crate::scene::text::lff;
@@ -103,25 +103,34 @@ fn gdt_char_to_ascii(c: char) -> &'static str {
 
 // ── Feature-control frame builder ─────────────────────────────────────────────
 
-/// Tessellate a Tolerance entity into CXF-style polyline output.
+/// One text cell of a feature-control frame, ready to become a `TextStroke`
+/// with a `GlyphRun` so the cell text can render as SDF glyph quads (or, when
+/// SDF is off, from `strokes`). `origin` is relative to the tolerance insertion
+/// point (already rotated); `strokes` are the glyph polylines rotated about the
+/// origin (no origin translation — the wire-builder adds the origin).
+struct TolCell {
+    text: String,
+    origin: [f32; 2],
+    strokes: Vec<Vec<[f32; 2]>>,
+    height: f32,
+    rotation: f32,
+}
+
+/// Tessellate a Tolerance entity's feature-control frame.
 ///
-/// Returns (`box_lines`, `text_strokes`) where:
-///   - `box_lines` — 3-D line segments forming the outer border and dividers
-///   - `text_strokes` — 2-D polylines from the CXF tessellator
-///
-/// Since TruckObject has either Lines (3-D) or Text (2-D CXF), we render the
-/// box frame via a separate Lines path (added by the caller) and the text cells
-/// via the Text path.  For simplicity this function packs everything into a
-/// single Vec<Vec<[f32;2]>> by projecting the box lines to 2-D and using NaN
-/// polylines as separators — exactly what the Text wire-builder does.
-fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
+/// Returns (`box_strokes`, `cells`):
+///   - `box_strokes` — the outer border, row separators and column dividers as
+///     2-D polylines (rotated; run-less, so they always render as strokes)
+///   - `cells` — one [`TolCell`] per non-empty cell, carrying its text + a
+///     `GlyphRun` so the cell renders as SDF text (frame stays geometry).
+fn tessellate_tolerance(tol: &Tolerance) -> (Vec<Vec<[f32; 2]>>, Vec<TolCell>) {
     if tol.text.is_empty() {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     let rows = parse_gdt_rows(&tol.text);
     if rows.is_empty() {
-        return vec![];
+        return (vec![], vec![]);
     }
 
     // ── Metrics ──────────────────────────────────────────────────────────
@@ -162,10 +171,11 @@ fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
     // Rotate only; origin is kept as f64 and applied later with full precision.
     let rot = |x: f32, y: f32| -> [f32; 2] { [x * ca - y * sa, x * sa + y * ca] };
 
-    let mut out: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut box_out: Vec<Vec<[f32; 2]>> = Vec::new();
+    let mut cells: Vec<TolCell> = Vec::new();
 
     // ── Outer border ──────────────────────────────────────────────────────
-    out.push(vec![
+    box_out.push(vec![
         rot(0.0, 0.0),
         rot(total_w, 0.0),
         rot(total_w, total_h),
@@ -176,7 +186,7 @@ fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
     // ── Row separators ─────────────────────────────────────────────────────
     for ri in 1..rows.len() {
         let y = cell_h * ri as f32;
-        out.push(vec![rot(0.0, y), rot(total_w, y)]);
+        box_out.push(vec![rot(0.0, y), rot(total_w, y)]);
     }
 
     // ── Column dividers ────────────────────────────────────────────────────
@@ -187,12 +197,16 @@ fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
             if ci + 1 < rows[ri].len() {
                 let y0 = cell_h * ri as f32;
                 let y1 = y0 + cell_h;
-                out.push(vec![rot(x_cursor, y0), rot(x_cursor, y1)]);
+                box_out.push(vec![rot(x_cursor, y0), rot(x_cursor, y1)]);
             }
         }
     }
 
     // ── Text content per cell ─────────────────────────────────────────────
+    // Each cell becomes a TolCell: its origin is the (rotated) cell position
+    // relative to the insertion point; its `strokes` are the glyph polylines
+    // rotated about that origin (used only when SDF is off). The GlyphRun the
+    // caller attaches lets the cell render as SDF text.
     for (ri, row) in rows.iter().enumerate() {
         let row_y = cell_h * ri as f32 + gap;
         let mut cell_x = 0.0_f32;
@@ -205,24 +219,28 @@ fn tessellate_tolerance(tol: &Tolerance) -> Vec<Vec<[f32; 2]>> {
             if !cell.is_empty() {
                 let text_w = cell.len() as f32 * char_w;
                 let tx = cell_x + (cw - text_w) * 0.5;
-                // Tessellate text in local frame then transform
                 let (local_strokes, _) =
                     lff::tessellate_text_ex([0.0, 0.0], h, 0.0, 1.0, 0.0, "txt", cell);
-                for polyline in local_strokes {
-                    let transformed: Vec<[f32; 2]> = polyline
-                        .into_iter()
-                        .map(|[px, py]| rot(px + tx, py + row_y))
-                        .collect();
-                    if !transformed.is_empty() {
-                        out.push(transformed);
-                    }
-                }
+                // Glyph polylines rotated about the cell origin (no origin
+                // translation — the wire-builder adds `origin`).
+                let strokes: Vec<Vec<[f32; 2]>> = local_strokes
+                    .into_iter()
+                    .map(|pl| pl.into_iter().map(|[px, py]| rot(px, py)).collect())
+                    .filter(|pl: &Vec<[f32; 2]>| !pl.is_empty())
+                    .collect();
+                cells.push(TolCell {
+                    text: cell.clone(),
+                    origin: rot(tx, row_y),
+                    strokes,
+                    height: h,
+                    rotation: angle,
+                });
             }
             cell_x += cw;
         }
     }
 
-    out
+    (box_out, cells)
 }
 
 // ── TruckConvertible ──────────────────────────────────────────────────────────
@@ -240,17 +258,46 @@ impl TruckConvertible for Tolerance {
         );
 
         // Build the feature-control frame in local space; origin stored as f64.
-        let strokes = tessellate_tolerance(self);
-        let origin = [self.insertion_point.x, self.insertion_point.y];
+        let (box_strokes, cells) = tessellate_tolerance(self);
+        let ins = [self.insertion_point.x, self.insertion_point.y];
 
-        Some(TruckEntity {
-            object: TruckObject::Text(vec![TextStroke {
-                strokes,
-                origin,
+        // Frame geometry first (run-less → always strokes; also the anchor
+        // group so its origin = the insertion point), then one run-group per
+        // text cell so the cell text renders as SDF glyphs (or strokes when
+        // SDF is off).
+        let mut groups: Vec<TextStroke> = Vec::with_capacity(1 + cells.len());
+        if !box_strokes.is_empty() {
+            groups.push(TextStroke {
+                strokes: box_strokes,
+                origin: ins,
                 color: None,
                 fill_tris: vec![],
                 run: None,
-            }]),
+            });
+        }
+        for cell in cells {
+            groups.push(TextStroke {
+                strokes: cell.strokes,
+                origin: [ins[0] + cell.origin[0] as f64, ins[1] + cell.origin[1] as f64],
+                color: None,
+                fill_tris: vec![],
+                run: Some(GlyphRun {
+                    text: cell.text,
+                    font: "txt".to_string(),
+                    height: cell.height,
+                    rotation: cell.rotation,
+                    width_factor: 1.0,
+                    oblique: 0.0,
+                    tracking: 0.0,
+                }),
+            });
+        }
+        if groups.is_empty() {
+            return None;
+        }
+
+        Some(TruckEntity {
+            object: TruckObject::Text(groups),
             snap_pts: vec![(snap_pt, SnapHint::Insertion)],
             tangent_geoms: vec![],
             key_vertices: vec![],
