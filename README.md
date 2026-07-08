@@ -1,5 +1,10 @@
 # Open CAD Studio
 
+[![Release](https://img.shields.io/github/v/release/HakanSeven12/OpenCADStudio)](https://github.com/HakanSeven12/OpenCADStudio/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/HakanSeven12/OpenCADStudio/total)](https://github.com/HakanSeven12/OpenCADStudio/releases)
+[![Stars](https://img.shields.io/github/stars/HakanSeven12/OpenCADStudio)](https://github.com/HakanSeven12/OpenCADStudio/stargazers)
+[![License](https://img.shields.io/github/license/HakanSeven12/OpenCADStudio)](LICENSE)
+
 OCS is a CAD application for 2D drafting and 3D modeling, built with Rust. Reads and writes DWG and DXF files natively. Also has a web version now!
 
 ## OCS Web try it in the browser: https://hakanseven12.github.io/OpenCADStudio/
@@ -151,6 +156,10 @@ cd OpenCADStudio
 cargo build --release --bin OpenCADStudio
 ./target/release/OpenCADStudio
 ```
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=HakanSeven12/OpenCADStudio&type=Date)](https://star-history.com/#HakanSeven12/OpenCADStudio&Date)
 
 ## License
 
