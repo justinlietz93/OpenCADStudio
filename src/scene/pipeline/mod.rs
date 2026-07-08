@@ -90,7 +90,16 @@ pub struct Pipeline {
     /// analogue of the selected-wire xray overlay). Rebuilt on selection change.
     text_highlight_vbuf: Option<wgpu::Buffer>,
     text_highlight_vcount: u32,
+    /// Last requested render size (the full viewport rect, in pixels). The
+    /// geometry passes render at this size; the blit UV is scaled by
+    /// `depth_texture_size / alloc_size` so it samples only the filled region.
     depth_texture_size: Size<u32>,
+    /// Actual allocated size of the depth / MSAA / resolve textures. Rounded
+    /// up from the requested size to a coarse grid so a divider drag (which
+    /// changes the pane size a few pixels every frame) doesn't recreate these
+    /// textures every frame. Recreation is what hangs the ANGLE → D3D11 path
+    /// on Windows-Firefox (issue #191); grow-only bucketing makes it rare.
+    alloc_size: Size<u32>,
     depth_view: wgpu::TextureView,
     /// 4× MSAA color buffer for the main drawing passes.
     msaa_view: wgpu::TextureView,
@@ -1167,6 +1176,9 @@ impl Pipeline {
             hatch_batched_bgl1,
             image_bgl1,
             depth_texture_size: Size::new(1, 1),
+            // (0, 0) forces the first `ensure_depth_texture` to allocate at the
+            // real rounded size — the constructor textures above are placeholders.
+            alloc_size: Size::new(0, 0),
             depth_view,
             msaa_view,
             resolve_view,
@@ -1630,10 +1642,21 @@ impl Pipeline {
     /// Write the blit shader's UV crop uniform. Call in `prepare` (the only
     /// place with a `&Queue`) — `render` then just submits the draw call.
     pub fn upload_blit_uv(&self, queue: &wgpu::Queue, uv_offset: [f32; 2], uv_scale: [f32; 2]) {
+        // The geometry passes render at `depth_texture_size` into the top-left
+        // corner of the (possibly larger) `alloc_size` resolve texture, so the
+        // rendered image occupies UV [0, render/alloc]. Scale the incoming crop
+        // — computed in full-image-normalized units — down into that region.
+        let fx = self.depth_texture_size.width as f32 / self.alloc_size.width.max(1) as f32;
+        let fy = self.depth_texture_size.height as f32 / self.alloc_size.height.max(1) as f32;
         queue.write_buffer(
             &self.blit_uniform_buffer,
             0,
-            bytemuck::cast_slice(&[uv_offset[0], uv_offset[1], uv_scale[0], uv_scale[1]]),
+            bytemuck::cast_slice(&[
+                uv_offset[0] * fx,
+                uv_offset[1] * fy,
+                uv_scale[0] * fx,
+                uv_scale[1] * fy,
+            ]),
         );
     }
 
@@ -2255,9 +2278,11 @@ impl Pipeline {
             }
         }
 
-        // ── Resolve MSAA → clip-sized resolve texture ─────────────────────
-        // Both msaa_view and resolve_view are sized to clip_bounds, so the
-        // resolve does NOT touch any pixels outside the shader widget's area.
+        // ── Resolve MSAA → resolve texture ────────────────────────────────
+        // Both are the same (rounded `alloc_size`) offscreen texture, so the
+        // resolve never touches the surface. Only the drawn [0, render_size]
+        // corner holds content; the rounded border stays the cleared bg color
+        // and is never sampled (the blit UV is scaled to render/alloc).
         {
             let _resolve = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("msaa.resolve_pass"),
@@ -2314,7 +2339,12 @@ impl Pipeline {
     }
 
     pub fn ensure_depth_texture(&mut self, device: &wgpu::Device, size: Size<u32>) {
-        if self.depth_texture_size != size {
+        // Record the requested render size every frame (the blit UV scale reads
+        // it); only reallocate the textures when the *rounded* size changes.
+        self.depth_texture_size = size;
+        let alloc = Size::new(round_up_tex(size.width), round_up_tex(size.height));
+        if self.alloc_size != alloc {
+            let size = alloc;
             let depth_tex = create_depth_texture(device, size);
             self.depth_view = depth_tex.create_view(&wgpu::TextureViewDescriptor::default());
             let msaa_tex = create_msaa_texture(device, size, self.surface_format);
@@ -2340,9 +2370,17 @@ impl Pipeline {
                 ],
             });
             self.resolve_view = resolve_view;
-            self.depth_texture_size = size;
+            self.alloc_size = alloc;
         }
     }
+}
+
+/// Round a texture dimension up to a coarse grid so a live divider drag
+/// doesn't recreate the depth / MSAA / resolve textures on every frame. See
+/// `alloc_size` — this is the mitigation for the Windows-Firefox freeze (#191).
+fn round_up_tex(n: u32) -> u32 {
+    const GRID: u32 = 128;
+    ((n.max(1) + GRID - 1) / GRID) * GRID
 }
 
 /// Project a mesh's `world_aabb` and pick a LOD slot:
