@@ -598,7 +598,20 @@ pub(crate) fn tessellate_entity(
                 for w in &mut wires {
                     w.name = h.value().to_string();
                     w.aci = sub_aci;
-                    w.aabb = sub_aabb;
+                    // Keep the glyph-bounds AABB tessellate set on SDF text wires
+                    // (their geometry is in `text_verts`, not `points`); clobbering
+                    // it here left block text with an UNBOUNDED box. For every
+                    // other wire use the sub-entity box, falling back to the wire's
+                    // own world points when that box is degenerate/unimplemented
+                    // (UNBOUNDED) — otherwise it never culls and stalls snapping on
+                    // block-heavy drawings.
+                    if w.text_verts.is_empty() {
+                        w.aabb = if sub_aabb == WireModel::UNBOUNDED_AABB {
+                            wire_points_aabb(w)
+                        } else {
+                            sub_aabb
+                        };
+                    }
                 }
                 wires
             })
@@ -809,15 +822,45 @@ fn lod_stub_wire_3d(
 /// INSERT only stamps the geometry once, attribute text sits at the world
 /// position recorded on each ATTRIB. See #20.
 #[allow(clippy::too_many_arguments)]
+/// World-space XY AABB of a wire computed from its own points (double-single
+/// `points + points_low` sum = absolute world, matching `wire_in_range`'s
+/// `cursor_world`). Used as a fallback when an entity's `bounding_box()` is
+/// degenerate/unimplemented (`entity_aabb` → `UNBOUNDED`), so the wire still
+/// gets a real, cullable box instead of never being pre-rejected during snap.
+pub(crate) fn wire_points_aabb(w: &WireModel) -> [f32; 4] {
+    let mut min = [f32::INFINITY; 2];
+    let mut max = [f32::NEG_INFINITY; 2];
+    let mut any = false;
+    for (i, p) in w.points.iter().enumerate() {
+        let lo = w.points_low.get(i).copied().unwrap_or([0.0; 3]);
+        let (x, y) = (p[0] + lo[0], p[1] + lo[1]);
+        if x.is_finite() && y.is_finite() {
+            min[0] = min[0].min(x);
+            min[1] = min[1].min(y);
+            max[0] = max[0].max(x);
+            max[1] = max[1].max(y);
+            any = true;
+        }
+    }
+    if any {
+        [min[0], min[1], max[0], max[1]]
+    } else {
+        WireModel::UNBOUNDED_AABB
+    }
+}
+
 pub(crate) fn entity_aabb(e: &acadrust::EntityType) -> [f32; 4] {
     let bbox = e.as_entity().bounding_box();
     let min_x = (bbox.min.x) as f32;
     let min_y = (bbox.min.y) as f32;
     let max_x = (bbox.max.x) as f32;
     let max_y = (bbox.max.y) as f32;
-    // A degenerate box (min == max == 0) means bounding_box() returned Default —
-    // use UNBOUNDED so the wire is never wrongly pre-rejected.
-    if min_x == max_x && min_y == max_y {
+    // The all-zero box is bounding_box()'s Default — returned by entities with
+    // no usable box (unimplemented) — so treat it as UNBOUNDED (never
+    // pre-rejected). A genuinely zero-size box *away* from the origin (e.g. a
+    // POINT) is a valid, cullable position: keep it, otherwise point-heavy
+    // drawings fill the always-checked set and stall hit-testing.
+    if min_x == 0.0 && min_y == 0.0 && max_x == 0.0 && max_y == 0.0 {
         return WireModel::UNBOUNDED_AABB;
     }
     [min_x, min_y, max_x, max_y]

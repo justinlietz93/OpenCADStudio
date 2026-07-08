@@ -775,6 +775,11 @@ pub struct Scene {
     /// invalidates the cull-dependent wire list as well as a geometry change.
     /// Uses `Arc` so `build_primitive()` avoids a full Vec clone during navigation.
     wire_cache: RefCell<Option<((u64, u64), Arc<Vec<WireModel>>)>>,
+    /// Spatial grid over the model hit-test wire set, keyed on `geometry_epoch`
+    /// so it is rebuilt only when geometry changes (not per cursor move). Lets
+    /// snap / hover query a cursor-local wire subset instead of scanning the
+    /// whole (block-exploded, multi-million-wire) set every move.
+    wire_grid_cache: RefCell<Option<(u64, Arc<crate::scene::pick::wire_grid::WireGrid>)>>,
     /// Index built from every SortEntitiesTable in the document.
     /// Maps block_handle → (entity_handle.value() → sort_handle.value()).
     /// Replaces the O(objects) linear scan inside `wires_for_block()` with an O(1) lookup.
@@ -995,6 +1000,7 @@ impl Scene {
             block_epoch: GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed),
             selection_generation: 0,
             wire_cache: RefCell::new(None),
+            wire_grid_cache: RefCell::new(None),
             sort_cache: RefCell::new(None),
             draw_depth_cache: RefCell::new(None),
             hatch_cache: RefCell::new(None),
@@ -2833,6 +2839,64 @@ impl Scene {
                 Arc::new(self.viewport_content_wires(layout_block, Some(vp_handle), None))
             }
         }
+    }
+
+    /// Minimum wire count before the spatial grid is worth building; below it a
+    /// full linear scan is already fast and the grid's build/query overhead
+    /// would just add latency.
+    const WIRE_GRID_MIN: usize = 40_000;
+
+    /// Spatial grid over `wires`, cached on `geometry_epoch`. `wires` must be
+    /// the same `geometry_epoch`-keyed set the indices will index into.
+    fn wire_hit_grid(
+        &self,
+        wires: &Arc<Vec<WireModel>>,
+    ) -> Arc<crate::scene::pick::wire_grid::WireGrid> {
+        {
+            let cache = self.wire_grid_cache.borrow();
+            if let Some((epoch, ref arc)) = *cache {
+                if epoch == self.geometry_epoch {
+                    return Arc::clone(arc);
+                }
+            }
+        }
+        let grid = Arc::new(crate::scene::pick::wire_grid::WireGrid::build(wires));
+        *self.wire_grid_cache.borrow_mut() = Some((self.geometry_epoch, Arc::clone(&grid)));
+        grid
+    }
+
+    /// Hit-test wires near the cursor. For large model sets in a flat top-down
+    /// view this queries a cached spatial grid so snap / hover touch only the
+    /// cursor neighbourhood instead of the whole (block-exploded) wire set;
+    /// small sets, paper space and tilted views fall back to the full set
+    /// (where the grid's flat-XY assumption or build/query overhead would not
+    /// pay off). Drop-in for `hit_test_wires()` at per-move snap / hover sites.
+    pub fn hit_test_wires_near(
+        &self,
+        cursor: glam::DVec3,
+        view_rot: glam::Mat4,
+        bounds: iced::Rectangle,
+    ) -> Arc<Vec<WireModel>> {
+        let full = self.hit_test_wires();
+        if self.current_layout != "Model" || full.len() < Self::WIRE_GRID_MIN {
+            return full;
+        }
+        // The grid indexes world XY; only a flat top-down view maps world x/y
+        // straight to screen, so restrict to it (matches the hit-test cull).
+        let flat = view_rot.z_axis.x.abs() < 1e-9 && view_rot.z_axis.y.abs() < 1e-9;
+        if !flat {
+            return full;
+        }
+        // World radius covering the snap aperture + click threshold + margin.
+        // `view_rot.col(0).x * width/2` = pixels per world unit (ortho).
+        let s = view_rot.col(0).x.abs() * bounds.width * 0.5;
+        if s <= 1e-6 {
+            return full;
+        }
+        let radius = 64.0 / s as f64;
+        let grid = self.wire_hit_grid(&full);
+        let idxs = grid.query(cursor.x, cursor.y, radius);
+        Arc::new(idxs.iter().map(|&i| full[i as usize].clone()).collect())
     }
 
     /// Pick a meshed 3D solid by clicking on its shaded body (face), not just

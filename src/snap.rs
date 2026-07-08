@@ -883,13 +883,21 @@ impl Snapper {
         // instead compare pairs of in-range segments — O(k²) — which hangs when the
         // aperture spans the whole drawing. Count the in-range wires once and gate
         // only those pairwise passes; the single-wire snaps always run.
-        const MAX_PAIRWISE_CANDIDATES: usize = 1_500;
-        let allow_pairwise = wires
-            .iter()
-            .filter(|w| wire_in_range(w))
-            .take(MAX_PAIRWISE_CANDIDATES + 1)
-            .count()
-            <= MAX_PAIRWISE_CANDIDATES;
+        // Intersection / ApparentIntersection compare every in-range segment
+        // against every other — O(total in-range segments²). Gate on the
+        // in-range *point* (≈ segment) count, not the wire count: a handful of
+        // curved wires, each hundreds of tessellated points, blows the
+        // quadratic up even though the wire count looks modest. (A dense survey
+        // cursor cell held ~1k wires / ~240k points → 15 s pre-gate.)
+        const MAX_PAIRWISE_POINTS: usize = 3_000;
+        let mut in_range_pts = 0usize;
+        for w in wires.iter().filter(|w| wire_in_range(w)) {
+            in_range_pts += w.points.len();
+            if in_range_pts > MAX_PAIRWISE_POINTS {
+                break;
+            }
+        }
+        let allow_pairwise = in_range_pts <= MAX_PAIRWISE_POINTS;
 
         let mut try_pt = |world: glam::DVec3, snap_type: SnapType| {
             let screen = world_to_screen(world, view_rot, eye, bounds);

@@ -731,7 +731,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     {
                         self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
                     } else {
-                        self.tabs[i].scene.hit_test_wires()
+                        self.tabs[i].scene.hit_test_wires_near(raw, view_rot, bounds)
                     };
                     // Grip drag has no single rubber-band origin for a perp foot.
                     self.snapper.from_point = None;
@@ -853,7 +853,9 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     {
                         self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
                     } else {
-                        self.tabs[i].scene.hit_test_wires()
+                        self.tabs[i]
+                            .scene
+                            .hit_test_wires_near(snap_cursor, view_rot, bounds)
                     };
                     let needs_entity = self.tabs[i]
                         .active_cmd
@@ -1347,7 +1349,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
         {
             self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
         } else {
-            self.tabs[i].scene.hit_test_wires()
+            self.tabs[i].scene.hit_test_wires_near(raw, view_rot, bounds)
         };
         self.snapper.grid_spacing = crate::ui::overlay::compute_grid_step(view_rot, bounds);
         // No rubber-band origin (perp/extension feet don't apply to a free drag).
@@ -1801,7 +1803,9 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                         {
                             self.tabs[i].scene.model_wires_for_viewport_arc(h, bounds.height)
                         } else {
-                            self.tabs[i].scene.hit_test_wires()
+                            self.tabs[i]
+                                .scene
+                                .hit_test_wires_near(snap_cursor, view_rot, bounds)
                         };
                         let needs_tan = self.tabs[i]
                             .active_cmd
