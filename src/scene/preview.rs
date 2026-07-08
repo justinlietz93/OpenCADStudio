@@ -26,7 +26,7 @@ impl Scene {
         handles
             .iter()
             .flat_map(|h| {
-                match self.document.entities().find(|e| e.common().handle == *h) {
+                match self.document.get_entity(*h) {
                     // Hatches carry no outline in the normal wire set, but an
                     // edit preview (move / copy / array / grip-drag) needs to
                     // show the shape following the cursor. Build a live boundary
@@ -54,7 +54,7 @@ impl Scene {
         let mut plain: Vec<WireModel> = Vec::new();
         let mut texts: Vec<(WireModel, glam::DVec3)> = Vec::new();
         for h in handles {
-            let Some(e) = self.document.entities().find(|e| e.common().handle == *h) else {
+            let Some(e) = self.document.get_entity(*h) else {
                 continue;
             };
             if matches!(e, EntityType::Text(_)) {

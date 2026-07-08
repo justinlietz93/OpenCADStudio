@@ -2080,7 +2080,12 @@ impl OpenCADStudio {
             })
             .collect();
         self.merge_clipboard_ext_objects(i, &by_index);
-        self.tabs[i].scene.populate_meshes_from_document();
+        // Incremental: `add_entity` already tessellated every pasted top-level
+        // solid, and existing document solids are still cached — so only newly
+        // introduced block-definition solids need building. The full rebuild
+        // would clear and re-tessellate the entire document (every solid in the
+        // drawing) on each paste, which is what made a large paste stall.
+        self.tabs[i].scene.populate_missing_meshes_from_document();
         by_index
     }
 
