@@ -1751,8 +1751,17 @@ impl OpenCADStudio {
             }
 
             Message::SetModifiers { shift, ctrl } => {
+                let ctrl_changed = self.ctrl_down != ctrl;
                 self.shift_down = shift;
                 self.ctrl_down = ctrl;
+                // A live command may key its preview off Ctrl (arc-direction
+                // flip). Rebuild it at the current cursor so the flip shows
+                // without waiting for the next mouse move.
+                let i = self.active_tab;
+                if ctrl_changed && self.tabs[i].active_cmd.is_some() {
+                    let p = self.tabs[i].last_cursor_screen;
+                    return Task::done(Message::ViewportMove(p));
+                }
                 Task::none()
             }
 

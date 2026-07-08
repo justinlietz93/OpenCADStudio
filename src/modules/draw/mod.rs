@@ -62,7 +62,7 @@ impl CadModule for DrawModule {
                             label: "Arc",
                             icon: arc::ICON,
                             items: arc::DROPDOWN_ITEMS.to_vec(),
-                            default: "ARC",
+                            default: "ARC_3P",
                         },
                         RibbonItem::Dropdown {
                             id: shapes::DROPDOWN_ID,

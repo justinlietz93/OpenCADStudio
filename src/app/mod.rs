@@ -392,6 +392,10 @@ pub(super) struct OpenCADStudio {
     show_layout_tabs: bool,
     /// Last point committed by a drawing command — used as ortho/polar base.
     last_point: Option<glam::Vec3>,
+    /// Endpoint + unit exit-tangent of the most recently drawn line/arc, so
+    /// `ARC_CONT` (Arc → Continue) can start tangentially from where drawing
+    /// ended. `None` once a non-line/arc entity is committed.
+    cont_anchor: Option<(glam::DVec3, glam::DVec3)>,
     /// OS window Id for the floating Layer Properties Manager (None when closed).
     /// OS window Id of the primary application window.
     main_window: Option<window::Id>,
@@ -2150,6 +2154,7 @@ impl OpenCADStudio {
             clipboard_deps: ClipboardDeps::default(),
             shift_down: false,
             ctrl_down: false,
+            cont_anchor: None,
             mtext_editor: None,
             text_inline: None,
             layout_context_menu: None,

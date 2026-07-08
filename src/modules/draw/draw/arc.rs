@@ -1,16 +1,17 @@
 // Arc tool — ribbon dropdown + all OpenCADStudio arc creation methods.
 //
-// Methods:
-//   ARC     — Center, Start, End    (CSE — default)
-//   ARC_3P  — 3-Point
+// Methods (dropdown order):
+//   ARC_3P  — 3-Point                (default)
 //   ARC_SCE — Start, Center, End
 //   ARC_SCA — Start, Center, Angle
 //   ARC_SCL — Start, Center, Length of chord
-//   ARC_SEA — Start, End, Angle     (sagitta-based pick)
-//   ARC_SER — Start, End, Radius    (radius defined by dist cursor→start)
-//   ARC_SED — Start, End, Direction (tangent at start)
+//   ARC_SEA — Start, End, Angle      (sagitta-based pick)
+//   ARC_SED — Start, End, Direction  (tangent at start)
+//   ARC_SER — Start, End, Radius     (radius defined by dist cursor→start)
+//   ARC     — Center, Start, End     (CSE)
 //   ARC_CSA — Center, Start, Angle
 //   ARC_CSL — Center, Start, Length of chord
+//   ARC_CONT— Continue                (tangent to previous line/arc; pick end only)
 
 use acadrust::types::Vector3;
 use acadrust::{Arc as CadArc, EntityType};
@@ -43,26 +44,29 @@ const ICON_CSA: IconKind =
     IconKind::Svg(include_bytes!("../../../../assets/icons/arc/arc_csa.svg"));
 const ICON_CSL: IconKind =
     IconKind::Svg(include_bytes!("../../../../assets/icons/arc/arc_csl.svg"));
+const ICON_CONT: IconKind =
+    IconKind::Svg(include_bytes!("../../../../assets/icons/arc/arc_cont.svg"));
 
 // ── Dropdown metadata ──────────────────────────────────────────────────────
 
 pub const DROPDOWN_ID: &str = "ARC";
 
 pub const DROPDOWN_ITEMS: &[(&str, &str, IconKind)] = &[
-    ("ARC", "Center, Start, End", ICON_CSE),
     ("ARC_3P", "3-Point", ICON_3P),
     ("ARC_SCE", "Start, Center, End", ICON_SCE),
     ("ARC_SCA", "Start, Center, Angle", ICON_SCA),
     ("ARC_SCL", "Start, Center, Length", ICON_SCL),
     ("ARC_SEA", "Start, End, Angle", ICON_SEA),
-    ("ARC_SER", "Start, End, Radius", ICON_SER),
     ("ARC_SED", "Start, End, Direction", ICON_SED),
+    ("ARC_SER", "Start, End, Radius", ICON_SER),
+    ("ARC", "Center, Start, End", ICON_CSE),
     ("ARC_CSA", "Center, Start, Angle", ICON_CSA),
     ("ARC_CSL", "Center, Start, Length", ICON_CSL),
+    ("ARC_CONT", "Continue", ICON_CONT),
 ];
 
-/// Default icon — falls back to CSE before first use.
-pub const ICON: IconKind = ICON_CSE;
+/// Default icon — falls back to 3-Point before first use.
+pub const ICON: IconKind = ICON_3P;
 
 // ── Shared math helpers ────────────────────────────────────────────────────
 
@@ -207,6 +211,68 @@ fn arc_from_direction(s: DVec3, e: DVec3, dir_pt: DVec3) -> Option<(DVec3, f64)>
     let lambda = chord.length_squared() * 0.5 / denom;
     let center = s + perp_t * lambda;
     Some((center, center.distance(s)))
+}
+
+/// Tangent-continuing arc: starts at `s` leaving in unit direction `t` (forward,
+/// G1-continuous with the previous entity) and passes through `e`. Returns
+/// `(center, radius, start_angle, end_angle)` with the CCW sweep oriented so the
+/// drawn arc actually leaves `s` along `+t` (not the reflex complement).
+///
+/// `arc_from_direction` treats the tangent as an undirected line (±t give the
+/// same circle), so on its own the CCW-only renderer would draw the wrong arc
+/// whenever `e` lies to the right of `+t`. We fix the sweep direction here by
+/// checking the circle's CCW travel direction at `s` and swapping the angles
+/// when it opposes `+t`. `flip` (Ctrl) selects the complementary arc — the other
+/// way around the same circle.
+fn arc_continue(s: DVec3, t: DVec3, e: DVec3, flip: bool) -> Option<(DVec3, f64, f64, f64)> {
+    let (center, radius) = arc_from_direction(s, e, s + t)?;
+    // CCW travel direction on this circle at s = (s - center) rotated +90°.
+    let rs = s - center;
+    let travel_s = DVec3::new(-rs.y, rs.x, 0.0);
+    let forward = travel_s.dot(t) >= 0.0;
+    // Draw CCW s→e when the CCW-from-s arc leaves along +t; else CCW e→s. `flip`
+    // inverts the choice to draw the complementary arc.
+    let (sa, ea) = if forward ^ flip {
+        (angle_xy(center, s), angle_xy(center, e))
+    } else {
+        (angle_xy(center, e), angle_xy(center, s))
+    };
+    Some((center, radius, sa, ea))
+}
+
+/// Continuation anchor for `ARC_CONT`: the point where drawing a line/arc ended
+/// plus the unit tangent leaving it, used to start a tangent-continuing arc.
+/// `last` (the final pick point) disambiguates which endpoint the drawing ended
+/// on — essential because a committed arc stores geometric CCW start/end angles,
+/// not the direction the pen travelled. Returns `None` for other entity kinds.
+pub fn continue_anchor(entity: &EntityType, last: Option<DVec3>) -> Option<(DVec3, DVec3)> {
+    let nearer_first = |a: DVec3, b: DVec3| match last {
+        Some(p) => p.distance(a) <= p.distance(b),
+        None => true, // default to the entity's stored end
+    };
+    match entity {
+        EntityType::Line(l) => {
+            let a = DVec3::new(l.start.x, l.start.y, l.start.z);
+            let b = DVec3::new(l.end.x, l.end.y, l.end.z);
+            let (p_end, p_start) = if nearer_first(b, a) { (b, a) } else { (a, b) };
+            let t = (p_end - p_start).normalize_or_zero();
+            (t.length_squared() > 1e-12).then_some((p_end, t))
+        }
+        EntityType::Arc(a) => {
+            let sp_v = a.start_point();
+            let ep_v = a.end_point();
+            let sp = DVec3::new(sp_v.x, sp_v.y, sp_v.z);
+            let ep = DVec3::new(ep_v.x, ep_v.y, ep_v.z);
+            if nearer_first(ep, sp) {
+                // Ended at end_angle: outward tangent = CCW travel there.
+                Some((ep, DVec3::new(-a.end_angle.sin(), a.end_angle.cos(), 0.0)))
+            } else {
+                // Ended at start_angle: outward tangent = CW travel there.
+                Some((sp, DVec3::new(a.start_angle.sin(), -a.start_angle.cos(), 0.0)))
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Compute end_angle from a chord-length pick (SCL / CSL semantics).
@@ -1258,6 +1324,60 @@ impl CadCommand for ArcCSLCommand {
 }
 
 
+// ── Command 11: Continue  (ARC_CONT) ──────────────────────────────────────
+// Tangent-continuing arc from the previous line/arc endpoint. The start point
+// and start tangent are seeded at dispatch (from `continue_anchor`); the user
+// picks only the end point, so the arc joins the previous entity smoothly.
+
+pub struct ArcContCommand {
+    s: DVec3,
+    tangent: DVec3,
+    /// Live Ctrl state (set via `set_ctrl`): flips the arc to the other way.
+    ctrl: bool,
+}
+
+impl ArcContCommand {
+    pub fn new(s: DVec3, tangent: DVec3) -> Self {
+        Self {
+            s,
+            tangent,
+            ctrl: false,
+        }
+    }
+}
+
+impl CadCommand for ArcContCommand {
+    fn name(&self) -> &'static str {
+        "ARC_CONT"
+    }
+    fn prompt(&self) -> String {
+        "ARC Continue  Specify end point  [Ctrl = flip direction]:".into()
+    }
+    fn set_ctrl(&mut self, ctrl: bool) {
+        self.ctrl = ctrl;
+    }
+    fn on_point(&mut self, pt: DVec3) -> CmdResult {
+        match arc_continue(self.s, self.tangent, pt, self.ctrl) {
+            Some((center, radius, sa, ea)) => {
+                CmdResult::CommitAndExit(make_arc(center, radius, sa, ea))
+            }
+            None => CmdResult::Cancel,
+        }
+    }
+    fn on_enter(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+    fn on_escape(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+    fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> {
+        match arc_continue(self.s, self.tangent, pt, self.ctrl) {
+            Some((center, radius, sa, ea)) => Some(arc_preview(center, radius, sa, ea)),
+            None => Some(line_wire(self.s, pt)),
+        }
+    }
+}
+
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_3P"] });  // Arc3PCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_CSA"] });  // ArcCSACommand
@@ -1269,3 +1389,4 @@ inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SCL"] });
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SEA"] });  // ArcSEACommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SED"] });  // ArcSEDCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SER"] });  // ArcSERCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["ARC_CONT"] });  // ArcContCommand

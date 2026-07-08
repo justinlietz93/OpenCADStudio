@@ -292,6 +292,31 @@ impl OpenCADStudio {
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
+            "ARC_CONT" => {
+                use crate::modules::draw::draw::arc::{continue_anchor, ArcContCommand};
+                // Prefer the anchor recorded when the last line/arc was drawn (it
+                // knows the true drawing-end tangent); otherwise fall back to the
+                // last line/arc found in the document (e.g. after a file load).
+                let seed = self.cont_anchor.or_else(|| {
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .entities()
+                        .filter_map(|e| continue_anchor(e, None))
+                        .last()
+                });
+                match seed {
+                    Some((s, tangent)) => {
+                        let new_cmd = ArcContCommand::new(s, tangent);
+                        self.command_line.push_info(&new_cmd.prompt());
+                        self.tabs[i].active_cmd = Some(Box::new(new_cmd));
+                    }
+                    None => {
+                        self.command_line
+                            .push_info("ARC Continue  No previous line or arc to continue.");
+                    }
+                }
+            }
 
             "RECT" | "RECTANG" | "REC" => {
                 use crate::modules::draw::draw::shapes::RectCommand;

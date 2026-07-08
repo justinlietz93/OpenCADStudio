@@ -1090,9 +1090,11 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                         s.screen.y += tile_b.y;
                     }
 
-                    // Give the command the current UCS before it builds its
-                    // rubber-band preview (and, by persistence, its commit).
+                    // Give the command the current UCS + Ctrl state before it
+                    // builds its rubber-band preview (and, by persistence, its
+                    // commit).
                     self.push_ucs_to_cmd(i);
+                    self.push_ctrl_to_cmd(i);
                     let mut previews = if needs_structure {
                         let mut p = self.tabs[i]
                             .active_cmd

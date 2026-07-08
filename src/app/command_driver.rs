@@ -11,10 +11,12 @@ impl OpenCADStudio {
     /// lives in exactly one place. No-op when no command is active.
     pub(super) fn feed_command(&mut self, input: StepInput) -> Task<Message> {
         let i = self.active_tab;
+        let ctrl = self.ctrl_down;
         let result: Option<CmdResult> = {
             let Some(cmd) = self.tabs[i].active_cmd.as_mut() else {
                 return Task::none();
             };
+            cmd.set_ctrl(ctrl);
             match input {
                 StepInput::Point(p) => Some(cmd.on_point(p)),
                 StepInput::Text(s) => cmd.on_text_input(&s),
@@ -284,6 +286,9 @@ impl OpenCADStudio {
                         &path,
                     );
                 }
+                // Record where this draw ended so ARC_CONT can continue from it
+                // (before `entity` is moved into commit_entity).
+                self.update_cont_anchor(&entity);
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
                 self.push_undo_snapshot(i, label);
                 self.commit_entity(entity);

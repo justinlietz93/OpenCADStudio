@@ -198,6 +198,26 @@ impl OpenCADStudio {
         }
     }
 
+    /// Push the live Ctrl state into tab `i`'s active command before it builds a
+    /// preview/commit (arc-direction flip on `ARC_CONT`, etc.).
+    pub(in crate::app) fn push_ctrl_to_cmd(&mut self, i: usize) {
+        let ctrl = self.ctrl_down;
+        if let Some(c) = self.tabs[i].active_cmd.as_mut() {
+            c.set_ctrl(ctrl);
+        }
+    }
+
+    /// Cache the endpoint + exit tangent of a just-committed line/arc so a
+    /// following `ARC_CONT` starts tangentially from where drawing ended. Set to
+    /// `None` for any other entity kind. Uses `last_point` (the final pick) to
+    /// pick the endpoint the pen actually finished on.
+    pub(in crate::app) fn update_cont_anchor(&mut self, entity: &acadrust::EntityType) {
+        let last = self
+            .last_point
+            .map(|v| glam::DVec3::new(v.x as f64, v.y as f64, v.z as f64));
+        self.cont_anchor = crate::modules::draw::draw::arc::continue_anchor(entity, last);
+    }
+
     pub(in crate::app) fn dyn_resolve_point(&self) -> Option<glam::Vec3> {
         use crate::app::document::DynComponent;
         let i = self.active_tab;

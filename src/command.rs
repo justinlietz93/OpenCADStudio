@@ -552,6 +552,11 @@ pub trait CadCommand: Send {
     /// ignore it. Called before each point / preview dispatch.
     fn set_ucs(&mut self, _ucs: glam::Mat4) {}
 
+    /// Push the live Ctrl-key state into the command before each preview/commit
+    /// dispatch. Commands that offer a Ctrl toggle (e.g. arc-direction flip on
+    /// `ARC_CONT`) store it; most commands ignore it. Default no-op.
+    fn set_ctrl(&mut self, _ctrl: bool) {}
+
     /// Called when the user left-clicks in the viewport (point pick).
     fn on_point(&mut self, pt: DVec3) -> CmdResult;
 
