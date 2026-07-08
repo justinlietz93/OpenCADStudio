@@ -1,4 +1,3 @@
-use crate::scene::WireModel;
 use crate::ui::overlay::GridPlane;
 use acadrust::tables::Ucs;
 
@@ -253,28 +252,27 @@ pub(super) fn polar_constrain_near(
 
 // ── Clipboard / selection helpers ──────────────────────────────────────────
 
-/// Compute the centroid of a set of wire models (average of all points).
-pub(super) fn entities_centroid(wires: &[WireModel]) -> glam::DVec3 {
-    // Reconstruct each vertex's absolute f64 from the double-single high/low
-    // pair and accumulate in f64: summing the f32 `points` alone at UTM scale
-    // (~5.7e6) both quantizes each term ~0.5 m and loses low bits across the
-    // running total, drifting the paste base / block base metres off.
+/// Cheap copy/paste anchor: the mean of each entity's bounding-box centre.
+/// Replaces averaging every tessellated wire vertex, which cost O(total
+/// geometry) and stalled a whole-drawing copy. The anchor only sets which point
+/// of the selection sits under the cursor, so a per-entity bbox centre is an
+/// equally valid, far cheaper origin.
+pub(super) fn entities_centroid_by_bbox(
+    doc: &acadrust::CadDocument,
+    handles: &[acadrust::Handle],
+) -> glam::DVec3 {
     let mut sum = glam::DVec3::ZERO;
     let mut count = 0usize;
-    for w in wires {
-        for (i, p) in w.points.iter().enumerate() {
-            // Wire models carry NaN points as separators between disjoint
-            // segments; summing them poisons the whole centroid into NaN,
-            // which then makes every paste base point NaN. (#129)
-            if !p[0].is_finite() || !p[1].is_finite() || !p[2].is_finite() {
-                continue;
-            }
-            let l = w.points_low.get(i).copied().unwrap_or([0.0; 3]);
-            sum += glam::DVec3::new(
-                p[0] as f64 + l[0] as f64,
-                p[1] as f64 + l[1] as f64,
-                p[2] as f64 + l[2] as f64,
-            );
+    for &h in handles {
+        let Some(e) = doc.get_entity(h) else { continue };
+        let bb = e.as_entity().bounding_box();
+        let c = glam::DVec3::new(
+            (bb.min.x + bb.max.x) * 0.5,
+            (bb.min.y + bb.max.y) * 0.5,
+            (bb.min.z + bb.max.z) * 0.5,
+        );
+        if c.x.is_finite() && c.y.is_finite() && c.z.is_finite() {
+            sum += c;
             count += 1;
         }
     }

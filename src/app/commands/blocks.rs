@@ -70,8 +70,9 @@ impl OpenCADStudio {
                         .iter()
                         .filter_map(|&h| self.tabs[i].scene.document.get_entity(h).cloned())
                         .collect();
-                    self.clipboard_centroid = super::super::helpers::entities_centroid(
-                        &self.tabs[i].scene.wire_models_for(&handles),
+                    self.clipboard_centroid = super::super::helpers::entities_centroid_by_bbox(
+                        &self.tabs[i].scene.document,
+                        &handles,
                     );
                     self.clipboard = entities;
                     self.clipboard_deps = super::super::ClipboardDeps::capture(
@@ -158,8 +159,9 @@ impl OpenCADStudio {
                         .iter()
                         .filter_map(|&h| self.tabs[i].scene.document.get_entity(h).cloned())
                         .collect();
-                    self.clipboard_centroid = super::super::helpers::entities_centroid(
-                        &self.tabs[i].scene.wire_models_for(&handles),
+                    self.clipboard_centroid = super::super::helpers::entities_centroid_by_bbox(
+                        &self.tabs[i].scene.document,
+                        &handles,
                     );
                     let count = entities.len();
                     self.clipboard = entities;
