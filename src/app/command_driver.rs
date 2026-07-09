@@ -1187,10 +1187,11 @@ impl OpenCADStudio {
                     self.command_line.push_output(&format!(
                         "Plot window: {x0:.2},{y0:.2} to {x1:.2},{y1:.2}"
                     ));
-                    // Pick window closed Page Setup so the viewport could
-                    // receive the two clicks — bring it back for scale
-                    // review and the "Plot window → PDF" button.
-                    self.active_modal = Some(super::ModalKind::PageSetup);
+                    // Pick window closed the plot dialog so the viewport could
+                    // receive the two clicks — bring the dialog back with the
+                    // window now active.
+                    self.plot_dialog.area = "Window".to_string();
+                    self.active_modal = Some(super::ModalKind::Plot);
                 } else {
                     let block_handle = self.tabs[i].scene.current_layout_block_handle_pub();
                     let doc = &mut self.tabs[i].scene.document;

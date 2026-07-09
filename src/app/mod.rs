@@ -513,26 +513,14 @@ pub(super) struct OpenCADStudio {
     last_vp_click_time: Option<Instant>,
     /// Screen position of the previous viewport left-click release.
     last_vp_click_pos: Option<Point>,
-    /// Editable paper width buffer for the Page Setup panel (string while typing).
-    page_setup_w: String,
-    /// Editable paper height buffer for the Page Setup panel (string while typing).
-    page_setup_h: String,
-    /// Plot area type: "Layout" | "Extents".
-    page_setup_plot_area: String,
-    /// Center the drawing on the page when exporting.
-    page_setup_center: bool,
-    /// Plot offset X in mm (applied after optional centering).
-    page_setup_offset_x: String,
-    /// Plot offset Y in mm.
-    page_setup_offset_y: String,
-    /// Plot rotation in degrees: "0" | "90" | "180" | "270".
-    page_setup_rotation: String,
-    /// Plot scale: "Fit" | "1:1" | "1:2" | "1:4" | "1:5" | "1:10" | "1:20" | "1:50" | "1:100" | "2:1".
-    page_setup_scale: String,
+    /// Plot scale for model-space window plots: "Fit" | "1:1" | … | "2:1".
+    plot_scale: String,
     /// Pending model-space plot window (x0, y0, x1, y1) in world XY, or None.
     plot_window: Option<(f64, f64, f64, f64)>,
     plot_format: crate::io::paper_sizes::PaperSize,
     plot_orientation: crate::io::paper_sizes::Orientation,
+    /// Backing state for the full Plot / Print dialog.
+    plot_dialog: crate::ui::window::plot::PlotDialogState,
 
     // ── Plot Style Table ──────────────────────────────────────────────────
     /// Currently loaded CTB/STB table (None = no override).
@@ -1058,7 +1046,7 @@ pub enum ModalKind {
     PluginManager,
     UpdateNotice,
     Layers,
-    PageSetup,
+    Plot,
     LayoutManager,
     Plotstyle,
     TextStyle,
@@ -1791,30 +1779,6 @@ pub enum Message {
     /// User clicked the "Open release page" button — opens the GitHub
     /// release URL in the OS default browser and closes the notice.
     UpdateNoticeOpenRelease,
-    // ── Page Setup ────────────────────────────────────────────────────────
-    /// Open the Page Setup panel for the current layout.
-    PageSetupOpen,
-    /// Close (cancel) the Page Setup panel without applying changes.
-    PageSetupClose,
-    /// Live-edit of the paper width field.
-    PageSetupWidthEdit(String),
-    /// Live-edit of the paper height field.
-    PageSetupHeightEdit(String),
-    /// User selected a paper size preset (e.g. "A4 Portrait").
-    PageSetupPreset(String),
-    /// User changed the plot area type ("Layout" or "Extents").
-    PageSetupPlotArea(String),
-    /// Toggle center-on-page.
-    PageSetupCenterToggle,
-    /// Live-edit of plot offset X.
-    PageSetupOffsetXEdit(String),
-    /// Live-edit of plot offset Y.
-    PageSetupOffsetYEdit(String),
-    /// User changed plot rotation.
-    PageSetupRotation(String),
-    PageSetupScale(String),
-    /// Apply the changes entered in Page Setup.
-    PageSetupCommit,
     // ── Plot / Export ─────────────────────────────────────────────────────
     /// Show the SVG save-file dialog and trigger export.
     PlotExport,
@@ -1832,6 +1796,10 @@ pub enum Message {
     PrintToPrinter,
     /// Callback from the async printer job.
     PrintResult(Result<String, String>),
+    /// Open the full Plot / Print dialog (seeds state from the layout).
+    PlotDialogOpen,
+    /// An edit inside the Plot / Print dialog.
+    PlotDlg(crate::ui::window::plot::PlotDlgMsg),
     // ── Plot Style Table ─────────────────────────────────────────────────
     /// Open file dialog to load a CTB/STB plot style table.
     PlotStyleLoad,
@@ -2167,17 +2135,11 @@ impl OpenCADStudio {
             layout_rename_state: None,
             last_vp_click_time: None,
             last_vp_click_pos: None,
-            page_setup_w: String::new(),
-            page_setup_h: String::new(),
-            page_setup_plot_area: "Layout".to_string(),
-            page_setup_center: true,
-            page_setup_offset_x: "0.0".to_string(),
-            page_setup_offset_y: "0.0".to_string(),
-            page_setup_rotation: "0".to_string(),
-            page_setup_scale: "Fit".to_string(),
+            plot_scale: "Fit".to_string(),
             plot_window: None,
             plot_format: crate::io::paper_sizes::PaperSize::A4,
             plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
+            plot_dialog: crate::ui::window::plot::PlotDialogState::load(),
             opening: None,
             pending_close: None,
             save_dialog_format: "DWG 2018".to_string(),

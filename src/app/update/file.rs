@@ -808,18 +808,28 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         iced::exit()
     }
 
-    pub(super) fn on_page_setup_commit(&mut self) -> Task<Message> {
+    /// Write the given plot page settings into the active layout's Layout +
+    /// PlotSettings objects (paper size, plot area, offset, rotation, scale).
+    /// No-op on the Model tab (which has no paper layout). Marks the tab dirty
+    /// and re-tessellates the sheet. Called by the Plot dialog on commit.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn apply_plot_page_settings(
+        &mut self,
+        w: f64,
+        h: f64,
+        extents: bool,
+        center: bool,
+        offset_x: f64,
+        offset_y: f64,
+        rotation: i16,
+        scale_str: &str,
+    ) {
                 let i = self.active_tab;
                 let layout_name = self.tabs[i].scene.current_layout.clone();
                 if layout_name != "Model" {
-                    let w: f64 = self.page_setup_w.parse::<f64>().unwrap_or(297.0).max(1.0);
-                    let h: f64 = self.page_setup_h.parse::<f64>().unwrap_or(210.0).max(1.0);
-                    let plot_area = self.page_setup_plot_area.clone();
-                    let center = self.page_setup_center;
-                    let offset_x = self.page_setup_offset_x.parse::<f64>().unwrap_or(0.0);
-                    let offset_y = self.page_setup_offset_y.parse::<f64>().unwrap_or(0.0);
-                    let rotation: i16 = self.page_setup_rotation.parse().unwrap_or(0);
-                    let scale_str = self.page_setup_scale.clone();
+                    let w: f64 = w.max(1.0);
+                    let h: f64 = h.max(1.0);
+                    let plot_area = if extents { "Extents" } else { "Layout" };
 
                     // Update the Layout object's limits AND its embedded
                     // PlotSettings fields. `paper_limits()` (sheet rendering) and
@@ -905,7 +915,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         };
                         // Apply plot scale.
                         use acadrust::objects::ScaledType;
-                        let (num, den) = parse_plot_scale(&scale_str);
+                        let (num, den) = parse_plot_scale(scale_str);
                         if scale_str == "Fit" {
                             ps.set_scale_to_fit();
                         } else {
@@ -924,8 +934,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                          center={center}  rot={rotation}°"
                     ));
                 }
-                self.active_modal = None;
-                Task::none()
     }
 
     pub(super) fn on_plot_export_path_some(&mut self, path: std::path::PathBuf) -> Task<Message> {
@@ -1062,10 +1070,10 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let (sheet_w, sheet_h) = sheet_mm(self.plot_format, self.plot_orientation);
                 let win_w = (x1 - x0).max(1e-9);
                 let win_h = (y1 - y0).max(1e-9);
-                let scale_sel = if self.page_setup_scale.trim().eq_ignore_ascii_case("fit") {
+                let scale_sel = if self.plot_scale.trim().eq_ignore_ascii_case("fit") {
                     PlotScale::Fit
                 } else {
-                    let (num, den) = parse_plot_scale(&self.page_setup_scale);
+                    let (num, den) = parse_plot_scale(&self.plot_scale);
                     if num > 0.0 && den > 0.0 {
                         PlotScale::Ratio(num / den)
                     } else {
@@ -1126,70 +1134,442 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 Task::none()
     }
 
-    pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
-                let i = self.active_tab;
-                let scene = &self.tabs[i].scene;
-                let wires = scene.entity_wires();
-                let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
-                let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
-                use acadrust::objects::PlotType;
-                let ps_snap = scene.effective_plot_settings();
-                let (paper_w, paper_h, draw_ox, draw_oy, rotation_deg) =
-                    if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
-                        let (pw, ph) = (x1 - x0, y1 - y0);
-                        let use_extents = ps_snap
-                            .as_ref()
-                            .map(|ps| matches!(ps.plot_type, PlotType::Extents))
-                            .unwrap_or(false);
-                        let (ox, oy) = if use_extents {
-                            if let Some((mn, _mx)) = scene.model_space_extents() {
-                                (-mn.x as f64, -mn.y as f64)
-                            } else {
-                                (-x0, -y0)
-                            }
-                        } else {
-                            (-x0, -y0)
-                        };
-                        let rot = ps_snap
-                            .as_ref()
-                            .map(|ps| ps.rotation.to_degrees() as i32)
-                            .unwrap_or(0);
-                        (pw, ph, ox, oy, rot)
+    /// Build the render inputs and page geometry for a full-layout plot: wires
+    /// plus hatch / wipeout fills, the effective (rotation-swapped) sheet size,
+    /// the draw-origin offset, and the rotation. Shared by print + preview so
+    /// the Plot dialog reuses the same tested derivation.
+    #[allow(clippy::type_complexity)]
+    pub(super) fn layout_plot_params(
+        &self,
+    ) -> (
+        Vec<crate::scene::WireModel>,
+        Vec<crate::scene::model::hatch_model::HatchModel>,
+        Vec<crate::scene::model::hatch_model::HatchModel>,
+        f64,
+        f64,
+        f32,
+        f32,
+        i32,
+    ) {
+        let i = self.active_tab;
+        let scene = &self.tabs[i].scene;
+        let wires = scene.entity_wires();
+        let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
+        let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
+        use acadrust::objects::PlotType;
+        let ps_snap = scene.effective_plot_settings();
+        let (paper_w, paper_h, draw_ox, draw_oy, rotation_deg) =
+            if let Some(((x0, y0), (x1, y1))) = scene.paper_limits() {
+                let (pw, ph) = (x1 - x0, y1 - y0);
+                let use_extents = ps_snap
+                    .as_ref()
+                    .map(|ps| matches!(ps.plot_type, PlotType::Extents))
+                    .unwrap_or(false);
+                let (ox, oy) = if use_extents {
+                    if let Some((mn, _mx)) = scene.model_space_extents() {
+                        (-mn.x as f64, -mn.y as f64)
                     } else {
-                        if let Some((mn, mx)) = scene.model_space_extents() {
-                            let margin = 1.05_f64;
-                            let w = ((mx.x - mn.x) as f64 * margin).max(1.0);
-                            let h = ((mx.y - mn.y) as f64 * margin).max(1.0);
-                            let pad_x = (w - (mx.x - mn.x) as f64) * 0.5;
-                            let pad_y = (h - (mx.y - mn.y) as f64) * 0.5;
-                            (w, h, -(mn.x as f64) + pad_x, -(mn.y as f64) + pad_y, 0)
-                        } else {
-                            (297.0, 210.0, 0.0, 0.0, 0)
-                        }
-                    };
-                let (eff_w, eff_h) = match rotation_deg {
-                    90 | 270 => (paper_h, paper_w),
-                    _ => (paper_w, paper_h),
+                        (-x0, -y0)
+                    }
+                } else {
+                    (-x0, -y0)
                 };
-                let plot_style = self.active_plot_style.clone();
-                self.command_line.push_info("Sending to system printer…");
-                Task::perform(
-                    async move {
-                        crate::io::print_to_printer::print_wires(
-                            wires,
-                            hatches,
-                            wipeouts,
-                            eff_w,
-                            eff_h,
-                            draw_ox as f32,
-                            draw_oy as f32,
-                            rotation_deg,
-                            plot_style,
-                        )
-                        .await
-                    },
-                    Message::PrintResult,
+                let rot = ps_snap
+                    .as_ref()
+                    .map(|ps| ps.rotation.to_degrees() as i32)
+                    .unwrap_or(0);
+                (pw, ph, ox, oy, rot)
+            } else if let Some((mn, mx)) = scene.model_space_extents() {
+                let margin = 1.05_f64;
+                let w = ((mx.x - mn.x) as f64 * margin).max(1.0);
+                let h = ((mx.y - mn.y) as f64 * margin).max(1.0);
+                let pad_x = (w - (mx.x - mn.x) as f64) * 0.5;
+                let pad_y = (h - (mx.y - mn.y) as f64) * 0.5;
+                (w, h, -(mn.x as f64) + pad_x, -(mn.y as f64) + pad_y, 0)
+            } else {
+                (297.0, 210.0, 0.0, 0.0, 0)
+            };
+        let (eff_w, eff_h) = match rotation_deg {
+            90 | 270 => (paper_h, paper_w),
+            _ => (paper_w, paper_h),
+        };
+        (
+            wires,
+            hatches,
+            wipeouts,
+            eff_w,
+            eff_h,
+            draw_ox as f32,
+            draw_oy as f32,
+            rotation_deg,
+        )
+    }
+
+    pub(super) fn on_print_to_printer(&mut self) -> Task<Message> {
+        let (wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rotation_deg) =
+            self.layout_plot_params();
+        let plot_style = self.active_plot_style.clone();
+        self.command_line.push_info("Sending to system printer…");
+        Task::perform(
+            async move {
+                crate::io::print_to_printer::print_wires(
+                    wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rotation_deg, plot_style,
                 )
+                .await
+            },
+            Message::PrintResult,
+        )
+    }
+
+    /// Open the full Plot / Print dialog, seeding its state from the active
+    /// layout's plot settings and the printers found on the system.
+    pub(super) fn on_plot_dialog_open(&mut self) -> Task<Message> {
+        use crate::io::paper_sizes::Orientation;
+        // Keep the user's last print preferences (printer, copies, quality,
+        // output options — persisted in `self.plot_dialog`); only refresh the
+        // runtime printer list and reseed the drawing-specific fields from the
+        // active layout.
+        let d = &mut self.plot_dialog;
+        d.printers = crate::io::print_to_printer::list_printers();
+        d.paper = self.plot_format.label().to_string();
+        d.orientation = match self.plot_orientation {
+            Orientation::Portrait => "Portrait",
+            Orientation::Landscape => "Landscape",
+        }
+        .to_string();
+        d.style_name = self
+            .active_plot_style
+            .as_ref()
+            .map(|t| t.name.clone())
+            .unwrap_or_default();
+        // `area` and `scale` are remembered user choices (default Window / Fit),
+        // not reseeded from the layout. Offset / center / rotation ARE layout
+        // properties, so reflect them.
+        if let Some(ps) = self.tabs[self.active_tab].scene.effective_plot_settings() {
+            let d = &mut self.plot_dialog;
+            d.center = ps.flags.plot_centered;
+            d.offset_x = format!("{:.2}", ps.origin_x);
+            d.offset_y = format!("{:.2}", ps.origin_y);
+            let deg = ps.rotation.to_degrees() as i32;
+            d.rotation = format!("{deg}°");
+        }
+        self.active_modal = Some(crate::app::ModalKind::Plot);
+        Task::none()
+    }
+
+    /// Handle one edit / action from the Plot dialog.
+    pub(super) fn on_plot_dlg(
+        &mut self,
+        msg: crate::ui::window::plot::PlotDlgMsg,
+    ) -> Task<Message> {
+        use crate::ui::window::plot::{PlotDlgMsg as M, PlotFlag, OUT_DEFAULT, OUT_PDF};
+        match msg {
+            M::Close => {
+                self.close_active_modal();
+                Task::none()
+            }
+            M::Printer(s) => {
+                if s == OUT_PDF {
+                    self.plot_dialog.to_file = true;
+                } else if s == OUT_DEFAULT {
+                    self.plot_dialog.to_file = false;
+                    self.plot_dialog.printer = None;
+                } else {
+                    self.plot_dialog.to_file = false;
+                    self.plot_dialog.printer = Some(s);
+                }
+                Task::none()
+            }
+            M::Paper(s) => {
+                self.plot_dialog.paper = s;
+                Task::none()
+            }
+            M::Orientation(s) => {
+                self.plot_dialog.orientation = s;
+                Task::none()
+            }
+            M::Rotation(s) => {
+                self.plot_dialog.rotation = s;
+                Task::none()
+            }
+            M::Area(s) => {
+                self.plot_dialog.area = s;
+                Task::none()
+            }
+            M::Scale(s) => {
+                self.plot_dialog.scale = s;
+                Task::none()
+            }
+            M::Quality(s) => {
+                self.plot_dialog.quality = s;
+                Task::none()
+            }
+            M::Shade(s) => {
+                self.plot_dialog.shade = s;
+                Task::none()
+            }
+            M::Copies(s) => {
+                self.plot_dialog.copies = s;
+                Task::none()
+            }
+            M::OffsetX(s) => {
+                self.plot_dialog.offset_x = s;
+                Task::none()
+            }
+            M::OffsetY(s) => {
+                self.plot_dialog.offset_y = s;
+                Task::none()
+            }
+            M::Dpi(s) => {
+                self.plot_dialog.dpi = s;
+                Task::none()
+            }
+            M::Flag(f) => {
+                let d = &mut self.plot_dialog;
+                match f {
+                    PlotFlag::Center => d.center = !d.center,
+                    PlotFlag::ScaleLw => d.scale_lw = !d.scale_lw,
+                    PlotFlag::Mono => d.mono = !d.mono,
+                    PlotFlag::Lineweights => d.lineweights = !d.lineweights,
+                    PlotFlag::WithStyles => d.with_styles = !d.with_styles,
+                    PlotFlag::Transparency => d.transparency = !d.transparency,
+                    PlotFlag::PaperspaceLast => d.paperspace_last = !d.paperspace_last,
+                    PlotFlag::HidePaperspace => d.hide_paperspace = !d.hide_paperspace,
+                    PlotFlag::Stamp => d.stamp = !d.stamp,
+                    PlotFlag::SaveLayout => d.save_layout = !d.save_layout,
+                }
+                Task::none()
+            }
+            M::LoadStyle => Task::done(Message::PlotStyleLoad),
+            M::ClearStyle => {
+                self.active_plot_style = None;
+                self.plot_dialog.style_name.clear();
+                Task::none()
+            }
+            M::PickWindow => {
+                self.close_active_modal();
+                Task::done(Message::Command("PLOTWINDOW".into()))
+            }
+            M::Preview => self.on_plot_dlg_commit(true),
+            M::Commit => self.on_plot_dlg_commit(false),
+        }
+    }
+
+    /// Apply the dialog's page settings to the layout, then either open a
+    /// preview PDF, export a PDF, or send the job to the chosen printer.
+    fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
+        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
+        // Remember the user's print preferences across sessions.
+        self.plot_dialog.save();
+        let d = self.plot_dialog.clone();
+        let paper = match d.paper.as_str() {
+            "A3" => PaperSize::A3,
+            "A2" => PaperSize::A2,
+            "A1" => PaperSize::A1,
+            "A0" => PaperSize::A0,
+            _ => PaperSize::A4,
+        };
+        let orient = if d.orientation == "Portrait" {
+            Orientation::Portrait
+        } else {
+            Orientation::Landscape
+        };
+        let (sheet_w, sheet_h) = sheet_mm(paper, orient);
+        // Persist the dialog's page settings into the layout's PlotSettings /
+        // paper_limits, then reuse the tested layout-plot derivation. `plot_scale`
+        // feeds the model-space window plot path.
+        self.plot_format = paper;
+        self.plot_orientation = orient;
+        self.plot_scale = d.scale.clone();
+        let rotation: i16 = d.rotation.trim_end_matches('°').parse().unwrap_or(0);
+        let off_x = d.offset_x.parse::<f64>().unwrap_or(0.0);
+        let off_y = d.offset_y.parse::<f64>().unwrap_or(0.0);
+        let extents = d.area != "Layout";
+        self.apply_plot_page_settings(
+            sheet_w, sheet_h, extents, d.center, off_x, off_y, rotation, &d.scale,
+        );
+        self.active_modal = None;
+
+        let plot_style = if d.with_styles {
+            self.active_plot_style.clone()
+        } else {
+            None
+        };
+
+        // ── Window area: clipped model-space plot ────────────────────────────
+        if d.area == "Window" {
+            // Preview renders to a temp PDF and opens it — never a save dialog,
+            // whatever the output target is.
+            if preview {
+                let Some((w_wires, w_hatches, w_wipeouts, sw, sh, wox, woy, wscale, wclip)) =
+                    self.window_plot_job()
+                else {
+                    self.command_line
+                        .push_error("Pick a plot window first (model space).");
+                    self.active_modal = Some(crate::app::ModalKind::Plot);
+                    return Task::none();
+                };
+                let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
+                let exp = crate::io::pdf_export::export_pdf(
+                    &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
+                    plot_style.as_ref(),
+                );
+                match exp.and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp)) {
+                    Ok(()) => self.command_line.push_info("Opened plot preview."),
+                    Err(e) => self.command_line.push_error(&format!("Preview failed: {e}")),
+                }
+                self.active_modal = Some(crate::app::ModalKind::Plot);
+                return Task::none();
+            }
+            if d.to_file {
+                // Tested clipped export (opens a save dialog).
+                return Task::done(Message::PlotWindowExport);
+            }
+            let Some((w_wires, w_hatches, w_wipeouts, sw, sh, wox, woy, wscale, wclip)) =
+                self.window_plot_job()
+            else {
+                self.command_line
+                    .push_error("Pick a plot window first (model space).");
+                self.active_modal = Some(crate::app::ModalKind::Plot);
+                return Task::none();
+            };
+            let tmp = std::env::temp_dir().join("open_cad_studio_print.pdf");
+            let exp = crate::io::pdf_export::export_pdf(
+                &w_wires, &w_hatches, &w_wipeouts, sw, sh, wox, woy, 0, wscale, wclip, &tmp,
+                plot_style.as_ref(),
+            );
+            let opts = self.plot_print_options(&d);
+            match exp.and_then(|_| crate::io::print_to_printer::print_existing_pdf(&tmp, &opts)) {
+                Ok(printer) => self
+                    .command_line
+                    .push_info(&format!("Sent to printer: {printer}")),
+                Err(e) => self.command_line.push_error(&format!("Print failed: {e}")),
+            }
+            return Task::none();
+        }
+
+        let (wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot) = self.layout_plot_params();
+
+        if preview {
+            let tmp = std::env::temp_dir().join("open_cad_studio_preview.pdf");
+            let res = crate::io::pdf_export::export_pdf(
+                &wires,
+                &hatches,
+                &wipeouts,
+                eff_w,
+                eff_h,
+                ox,
+                oy,
+                rot,
+                1.0,
+                None,
+                &tmp,
+                plot_style.as_ref(),
+            );
+            match res.and_then(|_| crate::io::print_to_printer::open_in_viewer(&tmp)) {
+                Ok(()) => self.command_line.push_info("Opened plot preview."),
+                Err(e) => self.command_line.push_error(&format!("Preview failed: {e}")),
+            }
+            // Preview leaves the dialog open for further tweaks.
+            self.active_modal = Some(crate::app::ModalKind::Plot);
+            return Task::none();
+        }
+
+        if d.to_file {
+            // Reuse the tested PDF export flow (it opens a save dialog).
+            return Task::done(Message::PlotExport);
+        }
+
+        let opts = self.plot_print_options(&d);
+        self.command_line.push_info("Sending to system printer…");
+        Task::perform(
+            async move {
+                crate::io::print_to_printer::print_wires_with(
+                    wires, hatches, wipeouts, eff_w, eff_h, ox, oy, rot, plot_style, opts,
+                )
+                .await
+            },
+            Message::PrintResult,
+        )
+    }
+
+    /// Build a [`PrintOptions`](crate::io::print_to_printer::PrintOptions) from
+    /// the dialog state.
+    fn plot_print_options(
+        &self,
+        d: &crate::ui::window::plot::PlotDialogState,
+    ) -> crate::io::print_to_printer::PrintOptions {
+        crate::io::print_to_printer::PrintOptions {
+            printer: d.printer.clone(),
+            copies: d.copies.trim().parse::<u32>().unwrap_or(1).max(1),
+            mono: d.mono,
+            quality: Some(d.quality.clone()),
+            dpi: d.dpi.trim().parse::<u32>().ok().filter(|v| *v > 0),
+        }
+    }
+
+    /// Render inputs + page geometry for a clipped model-space window plot
+    /// (the pending `plot_window`, fitted onto the dialog's sheet). Returns
+    /// `None` when not in model space or no window has been picked. Mirrors
+    /// [`Self::on_plot_window_export_path_some`] but hands back the params so
+    /// the plot can go to a printer or preview, not only a save-dialog PDF.
+    #[allow(clippy::type_complexity)]
+    fn window_plot_job(
+        &self,
+    ) -> Option<(
+        Vec<crate::scene::WireModel>,
+        Vec<crate::scene::model::hatch_model::HatchModel>,
+        Vec<crate::scene::model::hatch_model::HatchModel>,
+        f64,
+        f64,
+        f32,
+        f32,
+        f32,
+        Option<(f32, f32, f32, f32)>,
+    )> {
+        use crate::io::paper_sizes::{sheet_mm, window_to_sheet, PlotScale};
+        let i = self.active_tab;
+        if self.tabs[i].scene.current_layout != "Model" {
+            return None;
+        }
+        let (x0, y0, x1, y1) = self.plot_window?;
+        if (x1 - x0) < 1e-6 || (y1 - y0) < 1e-6 {
+            return None;
+        }
+        let (sheet_w, sheet_h) = sheet_mm(self.plot_format, self.plot_orientation);
+        let win_w = (x1 - x0).max(1e-9);
+        let win_h = (y1 - y0).max(1e-9);
+        let scale_sel = if self.plot_scale.trim().eq_ignore_ascii_case("fit") {
+            PlotScale::Fit
+        } else {
+            let (num, den) = parse_plot_scale(&self.plot_scale);
+            if num > 0.0 && den > 0.0 {
+                PlotScale::Ratio(num / den)
+            } else {
+                PlotScale::Fit
+            }
+        };
+        let (scale, ox, oy) = window_to_sheet((win_w, win_h), (sheet_w, sheet_h), scale_sel);
+        let scene = &self.tabs[i].scene;
+        let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
+        let wires: Vec<_> = scene
+            .entity_wires()
+            .into_iter()
+            .filter(|w| w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0)
+            .collect();
+        let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
+        let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();
+        let offset_x = ((ox / scale) - x0) as f32;
+        let offset_y = ((oy / scale) - y0) as f32;
+        let clip = Some((
+            (ox / scale) as f32,
+            (oy / scale) as f32,
+            win_w as f32,
+            win_h as f32,
+        ));
+        Some((
+            wires, hatches, wipeouts, sheet_w, sheet_h, offset_x, offset_y, scale as f32, clip,
+        ))
     }
 
     pub(super) fn on_plot_style_panel_apply(&mut self) -> Task<Message> {

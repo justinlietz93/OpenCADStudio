@@ -47,22 +47,9 @@ impl OpenCADStudio {
                 let tab = &self.tabs[self.active_tab];
                 sized(tab.layers.view_window(), 900, 360)
             }
-            super::super::ModalKind::PageSetup => sized(
-                crate::ui::window::page_setup::view_window(
-                    &self.page_setup_w,
-                    &self.page_setup_h,
-                    &self.page_setup_plot_area,
-                    self.page_setup_center,
-                    &self.page_setup_offset_x,
-                    &self.page_setup_offset_y,
-                    &self.page_setup_rotation,
-                    &self.page_setup_scale,
-                    self.plot_format,
-                    self.plot_orientation,
-                ),
-                520,
-                460,
-            ),
+            super::super::ModalKind::Plot => {
+                sized(crate::ui::window::plot::view_window(&self.plot_dialog), 660, 540)
+            }
             super::super::ModalKind::LayoutManager => {
                 let i = self.active_tab;
                 let layouts = self.tabs[i].scene.layout_names();

@@ -1466,7 +1466,7 @@ impl OpenCADStudio {
             PluginManager => (520, 460),
             UpdateNotice => (560, 460),
             Layers => (900, 360),
-            PageSetup => (520, 460),
+            Plot => (660, 540),
             LayoutManager => (640, 320),
             Plotstyle => (780, 540),
             TextStyle => (860, 480),

@@ -358,12 +358,13 @@ impl OpenCADStudio {
             }
 
             // ── Plot / Page Setup ──────────────────────────────────────────
-            "PLOT" | "EXPORT" | "EXPORTPDF" => {
-                return Some(Task::done(Message::PlotExport));
+            // PLOT / PRINT open the full plot dialog (printer, paper, scale,
+            // options); EXPORT / EXPORTPDF stay a direct PDF export.
+            "PLOT" | "PRINT" => {
+                return Some(Task::done(Message::PlotDialogOpen));
             }
-            // PRINT — send current layout to the system default printer.
-            "PRINT" => {
-                return Some(Task::done(Message::PrintToPrinter));
+            "EXPORT" | "EXPORTPDF" => {
+                return Some(Task::done(Message::PlotExport));
             }
             // PLOTSTYLE — load or clear CTB/STB plot style table
             cmd if cmd == "PLOTSTYLE" || cmd.starts_with("PLOTSTYLE ") => {
@@ -509,11 +510,9 @@ impl OpenCADStudio {
                 }
             }
 
-            // Model space now has its own dialog section (window-plot format /
-            // orientation / pick), so PAGESETUP opens there too, not just on
-            // paper-space layouts.
+            // PAGESETUP is folded into the unified plot dialog.
             "PAGESETUP" => {
-                return Some(Task::done(Message::PageSetupOpen));
+                return Some(Task::done(Message::PlotDialogOpen));
             }
 
             // ── Recognized commands whose full implementation is pending ─────────

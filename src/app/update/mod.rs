@@ -79,7 +79,11 @@ impl OpenCADStudio {
         }
         match self.active_modal {
             Some(Layers) => self.ribbon.deactivate_tool_if("LAYERS"),
-            Some(PageSetup) => self.ribbon.deactivate_tool_if("PAGESETUP"),
+            Some(Plot) => {
+                self.ribbon.deactivate_tool_if("PLOT");
+                self.ribbon.deactivate_tool_if("PRINT");
+                self.ribbon.deactivate_tool_if("PAGESETUP");
+            }
             Some(TextStyle) => {
                 self.ribbon.deactivate_tool_if("STYLE");
                 self.ribbon.deactivate_tool_if("TEXTSTYLE");
@@ -3020,23 +3024,6 @@ impl OpenCADStudio {
             }
 
             // ── Page Setup ────────────────────────────────────────────────
-            Message::PageSetupOpen => {
-                let i = self.active_tab;
-                // Populate edit buffers from current paper limits.
-                let (w, h) = if let Some(((x0, y0), (x1, y1))) = self.tabs[i].scene.paper_limits() {
-                    (x1 - x0, y1 - y0)
-                } else {
-                    (297.0, 210.0) // A4 default
-                };
-                self.page_setup_w = format!("{w:.1}");
-                self.page_setup_h = format!("{h:.1}");
-                self.active_modal = Some(super::ModalKind::PageSetup);
-                Task::none()
-            }
-            Message::PageSetupClose => {
-                self.close_active_modal();
-                Task::none()
-            }
             Message::UpdateCheckResult(latest) => {
                 let Some(info) = latest else {
                     return Task::none();
@@ -3081,61 +3068,8 @@ impl OpenCADStudio {
                 }
                 Task::none()
             }
-            Message::PageSetupWidthEdit(s) => {
-                self.page_setup_w = s;
-                Task::none()
-            }
-            Message::PageSetupHeightEdit(s) => {
-                self.page_setup_h = s;
-                Task::none()
-            }
-            Message::PageSetupPreset(name) => {
-                // Paper size presets defined in view.rs — mirror them here.
-                let sizes: &[(&str, f64, f64)] = &[
-                    ("A4 Portrait", 210.0, 297.0),
-                    ("A4 Landscape", 297.0, 210.0),
-                    ("A3 Portrait", 297.0, 420.0),
-                    ("A3 Landscape", 420.0, 297.0),
-                    ("A2 Portrait", 420.0, 594.0),
-                    ("A2 Landscape", 594.0, 420.0),
-                    ("A1 Portrait", 594.0, 841.0),
-                    ("A1 Landscape", 841.0, 594.0),
-                    ("A0 Portrait", 841.0, 1189.0),
-                    ("A0 Landscape", 1189.0, 841.0),
-                    ("Letter Portrait", 215.9, 279.4),
-                    ("Letter Landscape", 279.4, 215.9),
-                ];
-                if let Some(&(_, w, h)) = sizes.iter().find(|(n, _, _)| *n == name) {
-                    self.page_setup_w = format!("{w:.1}");
-                    self.page_setup_h = format!("{h:.1}");
-                }
-                Task::none()
-            }
-            Message::PageSetupPlotArea(s) => {
-                self.page_setup_plot_area = s;
-                Task::none()
-            }
-            Message::PageSetupCenterToggle => {
-                self.page_setup_center = !self.page_setup_center;
-                Task::none()
-            }
-            Message::PageSetupOffsetXEdit(s) => {
-                self.page_setup_offset_x = s;
-                Task::none()
-            }
-            Message::PageSetupOffsetYEdit(s) => {
-                self.page_setup_offset_y = s;
-                Task::none()
-            }
-            Message::PageSetupRotation(s) => {
-                self.page_setup_rotation = s;
-                Task::none()
-            }
-            Message::PageSetupScale(s) => {
-                self.page_setup_scale = s;
-                Task::none()
-            }
-            Message::PageSetupCommit => self.on_page_setup_commit(),
+            Message::PlotDialogOpen => self.on_plot_dialog_open(),
+            Message::PlotDlg(m) => self.on_plot_dlg(m),
 
             // ── Plot / Export ─────────────────────────────────────────────
             Message::PlotExport => {
