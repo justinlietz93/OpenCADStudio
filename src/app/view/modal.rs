@@ -48,7 +48,7 @@ impl OpenCADStudio {
                 sized(tab.layers.view_window(), 900, 360)
             }
             super::super::ModalKind::Plot => {
-                sized(crate::ui::window::plot::view_window(&self.plot_dialog), 660, 540)
+                sized(crate::ui::window::plot::view_window(&self.plot_dialog), 760, 540)
             }
             super::super::ModalKind::LayoutManager => {
                 let i = self.active_tab;

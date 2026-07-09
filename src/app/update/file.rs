@@ -1253,6 +1253,19 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let deg = ps.rotation.to_degrees() as i32;
             d.rotation = format!("{deg}°");
         }
+        self.plot_dialog.name_input = None;
+        self.plot_dialog.name_rename = false;
+        // Refresh the list (<none> / <previous> / layouts / named setups) and
+        // snapshot the just-loaded settings as the `<previous>` restore point.
+        self.refresh_page_setups();
+        self.plot_prev = Some(self.plot_dialog.clone());
+        // Default selection: model space → <none>; a layout → its own setup.
+        let cur = self.tabs[self.active_tab].scene.current_layout.clone();
+        if cur == "Model" {
+            self.select_page_setup(crate::ui::window::plot::SETUP_NONE);
+        } else {
+            self.select_page_setup(&format!("*{cur}*"));
+        }
         self.active_modal = Some(crate::app::ModalKind::Plot);
         Task::none()
     }
@@ -1350,17 +1363,255 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.close_active_modal();
                 Task::done(Message::Command("PLOTWINDOW".into()))
             }
+            M::SelectSetup(name) => {
+                self.select_page_setup(&name);
+                Task::none()
+            }
+            M::SetCurrent => {
+                self.apply_dialog_to_layout();
+                self.command_line.push_info("Page setup applied to the layout.");
+                Task::none()
+            }
+            M::NewSetup => {
+                // Create a setup from the current editor values, then start an
+                // inline rename so the user can name it.
+                let name = self.next_page_setup_name("Setup");
+                let ps = self.dialog_to_plotsettings();
+                self.tabs[self.active_tab].scene.page_setup_save(&name, ps);
+                self.tabs[self.active_tab].dirty = true;
+                self.plot_dialog.selected_setup = name.clone();
+                self.refresh_page_setups();
+                self.plot_dialog.name_input = Some(name);
+                self.plot_dialog.name_rename = true;
+                Task::none()
+            }
+            M::CopySetup => {
+                // Duplicate the selected entry — a layout OR a named setup —
+                // into a new standalone named page setup.
+                let sel = self.plot_dialog.selected_setup.clone();
+                let scene = &self.tabs[self.active_tab].scene;
+                let (src_ps, base) = if is_layout_entry(&sel) {
+                    let ln = layout_entry_name(&sel);
+                    (scene.plot_settings_for(ln), format!("{ln} copy"))
+                } else {
+                    (scene.page_setup_get(&sel), format!("{sel} copy"))
+                };
+                if let Some(ps) = src_ps {
+                    let name = self.next_page_setup_name(&base);
+                    self.tabs[self.active_tab].scene.page_setup_save(&name, ps);
+                    self.tabs[self.active_tab].dirty = true;
+                    self.plot_dialog.selected_setup = name.clone();
+                    self.refresh_page_setups();
+                    self.plot_dialog.name_input = Some(name);
+                    self.plot_dialog.name_rename = true;
+                }
+                Task::none()
+            }
+            M::RenameStart(name) => {
+                // Only standalone named setups can be renamed.
+                if is_layout_entry(&name) || is_special_entry(&name) {
+                    return Task::none();
+                }
+                self.plot_dialog.selected_setup = name.clone();
+                if let Some(ps) = self.tabs[self.active_tab].scene.page_setup_get(&name) {
+                    self.load_plotsettings_into_dialog(&ps);
+                }
+                self.plot_dialog.name_input = Some(name);
+                self.plot_dialog.name_rename = true;
+                Task::none()
+            }
+            M::DeleteSetup => {
+                let sel = self.plot_dialog.selected_setup.clone();
+                if !sel.is_empty() && !is_layout_entry(&sel) {
+                    self.tabs[self.active_tab].scene.page_setup_delete(&sel);
+                    self.tabs[self.active_tab].dirty = true;
+                    self.plot_dialog.selected_setup.clear();
+                    self.refresh_page_setups();
+                }
+                Task::none()
+            }
+            M::NameInput(s) => {
+                self.plot_dialog.name_input = Some(s);
+                Task::none()
+            }
+            M::NameCommit => {
+                if let Some(name) = self.plot_dialog.name_input.take() {
+                    let name = name.trim().to_string();
+                    if !name.is_empty() {
+                        if self.plot_dialog.name_rename {
+                            let old = self.plot_dialog.selected_setup.clone();
+                            self.tabs[self.active_tab].scene.page_setup_rename(&old, &name);
+                        } else {
+                            let ps = self.dialog_to_plotsettings();
+                            self.tabs[self.active_tab].scene.page_setup_save(&name, ps);
+                        }
+                        self.tabs[self.active_tab].dirty = true;
+                        self.plot_dialog.selected_setup = name;
+                        self.refresh_page_setups();
+                    }
+                }
+                self.plot_dialog.name_rename = false;
+                Task::none()
+            }
+            M::NameCancel => {
+                self.plot_dialog.name_input = None;
+                self.plot_dialog.name_rename = false;
+                Task::none()
+            }
             M::Preview => self.on_plot_dlg_commit(true),
             M::Commit => self.on_plot_dlg_commit(false),
         }
     }
 
-    /// Apply the dialog's page settings to the layout, then either open a
-    /// preview PDF, export a PDF, or send the job to the chosen printer.
-    fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
+    fn refresh_page_setups(&mut self) {
+        use crate::ui::window::plot::{SETUP_NONE, SETUP_PREV};
+        let scene = &self.tabs[self.active_tab].scene;
+        // <none> / <previous>, then layouts (`*name*`), then named setups.
+        let mut list = vec![SETUP_NONE.to_string(), SETUP_PREV.to_string()];
+        list.extend(scene.layout_names().into_iter().map(|n| format!("*{n}*")));
+        list.extend(scene.page_setup_names());
+        self.plot_dialog.page_setups = list;
+    }
+
+    /// Apply a page-setup list selection to the editor. Handles the pseudo
+    /// entries (`<none>` / `<previous>`), layout rows (`*name*`) and named
+    /// setups.
+    fn select_page_setup(&mut self, name: &str) {
+        use crate::ui::window::plot::{SETUP_NONE, SETUP_PREV};
+        self.plot_dialog.selected_setup = name.to_string();
+        if name == SETUP_NONE {
+            // No page setup: default geometry + PDF output.
+            let is_model = self.tabs[self.active_tab].scene.current_layout == "Model";
+            let d = &mut self.plot_dialog;
+            d.to_file = true;
+            d.paper = "A4".into();
+            d.orientation = "Landscape".into();
+            d.area = if is_model { "Window".into() } else { "Layout".into() };
+            d.center = true;
+            d.offset_x = "0.0".into();
+            d.offset_y = "0.0".into();
+            d.rotation = "0°".into();
+            d.scale = "Fit".into();
+        } else if name == SETUP_PREV {
+            if let Some(prev) = self.plot_prev.clone() {
+                self.plot_dialog.copy_settings_from(&prev);
+            }
+        } else if is_layout_entry(name) {
+            if let Some(ps) = self
+                .tabs[self.active_tab]
+                .scene
+                .plot_settings_for(layout_entry_name(name))
+            {
+                self.load_plotsettings_into_dialog(&ps);
+            }
+        } else if let Some(ps) = self.tabs[self.active_tab].scene.page_setup_get(name) {
+            self.load_plotsettings_into_dialog(&ps);
+        }
+    }
+
+    /// A page-setup name based on `base` that isn't already taken (`base`,
+    /// `base 2`, `base 3`, …).
+    fn next_page_setup_name(&self, base: &str) -> String {
+        let existing = self.tabs[self.active_tab].scene.page_setup_names();
+        if !existing.iter().any(|n| n == base) {
+            return base.to_string();
+        }
+        (2..)
+            .map(|i| format!("{base} {i}"))
+            .find(|c| !existing.iter().any(|n| n == c))
+            .unwrap_or_else(|| base.to_string())
+    }
+
+    /// Build a `PlotSettings` from the current dialog fields (for saving a named
+    /// page setup).
+    fn dialog_to_plotsettings(&self) -> acadrust::objects::PlotSettings {
+        use acadrust::objects::{
+            PlotPaperUnits, PlotRotation, PlotSettings, PlotType, ScaledType,
+        };
         use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
-        // Remember the user's print preferences across sessions.
-        self.plot_dialog.save();
+        let d = &self.plot_dialog;
+        let paper = match d.paper.as_str() {
+            "A3" => PaperSize::A3,
+            "A2" => PaperSize::A2,
+            "A1" => PaperSize::A1,
+            "A0" => PaperSize::A0,
+            _ => PaperSize::A4,
+        };
+        let orient = if d.orientation == "Portrait" {
+            Orientation::Portrait
+        } else {
+            Orientation::Landscape
+        };
+        let (w, h) = sheet_mm(paper, orient);
+        let mut ps = PlotSettings::new("");
+        ps.paper_width = w;
+        ps.paper_height = h;
+        ps.paper_units = PlotPaperUnits::Millimeters;
+        ps.plot_type = match d.area.as_str() {
+            "Window" => PlotType::Window,
+            "Layout" => PlotType::Layout,
+            _ => PlotType::Extents,
+        };
+        ps.flags.plot_centered = d.center;
+        ps.origin_x = d.offset_x.parse::<f64>().unwrap_or(0.0);
+        ps.origin_y = d.offset_y.parse::<f64>().unwrap_or(0.0);
+        let rot: i16 = d.rotation.trim_end_matches('°').parse().unwrap_or(0);
+        ps.rotation = match rot {
+            90 => PlotRotation::Degrees90,
+            180 => PlotRotation::Degrees180,
+            270 => PlotRotation::Degrees270,
+            _ => PlotRotation::None,
+        };
+        if d.scale == "Fit" {
+            ps.set_scale_to_fit();
+        } else {
+            let (num, den) = parse_plot_scale(&d.scale);
+            ps.scale_type = ScaledType::CustomScale;
+            ps.scale_numerator = num;
+            ps.scale_denominator = den;
+        }
+        ps.printer_name = d.printer.clone().unwrap_or_default();
+        ps.current_style_sheet = d.style_name.clone();
+        ps
+    }
+
+    /// Load a `PlotSettings` into the dialog editor fields.
+    fn load_plotsettings_into_dialog(&mut self, ps: &acadrust::objects::PlotSettings) {
+        use acadrust::objects::PlotType;
+        let (paper, orient) = paper_label_from_dims(ps.paper_width, ps.paper_height);
+        let d = &mut self.plot_dialog;
+        d.paper = paper;
+        d.orientation = orient;
+        d.area = match ps.plot_type {
+            PlotType::Window => "Window",
+            PlotType::Layout => "Layout",
+            _ => "Extents",
+        }
+        .to_string();
+        d.center = ps.flags.plot_centered;
+        d.offset_x = format!("{:.2}", ps.origin_x);
+        d.offset_y = format!("{:.2}", ps.origin_y);
+        let deg = ps.rotation.to_degrees() as i32;
+        d.rotation = format!("{deg}°");
+        d.scale = if ps.is_scale_to_fit() {
+            "Fit".into()
+        } else {
+            let n = ps.scale_numerator;
+            let m = ps.scale_denominator;
+            if (n - 1.0).abs() < 1e-9 {
+                format!("1:{}", m as i64)
+            } else if (m - 1.0).abs() < 1e-9 {
+                format!("{}:1", n as i64)
+            } else {
+                "Fit".into()
+            }
+        };
+    }
+
+    /// Write the current dialog fields into the active layout's plot settings.
+    /// Shared by the "Set current" action and the print/export commit.
+    fn apply_dialog_to_layout(&mut self) {
+        use crate::io::paper_sizes::{sheet_mm, Orientation, PaperSize};
         let d = self.plot_dialog.clone();
         let paper = match d.paper.as_str() {
             "A3" => PaperSize::A3,
@@ -1375,9 +1626,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             Orientation::Landscape
         };
         let (sheet_w, sheet_h) = sheet_mm(paper, orient);
-        // Persist the dialog's page settings into the layout's PlotSettings /
-        // paper_limits, then reuse the tested layout-plot derivation. `plot_scale`
-        // feeds the model-space window plot path.
         self.plot_format = paper;
         self.plot_orientation = orient;
         self.plot_scale = d.scale.clone();
@@ -1388,6 +1636,17 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         self.apply_plot_page_settings(
             sheet_w, sheet_h, extents, d.center, off_x, off_y, rotation, &d.scale,
         );
+    }
+
+    /// Apply the dialog's page settings to the layout, then either open a
+    /// preview PDF, export a PDF, or send the job to the chosen printer.
+    fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
+        // Remember the user's print preferences across sessions.
+        self.plot_dialog.save();
+        let d = self.plot_dialog.clone();
+        // Persist the dialog's page settings into the layout, then reuse the
+        // tested layout-plot derivation.
+        self.apply_dialog_to_layout();
         self.active_modal = None;
 
         let plot_style = if d.with_styles {

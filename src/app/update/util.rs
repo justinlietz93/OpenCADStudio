@@ -39,6 +39,39 @@ fn format_annotation_scale_name(anno: f32) -> String {
     }
 }
 
+/// `<none>` / `<previous>` are pseudo-entries, not real page setups.
+pub(super) fn is_special_entry(s: &str) -> bool {
+    s == crate::ui::window::plot::SETUP_NONE || s == crate::ui::window::plot::SETUP_PREV
+}
+
+/// A page-setup list entry wrapped in `*…*` is a layout (its embedded page
+/// setup), not a standalone named page setup.
+pub(super) fn is_layout_entry(s: &str) -> bool {
+    s.len() >= 2 && s.starts_with('*') && s.ends_with('*')
+}
+
+/// The layout name inside a `*name*` list entry.
+pub(super) fn layout_entry_name(s: &str) -> &str {
+    s.trim_start_matches('*').trim_end_matches('*')
+}
+
+/// Infer the closest A-series paper label and orientation from sheet
+/// dimensions (mm). Falls back to A4 when nothing is close.
+pub(super) fn paper_label_from_dims(w: f64, h: f64) -> (String, String) {
+    use crate::io::paper_sizes::PaperSize;
+    let orient = if w >= h { "Landscape" } else { "Portrait" };
+    let (short, long) = if w <= h { (w, h) } else { (h, w) };
+    let mut best = ("A4".to_string(), f64::INFINITY);
+    for p in PaperSize::ALL {
+        let (pw, ph) = p.dimensions_mm(); // portrait: pw < ph
+        let err = (pw - short).abs() + (ph - long).abs();
+        if err < best.1 {
+            best = (p.label().to_string(), err);
+        }
+    }
+    (best.0, orient.to_string())
+}
+
 pub(super) fn parse_plot_scale(s: &str) -> (f64, f64) {
     if s == "Fit" {
         return (1.0, 1.0);

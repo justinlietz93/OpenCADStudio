@@ -21,6 +21,7 @@ mod camera_ops;
 mod layout;
 mod modify;
 mod mspace;
+mod page_setup;
 mod paper;
 mod preview;
 mod project;
@@ -1677,14 +1678,20 @@ impl Scene {
     /// AutoCAD files keep their settings embedded, so without this fallback the
     /// plot/PDF path would ignore the file's rotation, origin and scale.
     pub fn effective_plot_settings(&self) -> Option<acadrust::objects::PlotSettings> {
+        self.plot_settings_for(&self.current_layout)
+    }
+
+    /// Plot settings for a specific layout by name: its standalone
+    /// `PlotSettings` object if one exists, else synthesized from the `Layout`
+    /// object's embedded fields.
+    pub fn plot_settings_for(&self, name: &str) -> Option<acadrust::objects::PlotSettings> {
         use acadrust::objects::{
             ObjectType, PaperMargin, PlotPaperUnits, PlotRotation, PlotSettings, PlotType,
             PlotWindow, ScaledType,
         };
-        let name = &self.current_layout;
         if let Some(ps) = self.document.objects.values().find_map(|o| {
             if let ObjectType::PlotSettings(ps) = o {
-                if &ps.page_name == name {
+                if ps.page_name.as_str() == name {
                     return Some(ps.clone());
                 }
             }
@@ -1694,7 +1701,7 @@ impl Scene {
         }
         self.document.objects.values().find_map(|o| {
             let ObjectType::Layout(l) = o else { return None };
-            if &l.name != name {
+            if l.name.as_str() != name {
                 return None;
             }
             let mut ps = PlotSettings::new(l.name.clone());

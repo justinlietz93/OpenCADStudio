@@ -521,6 +521,9 @@ pub(super) struct OpenCADStudio {
     plot_orientation: crate::io::paper_sizes::Orientation,
     /// Backing state for the full Plot / Print dialog.
     plot_dialog: crate::ui::window::plot::PlotDialogState,
+    /// Snapshot of the dialog's settings taken when it opened, restored by the
+    /// `<previous>` list entry.
+    plot_prev: Option<crate::ui::window::plot::PlotDialogState>,
 
     // ── Plot Style Table ──────────────────────────────────────────────────
     /// Currently loaded CTB/STB table (None = no override).
@@ -2140,6 +2143,7 @@ impl OpenCADStudio {
             plot_format: crate::io::paper_sizes::PaperSize::A4,
             plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
             plot_dialog: crate::ui::window::plot::PlotDialogState::load(),
+            plot_prev: None,
             opening: None,
             pending_close: None,
             save_dialog_format: "DWG 2018".to_string(),
