@@ -201,7 +201,14 @@ fn collect_feature_edges(sat: &SatDocument) -> Vec<[f64; 3]> {
         let mut pts: Vec<[f64; 3]> = Vec::new();
         if let Some(cr) = sat.resolve(edge.curve()) {
             if let Some(ellipse) = SatEllipseCurve::from_record(cr) {
-                pts = sample_ellipse_arc(&ellipse, edge.start_param(), edge.end_param(), EDGE_SEGS);
+                let reversed = matches!(edge.sense(), Sense::Reversed);
+                pts = sample_ellipse_arc(
+                    &ellipse,
+                    edge.start_param(),
+                    edge.end_param(),
+                    EDGE_SEGS,
+                    reversed,
+                );
                 // sample_ellipse_arc drops the end param; append the true end so
                 // the polyline closes onto the shared vertex.
                 if let Some(p) = vertex_point(sat, edge.end_vertex()) {
@@ -512,11 +519,15 @@ pub(crate) fn append_coedge_points(
 
     if let Some(curve_rec) = sat.resolve(edge.curve()) {
         if let Some(ellipse) = SatEllipseCurve::from_record(curve_rec) {
+            // The edge's own sense (relative to its curve) decides the ellipse
+            // winding; a reversed edge samples the opposite handedness.
+            let reversed = matches!(edge.sense(), Sense::Reversed);
             let mut sampled = sample_ellipse_arc(
                 &ellipse,
                 edge.start_param(),
                 edge.end_param(),
                 circ_segs,
+                reversed,
             );
             if !sampled.is_empty() {
                 if !fwd {
@@ -548,6 +559,7 @@ fn sample_ellipse_arc(
     sp: f64,
     ep: f64,
     circ_segs: usize,
+    curve_reversed: bool,
 ) -> Vec<[f64; 3]> {
     let span = ep - sp;
     if span.abs() < 1e-9 {
@@ -568,11 +580,20 @@ fn sample_ellipse_arc(
     let minor_u = cross3(normal, major_u);
     let minor_len = major_len * ellipse.ratio();
 
+    // P(t) = center + major·cos t + (normal×major)·ratio·sin t, with param
+    // winding CCW about the curve normal. An edge stored with REVERSED sense
+    // traverses the curve backward, i.e. about the opposite normal, so its
+    // params index the mirror winding — evaluate with the sin term negated.
+    // Ignoring the edge sense mirrors a reversed boundary arc across the major
+    // axis to the far side of the circle, ballooning a curved wall into a full
+    // cylinder of the surface radius.
+    let hand = if curve_reversed { -1.0 } else { 1.0 };
+
     let segs = (circ_segs as f64 * (span.abs() / TAU)).round().max(2.0) as usize;
     let mut out = Vec::with_capacity(segs);
     for i in 0..segs {
         let t = sp + span * (i as f64 / segs as f64);
-        let (c, s) = (t.cos(), t.sin());
+        let (c, s) = (t.cos(), t.sin() * hand);
         out.push([
             center.0 + major_u[0] * major_len * c + minor_u[0] * minor_len * s,
             center.1 + major_u[1] * major_len * c + minor_u[1] * minor_len * s,
@@ -615,7 +636,7 @@ fn push_quad(
 
 // ── Planar face ───────────────────────────────────────────────────────────────
 
-fn tess_plane_face(
+pub(crate) fn tess_plane_face(
     sat: &SatDocument,
     face: &SatFace,
     plane: &SatPlaneSurface,
@@ -658,7 +679,7 @@ fn tess_plane_face(
 
 // ── Cone / cylinder face ──────────────────────────────────────────────────────
 
-fn tess_cone_face(
+pub(crate) fn tess_cone_face(
     sat: &SatDocument,
     face: &SatFace,
     cone: &SatConeSurface,
@@ -704,9 +725,6 @@ fn tess_cone_face(
         }
     }
 
-    let segs_u = lod.circ_segs;
-    let segs_v = (segs_u / 4).max(1); // height subdivisions
-
     let theta_span = if full_circle {
         TAU
     } else {
@@ -717,6 +735,12 @@ fn tess_cone_face(
     if h_span.abs() < 1e-10 || theta_span.abs() < 1e-10 {
         return;
     }
+
+    // Angular divisions scale with the arc's share of a full circle, so a short
+    // boundary arc (a curved wall face) isn't tessellated as finely as a whole
+    // rim — matching the wire arc sampler and keeping the triangle budget sane.
+    let segs_u = ((lod.circ_segs as f64 * theta_span / TAU).round() as usize).max(1);
+    let segs_v = (lod.circ_segs / 4).max(1); // height subdivisions
 
     for j in 0..segs_v {
         let t0 = h_min + h_span * (j as f64 / segs_v as f64);
@@ -824,13 +848,35 @@ fn angular_range(
         angles.push(rv.atan2(ru));
     }
 
-    // Normalise angles to a contiguous range.
+    // Find the arc from the LARGEST angular gap, not raw min/max. `atan2`
+    // returns [-π, π]; a short arc that straddles the ±π seam splits its points
+    // between ≈+π and ≈-π, so naive `max - min` reads ≈2π and the face balloons
+    // into a full revolution (a curved wall of radius R drawn as a whole
+    // R-cylinder). The empty region a face doesn't cover is its largest gap, so
+    // the real arc is the complement: it starts just after the gap and runs to
+    // just before it (wrapping past the seam when needed).
     angles.sort_by(|a, b| a.partial_cmp(b).unwrap());
-    let theta_min = *angles.first().unwrap();
-    let theta_max = *angles.last().unwrap();
+    let n = angles.len();
+    let (mut max_gap, mut gap_i) = (0.0_f64, 0_usize);
+    for i in 0..n {
+        let a = angles[i];
+        let b = if i + 1 < n { angles[i + 1] } else { angles[0] + TAU };
+        let gap = b - a;
+        if gap > max_gap {
+            max_gap = gap;
+            gap_i = i;
+        }
+    }
 
-    // If the angular span is almost 2π, treat as full circle.
-    let full = (theta_max - theta_min) > TAU * 0.95;
+    // A genuine full circle has points spread all the way round, so its largest
+    // gap is small. A real arc leaves a wide empty wedge.
+    let full = max_gap < TAU * 0.05;
+
+    let theta_min = angles[(gap_i + 1) % n];
+    let mut theta_max = angles[gap_i];
+    if theta_max <= theta_min {
+        theta_max += TAU;
+    }
 
     (h_min, h_max, theta_min, theta_max, full)
 }
@@ -899,7 +945,7 @@ pub(crate) fn cone_axis_span(
 
 // ── Sphere face ───────────────────────────────────────────────────────────────
 
-fn tess_sphere_face(
+pub(crate) fn tess_sphere_face(
     sphere: &SatSphereSurface,
     lod: LodConfig,
     verts: &mut Vec<[f32; 3]>,
@@ -965,7 +1011,7 @@ fn sphere_dir(pole: [f64; 3], u_dir: [f64; 3], v_dir: [f64; 3], theta: f64, phi:
 
 // ── Torus face ────────────────────────────────────────────────────────────────
 
-fn tess_torus_face(
+pub(crate) fn tess_torus_face(
     torus: &SatTorusSurface,
     lod: LodConfig,
     verts: &mut Vec<[f32; 3]>,

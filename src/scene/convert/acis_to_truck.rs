@@ -28,7 +28,8 @@ use acadrust::entities::acis::{
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 use crate::scene::convert::solid3d_tess::{
-    apply_body_transform, body_transform, collect_face_loops, cone_axis_span,
+    apply_body_transform, body_transform, collect_face_loops, cone_axis_span, tess_cone_face,
+    tess_plane_face, tess_sphere_face, tess_torus_face, LodConfig,
 };
 
 /// Slightly over 2π so revolution builders close the loop.
@@ -123,19 +124,30 @@ pub fn tessellate_sat_truck(
         selected: false,
     };
 
-    for face in sat.faces() {
+    for face in sat.faces().into_iter() {
         let Some(surf_rec) = sat.resolve(face.surface()) else {
             continue;
         };
-        let Some((faces, outward, tol)) = build_face_group(sat, &face, surf_rec) else {
-            continue;
-        };
-        if faces.is_empty() {
-            continue;
+        let mut appended = false;
+        if let Some((faces, outward, tol)) = build_face_group(sat, &face, surf_rec) {
+            if !faces.is_empty() {
+                let shell: Shell = faces.into();
+                let poly = shell.triangulation(tol).to_polygon();
+                if !poly.tri_faces().is_empty() {
+                    append_group(&mut mesh, &poly, &outward);
+                    appended = true;
+                }
+            }
         }
-        let shell: Shell = faces.into();
-        let poly = shell.triangulation(tol).to_polygon();
-        append_group(&mut mesh, &poly, &outward);
+        // Truck's rsweep/triangulation degenerates to zero triangles on some
+        // short-arc cones (a curved wall face whose profile passes through the
+        // local origin), leaving a see-through gap. Fall back to the bespoke
+        // parametric sampler for just that face — it writes body-local verts
+        // into the same buffers, so the shared body transform below still
+        // applies uniformly.
+        if !appended {
+            bespoke_face(sat, &face, surf_rec, &mut mesh);
+        }
     }
 
     // Spline (NURBS) faces are meshed by direct grid sampling of the truck
@@ -150,6 +162,41 @@ pub fn tessellate_sat_truck(
         apply_body_transform(&mut mesh, &m, &tr, scale);
     }
     Some(MeshLodSet::from_lods(vec![mesh]))
+}
+
+/// Fill one face with the bespoke parametric sampler (body-local verts into the
+/// shared mesh buffers) when truck produced no triangles for it. Mirrors the
+/// surface dispatch of the standalone sampler.
+fn bespoke_face(
+    sat: &SatDocument,
+    face: &SatFace,
+    surf_rec: &acadrust::entities::acis::SatRecord,
+    mesh: &mut MeshModel,
+) {
+    let (v, n, i) = (&mut mesh.verts, &mut mesh.normals, &mut mesh.indices);
+    match surf_rec.entity_type.as_str() {
+        "plane-surface" => {
+            if let Some(p) = SatPlaneSurface::from_record(surf_rec) {
+                tess_plane_face(sat, face, &p, LodConfig::HIGH.circ_segs, v, n, i);
+            }
+        }
+        "cone-surface" => {
+            if let Some(c) = SatConeSurface::from_record(surf_rec) {
+                tess_cone_face(sat, face, &c, LodConfig::HIGH, v, n, i);
+            }
+        }
+        "sphere-surface" => {
+            if let Some(s) = SatSphereSurface::from_record(surf_rec) {
+                tess_sphere_face(&s, LodConfig::HIGH, v, n, i);
+            }
+        }
+        "torus-surface" => {
+            if let Some(t) = SatTorusSurface::from_record(surf_rec) {
+                tess_torus_face(&t, LodConfig::HIGH, v, n, i);
+            }
+        }
+        _ => {}
+    }
 }
 
 /// Build the truck face(s) + outward rule for one analytic ACIS face.
