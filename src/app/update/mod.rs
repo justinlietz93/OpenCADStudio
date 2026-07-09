@@ -1561,6 +1561,37 @@ impl OpenCADStudio {
                 self.polar_increment_deg = deg;
                 self.polar_mode = true;
                 self.ortho_mode = false;
+                self.polar_popup_open = false;
+                Task::none()
+            }
+            Message::TogglePolarPopup => {
+                self.polar_popup_open ^= true;
+                if self.polar_popup_open {
+                    // Start the custom field empty each time; picking a preset or
+                    // typing a value is what actually enables polar tracking.
+                    self.polar_custom_input.clear();
+                }
+                Task::none()
+            }
+            Message::ClosePolarPopup => {
+                self.polar_popup_open = false;
+                Task::none()
+            }
+            Message::PolarCustomInput(s) => {
+                self.polar_custom_input = s;
+                Task::none()
+            }
+            Message::SubmitPolarCustom => {
+                // Accept any positive angle up to a full turn; ignore garbage.
+                if let Ok(v) = self.polar_custom_input.trim().parse::<f32>() {
+                    if v > 0.0 && v <= 360.0 {
+                        self.polar_increment_deg = v;
+                        self.polar_mode = true;
+                        self.ortho_mode = false;
+                    }
+                }
+                self.polar_custom_input.clear();
+                self.polar_popup_open = false;
                 Task::none()
             }
             Message::SetAnnotationScale(scale) => {

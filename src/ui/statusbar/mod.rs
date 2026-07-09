@@ -5,7 +5,7 @@ pub mod statusbar_menu;
 
 use iced::widget::tooltip::Position as TipPos;
 use iced::widget::{
-    button, column, container, mouse_area, row, text, text_input, tooltip,
+    button, container, mouse_area, row, text, text_input, tooltip,
 };
 use iced::{Background, Border, Color, Element, Length, Theme};
 
@@ -31,6 +31,7 @@ pub const SB_ISOLATE_ID: &str = "SB_ISOLATE";
 pub const SB_FILTER_ID: &str = "SB_FILTER";
 pub const SB_MENU_ID: &str = "SB_MENU";
 pub const SB_LAYOUTLIST_ID: &str = "SB_LAYOUTLIST";
+pub const SB_POLAR_ID: &str = "SB_POLAR";
 
 #[derive(Clone, Default)]
 pub struct StatusBar {
@@ -52,6 +53,8 @@ impl StatusBar {
         ortho_mode: bool,
         polar_mode: bool,
         polar_increment_deg: f32,
+        // True while the polar-angle picker popup is open.
+        polar_popup_open: bool,
         dyn_input: bool,
         otrack: bool,
         layouts: Vec<String>,
@@ -177,7 +180,13 @@ impl StatusBar {
             );
         }
         if vis(StatusPill::Polar) {
-            pills.push(polar_pill(polar_mode, polar_increment_deg).into());
+            pills.push(
+                PosReport::new(
+                    SB_POLAR_ID,
+                    polar_pill(polar_mode, polar_increment_deg, polar_popup_open),
+                )
+                .into(),
+            );
         }
         if vis(StatusPill::Dyn) {
             pills.push(
@@ -459,35 +468,81 @@ fn toggle_pill(icon: &'static [u8], active: bool, msg: Message) -> Element<'stat
         .into()
 }
 
+// ── Split pill (toggle + dropdown caret) ──────────────────────────────────
+//
+// Shared chrome for every status-bar pill that pairs a toggle with a picker
+// popup (OSNAP, POLAR, …): one outer border wraps the caller's `main` region
+// and a dropdown caret, so both halves read as a single integrated control and
+// the border / background / caret / sizing live in exactly ONE place.
+
+/// Pill text/icon tint for the lit vs. dim state — shared so `main` (built by
+/// the caller) and the caret always match.
+fn pill_text_color(active: bool) -> Color {
+    if active {
+        OSNAP_ON_TEXT
+    } else {
+        OSNAP_OFF_TEXT
+    }
+}
+
+/// Wrap a caller-built, already-click-wired `main` element together with a
+/// dropdown caret that emits `caret_msg`. `active` lights the pill; `open`
+/// highlights the border while its popup is showing.
+fn split_pill(
+    main: Element<'static, Message>,
+    caret_msg: Message,
+    active: bool,
+    open: bool,
+) -> Element<'static, Message> {
+    let color = pill_text_color(active);
+    let bg = if active { SNAP_ON_BG } else { SNAP_OFF_BG };
+    let border_color = if open {
+        ACCENT
+    } else if active {
+        SNAP_BORDER_ON
+    } else {
+        BORDER_COLOR
+    };
+
+    let caret = mouse_area(
+        container(crate::ui::icons::arrow_down(9.0, color)).padding([0, 1]),
+    )
+    .on_press(caret_msg);
+
+    container(row![main, caret].spacing(3).align_y(iced::Center))
+        .style(move |_: &Theme| container::Style {
+            background: Some(Background::Color(bg)),
+            border: Border {
+                color: border_color,
+                width: 1.0,
+                radius: 2.0.into(),
+            },
+            ..Default::default()
+        })
+        .padding([4, 6])
+        .into()
+}
+
 // ── Polar tracking pill ───────────────────────────────────────────────────
 //
-// Left-click toggles polar on/off.
-// Right-click cycles through common angle increments: 15 → 30 → 45 → 90 → 15 …
+// Main: left-click toggles polar on/off; right-click cycles the increment.
+// Caret: opens the angle picker.
 
-fn polar_pill(active: bool, increment_deg: f32) -> Element<'static, Message> {
-    let angle = format!("{:.0}°", increment_deg);
+fn polar_pill(active: bool, increment_deg: f32, open: bool) -> Element<'static, Message> {
+    let angle = crate::ui::popup::polar_popup::angle_label(increment_deg);
     let tooltip_text = format!(
-        "Polar Tracking ({}°)\nF10 — left-click on/off\nRight-click to change angle",
-        increment_deg as u32
+        "Polar Tracking ({angle})\nF10 — left-click on/off\nRight-click cycles · ▾ picks angle",
     );
+    let color = pill_text_color(active);
 
-    let bg_color = move |hovered: bool| match (active, hovered) {
-        (true, true) => SNAP_ON_HOVER,
-        (true, false) => SNAP_ON_BG,
-        (false, true) => SNAP_OFF_HOVER,
-        (false, false) => SNAP_OFF_BG,
+    // Right-click quick-cycles through the same increments the picker lists.
+    const CYCLE: &[f32] = &[90.0, 45.0, 30.0, 22.5, 18.0, 15.0, 10.0, 5.0, 1.0];
+    let next_angle = match CYCLE.iter().position(|&a| (a - increment_deg).abs() < 1e-3) {
+        Some(i) => CYCLE[(i + 1) % CYCLE.len()],
+        None => 45.0,
     };
 
-    // Cycle to the next common angle on right-click.
-    let next_angle = match increment_deg as u32 {
-        15 => 30.0_f32,
-        30 => 45.0,
-        45 => 90.0,
-        _ => 15.0,
-    };
-
-    let color = if active { OSNAP_ON_TEXT } else { OSNAP_OFF_TEXT };
-    let inner = container(
+    let main = mouse_area(
         row![
             crate::ui::icons::tinted(crate::ui::icons::ST_POLAR, 17.0, color),
             text(angle).size(11).color(color),
@@ -495,23 +550,11 @@ fn polar_pill(active: bool, increment_deg: f32) -> Element<'static, Message> {
         .spacing(2)
         .align_y(iced::Center),
     )
-    .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(bg_color(false))),
-        border: Border {
-            color: if active { SNAP_BORDER_ON } else { BORDER_COLOR },
-            width: 1.0,
-            radius: 2.0.into(),
-        },
-        ..Default::default()
-    })
-    .padding([4, 6]);
-
-    let pill = mouse_area(inner)
-        .on_press(Message::TogglePolar)
-        .on_right_press(Message::SetPolarAngle(next_angle));
+    .on_press(Message::TogglePolar)
+    .on_right_press(Message::SetPolarAngle(next_angle));
 
     tooltip(
-        pill,
+        split_pill(main.into(), Message::TogglePolarPopup, active, open),
         container(text(tooltip_text).size(11).color(Color::WHITE))
             .style(|_: &Theme| container::Style {
                 background: Some(Background::Color(Color {
@@ -538,111 +581,23 @@ fn polar_pill(active: bool, increment_deg: f32) -> Element<'static, Message> {
     .into()
 }
 
-// ── OSNAP split button ────────────────────────────────────────────────────
+// ── OSNAP pill ─────────────────────────────────────────────────────────────
 //
-// Left part  ("⚡ OSNAP"): toggles the global snap on/off.
-// Right part ("▾"):        opens the snap-type dropdown.
+// Main: toggles the global snap on/off. Caret: opens the snap-type dropdown.
 
 fn osnap_btn(active: bool, snap_enabled: bool, open: bool) -> Element<'static, Message> {
-    let bg = match (active || snap_enabled, open) {
-        (true, true) => SNAP_ON_HOVER,
-        (true, false) => SNAP_ON_BG,
-        (false, _) => SNAP_OFF_BG,
-    };
-    let border_color = if open {
-        ACCENT
-    } else if active {
-        SNAP_BORDER_ON
-    } else {
-        BORDER_COLOR
-    };
-    let text_color = if active {
-        OSNAP_ON_TEXT
-    } else {
-        OSNAP_OFF_TEXT
-    };
-
-    let left = button(crate::ui::icons::tinted(
+    let on = active || snap_enabled;
+    let main = mouse_area(crate::ui::icons::tinted(
         crate::ui::icons::ST_OSNAP,
         17.0,
-        text_color,
+        pill_text_color(on),
     ))
-    .on_press(Message::ToggleSnapEnabled)
-        .style(move |_: &Theme, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered => {
-                    if active || snap_enabled {
-                        SNAP_ON_HOVER
-                    } else {
-                        SNAP_OFF_HOVER
-                    }
-                }
-                _ => bg,
-            })),
-            border: Border {
-                color: border_color,
-                width: 1.0,
-                radius: iced::border::Radius {
-                    top_left: 2.0,
-                    top_right: 0.0,
-                    bottom_right: 0.0,
-                    bottom_left: 2.0,
-                },
-            },
-            text_color,
-            shadow: iced::Shadow::default(),
-            snap: false,
-        })
-        .padding([4, 6]);
+    .on_press(Message::ToggleSnapEnabled);
 
-    let right = button(crate::ui::icons::arrow_down(11.0, text_color))
-        .on_press(Message::ToggleSnapPopup)
-        .style(move |_: &Theme, status| button::Style {
-            background: Some(Background::Color(match status {
-                button::Status::Hovered => {
-                    if active || snap_enabled {
-                        SNAP_ON_HOVER
-                    } else {
-                        SNAP_OFF_HOVER
-                    }
-                }
-                _ => bg,
-            })),
-            border: Border {
-                color: border_color,
-                width: 1.0,
-                radius: iced::border::Radius {
-                    top_left: 0.0,
-                    top_right: 2.0,
-                    bottom_right: 2.0,
-                    bottom_left: 0.0,
-                },
-            },
-            text_color,
-            shadow: iced::Shadow::default(),
-            snap: false,
-        })
-        .padding([4, 4]);
-
-    row![
-        tip(left.into(), "Object Snap: toggle on/off\nF3"),
-        tip_node(
-            right.into(),
-            column![
-                text("Object Snap settings").size(11).color(Color::WHITE),
-                row![
-                    text("Click").size(11).color(Color::WHITE),
-                    crate::ui::icons::arrow_down(9.0, Color::WHITE),
-                    text("to open the list").size(11).color(Color::WHITE),
-                ]
-                .spacing(3)
-                .align_y(iced::Center),
-            ]
-            .into(),
-        ),
-    ]
-    .spacing(0)
-    .into()
+    tip(
+        split_pill(main.into(), Message::ToggleSnapPopup, on, open),
+        "Object Snap: toggle on/off · ▾ opens the snap list\nF3",
+    )
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────

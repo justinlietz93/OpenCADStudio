@@ -252,6 +252,10 @@ pub(super) struct OpenCADStudio {
     snapper: Snapper,
     snap_popup_open: bool,
     scale_popup_open: bool,
+    /// True while the polar-tracking angle picker is open.
+    polar_popup_open: bool,
+    /// Live text of the polar picker's custom-angle field.
+    polar_custom_input: String,
     /// True while the status-bar customization menu is open.
     statusbar_menu_open: bool,
     /// True while the leftmost hamburger's Model/layout list dropdown is open.
@@ -1404,8 +1408,16 @@ pub enum Message {
     ToggleLineweightDisplay,
     /// Toggle polar-angle constraint — F10 / POLAR status-bar button.
     TogglePolar,
-    /// Set polar tracking angle increment (right-click POLAR button).
+    /// Set polar tracking angle increment (POLAR picker / right-click cycle).
     SetPolarAngle(f32),
+    /// Open/close the polar-tracking angle picker (POLAR pill caret).
+    TogglePolarPopup,
+    /// Close the polar-tracking angle picker.
+    ClosePolarPopup,
+    /// Live text edit of the polar picker's custom-angle field.
+    PolarCustomInput(String),
+    /// Apply the typed custom polar angle (Enter in the picker's field).
+    SubmitPolarCustom,
     /// Set the model-space annotation scale (CANNOSCALE equivalent).
     SetAnnotationScale(f32),
     /// Set the active viewport's custom_scale (paper space).
@@ -2045,6 +2057,8 @@ impl OpenCADStudio {
             snapper: Snapper::default(),
             snap_popup_open: false,
             scale_popup_open: false,
+            polar_popup_open: false,
+            polar_custom_input: String::new(),
             statusbar_menu_open: false,
             layout_list_open: false,
             units_popup_open: false,

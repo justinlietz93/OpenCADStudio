@@ -1253,6 +1253,7 @@ impl OpenCADStudio {
                         self.ortho_mode,
                         self.polar_mode,
                         self.polar_increment_deg,
+                        self.polar_popup_open,
                         self.dyn_input,
                         self.snapper.otrack_enabled,
                         tab.scene.layout_names(),
@@ -1314,6 +1315,17 @@ impl OpenCADStudio {
                 tab.scene.first_viewport_scale(),
                 tab.scene.scale_list(),
                 sb_pill(crate::ui::statusbar::SB_SCALE_ID),
+                win,
+            )
+        } else {
+            iced::widget::Space::new().width(0).height(0).into()
+        };
+
+        let polar_layer: Element<'_, Message> = if self.polar_popup_open {
+            crate::ui::popup::polar_popup::polar_popup_overlay(
+                self.polar_increment_deg,
+                &self.polar_custom_input,
+                sb_pill(crate::ui::statusbar::SB_POLAR_ID),
                 win,
             )
         } else {
@@ -1412,6 +1424,7 @@ impl OpenCADStudio {
             main_ui,
             snap_layer,
             scale_layer,
+            polar_layer,
             statusbar_menu_layer,
             layout_list_layer,
             units_layer,
