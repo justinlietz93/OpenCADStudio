@@ -218,6 +218,17 @@ impl OpenCADStudio {
                 }
             }
             CmdResult::CommitEntity(entity) => {
+                // A line/arc drawn by a repeating command advances the ARC_CONT
+                // continuation anchor, so ending one run and launching another
+                // keeps continuing from the last segment (mirrors the
+                // CommitAndExit arm). Non-continuable repeats (point/ray/spline)
+                // leave the anchor untouched. (#327)
+                if matches!(
+                    entity,
+                    acadrust::EntityType::Line(_) | acadrust::EntityType::Arc(_)
+                ) {
+                    self.update_cont_anchor(&entity);
+                }
                 let label = self.history_label_from_active_cmd(i, "ENTITY");
                 self.push_undo_snapshot(i, label);
                 self.commit_entity(entity);

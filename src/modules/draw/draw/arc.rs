@@ -1359,9 +1359,19 @@ impl CadCommand for ArcContCommand {
     fn on_point(&mut self, pt: DVec3) -> CmdResult {
         match arc_continue(self.s, self.tangent, pt, self.ctrl) {
             Some((center, radius, sa, ea)) => {
-                CmdResult::CommitAndExit(make_arc(center, radius, sa, ea))
+                let arc = make_arc(center, radius, sa, ea);
+                // Keep drawing: re-anchor at the arc just committed so the next
+                // click starts another tangent-continuing arc from its end,
+                // until the user ends the run with Enter/Esc (#327).
+                if let Some((end, tangent)) = continue_anchor(&arc, Some(pt)) {
+                    self.s = end;
+                    self.tangent = tangent;
+                }
+                CmdResult::CommitEntity(arc)
             }
-            None => CmdResult::Cancel,
+            // A degenerate pick (no arc through these points) shouldn't end the
+            // whole run — stay active and wait for the next end point.
+            None => CmdResult::NeedPoint,
         }
     }
     fn on_enter(&mut self) -> CmdResult {
