@@ -834,8 +834,8 @@ fn edge_poly_params(a: DVec3, b: DVec3, sides: u32) -> Option<(DVec3, f64, f64)>
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["POLY_C"] });  // PolyCCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["POL", "POLY", "POLYGON"] });  // PolyCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["POLY", "POLYGON"] });  // PolyCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["POLY_E"] });  // PolyECommand
 inventory::submit!(crate::command::CommandRegistration { names: &["RECT_CEN"] });  // RectCenCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["REC", "RECT", "RECTANG"] });  // RectCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["RECT", "RECTANG"] });  // RectCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["RECT_ROT"] });  // RectRotCommand

@@ -482,7 +482,7 @@ fn _uses_ml_types(_ml: &MultiLeader, _ll: &LeaderLine) {}
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["MLA", "MLEADERADD"] });  // MLeaderAddCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["MLAL", "MLEADERALIGN"] });  // MLeaderAlignCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["MLC", "MLEADERCOLLECT"] });  // MLeaderCollectCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["MLEADERREMOVE", "MLR"] });  // MLeaderRemoveCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLEADERADD"] });  // MLeaderAddCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLEADERALIGN"] });  // MLeaderAlignCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLEADERCOLLECT"] });  // MLeaderCollectCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLEADERREMOVE"] });  // MLeaderRemoveCommand

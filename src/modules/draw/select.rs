@@ -108,4 +108,4 @@ impl CadCommand for SelectObjectsCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["AR", "ARRAY", "ARRAYPATH", "ARRAYPOLAR", "ARRAYRECT", "BLOCK", "CC", "CO", "COPY", "COPYCLIP", "CUTCLIP", "CX", "E", "ERASE", "EXPLODE", "G", "GROUP", "LAYFRZ", "LAYLCK", "LAYMCUR", "LAYOFF", "LAYULK", "M", "MI", "MIRROR", "MOVE", "RO", "ROTATE", "SC", "SCALE", "SS", "STRETCH", "X"] });  // SelectObjectsCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["ARRAY", "ARRAYPATH", "ARRAYPOLAR", "ARRAYRECT", "BLOCK", "COPY", "COPYCLIP", "CUTCLIP", "ERASE", "EXPLODE", "GROUP", "LAYFRZ", "LAYLCK", "LAYMCUR", "LAYOFF", "LAYULK", "MIRROR", "MOVE", "ROTATE", "SCALE", "STRETCH"] });  // SelectObjectsCommand

@@ -331,4 +331,4 @@ mod tangent_tests {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["L", "LINE"] });  // LineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["LINE"] });  // LineCommand

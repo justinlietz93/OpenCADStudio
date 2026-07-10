@@ -5,7 +5,7 @@ impl OpenCADStudio {
         match cmd {
             // Interactive pan: left-drag pans the view until Esc. The only pan
             // path when there is no middle mouse button (trackpad / web).
-            "PAN" | "P" => {
+            "PAN" => {
                 self.tabs[i].pan_mode = true;
                 self.command_line
                     .push_output("PAN: drag with the left mouse button. Press Esc to exit.");
@@ -126,7 +126,7 @@ impl OpenCADStudio {
             }
 
             // ── PROPERTIES — toggle Properties panel visibility ──────────────────
-            "PROPERTIES" | "PR" | "PROPS" => {
+            "PROPERTIES" | "PROPS" => {
                 return Some(Task::done(Message::ToggleProperties));
             }
 
@@ -160,7 +160,7 @@ impl OpenCADStudio {
                 return Some(Task::done(Message::ToggleSnapPopup));
             }
             // UNITS — open the drawing-units picker (linear / angular format).
-            "UNITS" | "UN" | "DDUNITS" => {
+            "UNITS" | "DDUNITS" => {
                 return Some(Task::done(Message::ToggleUnitsPopup));
             }
 
@@ -174,13 +174,13 @@ impl OpenCADStudio {
             }
 
             // ── TOOLPALETTES — not yet implemented ───────────────────────────────
-            "TOOLPALETTES" | "TP" => {
+            "TOOLPALETTES" => {
                 self.command_line
                     .push_info("TOOLPALETTES: Tool Palettes not yet implemented.");
             }
 
             // ── SHEETSET — not yet implemented ───────────────────────────────────
-            "SHEETSET" | "SSM" => {
+            "SHEETSET" => {
                 self.command_line
                     .push_info("SHEETSET: Sheet Set Manager not yet implemented.");
             }
@@ -292,7 +292,7 @@ impl OpenCADStudio {
             // PRESSPULL on a closed boundary creates a solid by extruding it to a
             // height — the same operation as EXTRUDE. THICKEN turns a closed planar
             // profile into a solid of the given thickness, which is also an extrude.
-            "EXTRUDE" | "EXT" | "PRESSPULL" | "THICKEN" => {
+            "EXTRUDE" | "PRESSPULL" | "THICKEN" => {
                 use crate::modules::insert::solid3d_cmds::ExtrudeCommand;
                 // If a single entity is already selected, skip the pick step.
                 let selected: Vec<_> = self.tabs[i].scene.selected_entities().into_iter().collect();
@@ -311,7 +311,7 @@ impl OpenCADStudio {
             }
 
             // ── REVOLVE ────────────────────────────────────────────────────
-            "REVOLVE" | "REV" => {
+            "REVOLVE" => {
                 use crate::modules::insert::solid3d_cmds::RevolveCommand;
                 let color = self.tabs[i].scene.layer_color(&self.tabs[i].active_layer);
                 let cmd = RevolveCommand::new(color);

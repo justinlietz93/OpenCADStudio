@@ -53,7 +53,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "COPYCLIP" | "CC" => {
+            "COPYCLIP" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -142,7 +142,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "CUTCLIP" | "CX" => {
+            "CUTCLIP" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -179,7 +179,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "PASTECLIP" | "PC" => {
+            "PASTECLIP" => {
                 if self.clipboard.is_empty() {
                     self.command_line.push_error("Clipboard is empty.");
                 } else {
@@ -386,7 +386,7 @@ impl OpenCADStudio {
             // ADCENTER / CONTENTBROWSER — report the drawing's named content
             // (blocks and layers) from the command line in place of the browser
             // panel.
-            "ADCENTER" | "CONTENTBROWSER" | "ADC" => {
+            "ADCENTER" | "CONTENTBROWSER" => {
                 let blocks = self.tabs[i].scene.custom_block_names();
                 let layers: Vec<String> = self.tabs[i]
                     .scene
@@ -476,7 +476,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "XATTACH" | "XA" => {
+            "XATTACH" => {
                 // Launch the file picker; XAttachPickResult will start the command.
                 return Some(Task::done(Message::XAttachPick));
             }
@@ -498,7 +498,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "XREF" | "XR" => {
+            "XREF" => {
                 // List all xref blocks in the current drawing.
                 let xrefs: Vec<String> = self.tabs[i]
                     .scene

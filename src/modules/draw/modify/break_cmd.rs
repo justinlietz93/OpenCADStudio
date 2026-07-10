@@ -470,5 +470,5 @@ impl CadCommand for BreakAtPointCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["BAP", "BREAKATPOINT"] });  // BreakAtPointCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["BR", "BREAK"] });  // BreakInteractiveCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["BREAKATPOINT"] });  // BreakAtPointCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["BREAK"] });  // BreakInteractiveCommand

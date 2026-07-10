@@ -512,4 +512,4 @@ fn lengthen_spline(spl: &SplineEnt, pick_pt: Vec3, mode: &LenMode) -> Option<Ent
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["LEN", "LENGTHEN"] });  // LengthenCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["LENGTHEN"] });  // LengthenCommand

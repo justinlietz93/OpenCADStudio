@@ -65,4 +65,4 @@ impl CadCommand for MTextCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["MT", "MTEXT"] });  // MTextCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MTEXT"] });  // MTextCommand

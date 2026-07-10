@@ -3,13 +3,13 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_inquiry(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
-            "3DORBIT" | "3O" => {
+            "3DORBIT" => {
                 self.command_line
                     .push_info("3D Orbit: drag with right mouse button.");
             }
 
             // ── Selection utilities ───────────────────────────────────────
-            "SELECTALL" | "SA" => {
+            "SELECTALL" => {
                 use crate::scene::Scene;
                 let handles: Vec<acadrust::Handle> = self.tabs[i]
                     .scene
@@ -28,7 +28,7 @@ impl OpenCADStudio {
                 self.refresh_properties();
             }
 
-            "DESELECT" | "DE" | "DESELALL" => {
+            "DESELECT" | "DESELALL" => {
                 self.tabs[i].scene.deselect_all();
                 self.command_line.push_output("Deselected.");
                 self.refresh_properties();
@@ -49,7 +49,7 @@ impl OpenCADStudio {
 
             // QSELECT builds a selection set by object type / property; FILTER is
             // the same criteria-based selection.
-            "QSELECT" | "QS" | "FILTER" | "FI" => {
+            "QSELECT" | "FILTER" => {
                 return Some(Task::done(Message::QSelectOpen));
             }
 
@@ -75,7 +75,7 @@ impl OpenCADStudio {
             }
 
             // ── LIST — entity info ────────────────────────────────────────
-            "LIST" | "LI" => {
+            "LIST" => {
                 let selected: Vec<_> = self.tabs[i].scene.selected_entities();
                 if selected.is_empty() {
                     self.command_line
@@ -218,35 +218,35 @@ impl OpenCADStudio {
             }
 
             // ── Break / Join ─────────────────────────────────────────────────
-            "JOIN" | "J" => {
+            "JOIN" => {
                 use crate::modules::draw::modify::join::JoinCommand;
                 let cmd = JoinCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "BREAK" | "BR" => {
+            "BREAK" => {
                 use crate::modules::draw::modify::break_cmd::BreakInteractiveCommand;
                 let cmd = BreakInteractiveCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "BREAKATPOINT" | "BAP" => {
+            "BREAKATPOINT" => {
                 use crate::modules::draw::modify::break_cmd::BreakAtPointCommand;
                 let cmd = BreakAtPointCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "PEDIT" | "PE" => {
+            "PEDIT" => {
                 use crate::modules::draw::modify::pedit::PeditCommand;
                 let cmd_obj = PeditCommand::new();
                 self.command_line.push_info(&cmd_obj.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
             }
 
-            "SPLINEDIT" | "SPE" => {
+            "SPLINEDIT" => {
                 use crate::modules::draw::modify::splinedit::SplineditCommand;
                 let cmd_obj = SplineditCommand::new();
                 self.command_line.push_info(&cmd_obj.prompt());
@@ -257,7 +257,7 @@ impl OpenCADStudio {
             // If a single block with attributes is already selected it opens on
             // that block; otherwise the pick command runs and the editor opens
             // once a block is chosen (see `command_driver`).
-            "ATTEDIT" | "ATE" => {
+            "ATTEDIT" => {
                 let selected_attr_insert = {
                     let sel = self.tabs[i].scene.selected_entities();
                     if sel.len() == 1 {
@@ -547,28 +547,28 @@ impl OpenCADStudio {
                     .push_output("REFCLOSE: Changes discarded.");
             }
 
-            "ALIGN" | "AL" => {
+            "ALIGN" => {
                 use crate::modules::draw::modify::align::AlignCommand;
                 let cmd = AlignCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "LENGTHEN" | "LEN" => {
+            "LENGTHEN" => {
                 use crate::modules::draw::modify::lengthen::LengthenCommand;
                 let cmd = LengthenCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIVIDE" | "DIV" => {
+            "DIVIDE" => {
                 use crate::modules::draw::inquiry::divide::DivideCommand;
                 let cmd = DivideCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MEASURE" | "ME" => {
+            "MEASURE" => {
                 use crate::modules::draw::inquiry::divide::MeasureCommand;
                 let cmd = MeasureCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -576,7 +576,7 @@ impl OpenCADStudio {
             }
 
             // ── Inquiry ──────────────────────────────────────────────────────
-            "DIST" | "DI" => {
+            "DIST" => {
                 use crate::modules::draw::inquiry::dist::DistCommand;
                 let cmd = DistCommand::new();
                 self.command_line.push_info(&cmd.prompt());

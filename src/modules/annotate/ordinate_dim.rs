@@ -139,4 +139,4 @@ fn preview_wire(points: Vec<Vec3>) -> WireModel {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIMORDINATE", "DOR"] });  // OrdinateDimCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMORDINATE"] });  // OrdinateDimCommand

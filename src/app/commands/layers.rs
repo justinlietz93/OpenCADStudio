@@ -510,7 +510,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MATCHPROP" | "MA" => {
+            "MATCHPROP" => {
                 use crate::modules::draw::properties::match_prop::MatchPropCommand;
                 self.tabs[i].scene.deselect_all();
                 let cmd = MatchPropCommand::new();
@@ -518,7 +518,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "GROUP" | "G" => {
+            "GROUP" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -540,7 +540,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "UNGROUP" | "UG" => {
+            "UNGROUP" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()

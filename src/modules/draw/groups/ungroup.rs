@@ -62,4 +62,4 @@ impl CadCommand for UngroupCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["UG", "UNGROUP"] });  // UngroupCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["UNGROUP"] });  // UngroupCommand

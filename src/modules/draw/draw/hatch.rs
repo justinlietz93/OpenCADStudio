@@ -455,4 +455,4 @@ impl CadCommand for BoundaryCommand {
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["BOUNDARY"] });  // BoundaryCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["GRADIENT"] });  // GradientCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["H", "HATCH"] });  // HatchCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["HATCH"] });  // HatchCommand

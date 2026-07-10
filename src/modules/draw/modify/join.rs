@@ -264,4 +264,4 @@ fn is_collinear(verts: &[(DVec3, f64)]) -> bool {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["J", "JOIN"] });  // JoinCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["JOIN"] });  // JoinCommand

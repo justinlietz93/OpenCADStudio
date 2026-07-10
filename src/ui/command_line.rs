@@ -50,6 +50,12 @@ pub struct CommandLine {
     /// compile-time command registry, so runtime plugin commands are typeable
     /// and discoverable — not only reachable via ribbon buttons (#272).
     pub dynamic_commands: Vec<String>,
+    /// Command aliases (uppercase `alias → command`), a copy of the app's alias
+    /// table kept here for autocomplete. Aliases are hidden from suggestions
+    /// (a terse `CC` never appears) while their target command (`COPYCLIP`)
+    /// still does; and when the whole input is an alias, its target is surfaced
+    /// as the top suggestion so the highlight matches what Enter runs. (#288)
+    pub command_aliases: rustc_hash::FxHashMap<String, String>,
     /// The active command step's prompt, mirrored here so a step change
     /// can be detected and the pinned (non-fading) history line updated.
     step_prompt: Option<String>,
@@ -302,7 +308,11 @@ impl CommandLine {
     /// Autocomplete suggestions for the current input — see
     /// [`ranked_matches`]. Includes loaded plugins' commands (#272).
     pub fn autocomplete_matches(&self) -> Vec<String> {
-        ranked_matches(self.input.trim(), &self.dynamic_commands)
+        ranked_matches(
+            self.input.trim(),
+            &self.dynamic_commands,
+            &self.command_aliases,
+        )
     }
 
     pub fn view<'a>(
@@ -625,7 +635,18 @@ impl CommandLine {
 /// compile-time `inventory` registry — merged with `dynamic`, the command names
 /// contributed by loaded plugins (runtime, so they can't be `&'static`; see
 /// #272). Returns owned strings to carry both sources.
-pub fn ranked_matches(needle: &str, dynamic: &[String]) -> Vec<String> {
+///
+/// `aliases` is the `alias → command` table. Aliases themselves are dropped from
+/// the results, so a terse `CC` is typeable and dispatches (via the alias table)
+/// but never clutters the suggestions — only its target `COPYCLIP` is offered.
+/// And when the whole input is an alias, its target command is forced to the top
+/// so the highlighted suggestion matches what pressing Enter actually runs
+/// (typing `AA` highlights `AREA`, `L` highlights `LINE`). (#288)
+pub fn ranked_matches(
+    needle: &str,
+    dynamic: &[String],
+    aliases: &rustc_hash::FxHashMap<String, String>,
+) -> Vec<String> {
     let needle = needle.trim().to_uppercase();
     if needle.is_empty() {
         return Vec::new();
@@ -636,7 +657,8 @@ pub fn ranked_matches(needle: &str, dynamic: &[String]) -> Vec<String> {
         // Plugin names are uppercased to match the built-ins and the needle,
         // so ranking and display stay consistent across both sources.
         .chain(dynamic.iter().map(|cmd| cmd.to_uppercase()))
-        .filter(|cmd| cmd.contains(&needle))
+        // Hide aliases (keys of the table); their target command still shows.
+        .filter(|cmd| cmd.contains(&needle) && !aliases.contains_key(cmd))
         .collect();
     matches.sort();
     matches.dedup();
@@ -647,6 +669,13 @@ pub fn ranked_matches(needle: &str, dynamic: &[String]) -> Vec<String> {
             .cmp(&!b.starts_with(&needle))
             .then_with(|| a.cmp(b))
     });
+    // If the entire input is an alias, its target is what Enter runs, so make it
+    // the first (highlighted) suggestion — even when the target has no substring
+    // overlap with the alias (`AA` → `AREA`) and so wouldn't otherwise appear.
+    if let Some(target) = aliases.get(&needle) {
+        matches.retain(|m| m != target);
+        matches.insert(0, target.clone());
+    }
     matches.truncate(AUTOCOMPLETE_LIMIT);
     matches
 }
@@ -740,24 +769,54 @@ const INFO_COLOR: Color = Color {
 #[cfg(test)]
 mod tests {
     use super::ranked_matches;
+    use rustc_hash::FxHashMap;
+
+    fn aliases(pairs: &[(&str, &str)]) -> FxHashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(a, c)| (a.to_string(), c.to_string()))
+            .collect()
+    }
 
     #[test]
     fn dynamic_plugin_commands_surface_in_autocomplete() {
+        let none = FxHashMap::default();
         // No built-in command contains the plugin prefix, so an empty pool
         // yields nothing — reproducing the #272 bug's blind autocomplete.
-        assert!(ranked_matches("LS_", &[]).is_empty());
+        assert!(ranked_matches("LS_", &[], &none).is_empty());
         // A loaded plugin's commands become typeable, case-insensitively, and
         // the prefix substring surfaces every one of them.
         let pool = vec!["LS_LABEL".to_string(), "ls_autolabel".to_string()];
-        let m = ranked_matches("LS_", &pool);
+        let m = ranked_matches("LS_", &pool, &none);
         assert!(m.contains(&"LS_LABEL".to_string()), "got {m:?}");
         assert!(m.contains(&"LS_AUTOLABEL".to_string()), "got {m:?}");
     }
 
     #[test]
     fn builtin_commands_still_match_with_an_empty_pool() {
-        let m = ranked_matches("LINE", &[]);
+        let m = ranked_matches("LINE", &[], &FxHashMap::default());
         assert!(m.iter().any(|c| c == "LINE"), "got {m:?}");
+    }
+
+    #[test]
+    fn aliases_are_hidden_but_their_command_survives() {
+        // The alias `L` is dropped from suggestions while `LINE` (its target)
+        // still appears. (#288)
+        let a = aliases(&[("L", "LINE")]);
+        let m = ranked_matches("L", &[], &a);
+        assert!(!m.iter().any(|c| c == "L"), "alias L should be hidden: {m:?}");
+        assert!(m.iter().any(|c| c == "LINE"), "LINE should remain: {m:?}");
+    }
+
+    #[test]
+    fn exact_alias_forces_its_target_to_the_top() {
+        // Typing a full alias highlights the command Enter will run, even when
+        // the target shares no substring with the alias (`AA` → `AREA`). (#288)
+        let a = aliases(&[("AA", "AREA"), ("L", "LINE")]);
+        let m = ranked_matches("AA", &[], &a);
+        assert_eq!(m.first().map(String::as_str), Some("AREA"), "got {m:?}");
+        let m = ranked_matches("L", &[], &a);
+        assert_eq!(m.first().map(String::as_str), Some("LINE"), "got {m:?}");
     }
 }
 

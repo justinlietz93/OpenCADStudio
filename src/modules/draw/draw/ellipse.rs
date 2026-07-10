@@ -646,4 +646,4 @@ fn line_wire(from: DVec3, to: DVec3) -> WireModel {
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["ELLIPSE_ARC"] });  // EllipseArcCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ELLIPSE_AXIS"] });  // EllipseAxisCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["EL", "ELLIPSE"] });  // EllipseCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["ELLIPSE"] });  // EllipseCommand

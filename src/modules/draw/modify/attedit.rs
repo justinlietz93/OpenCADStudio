@@ -62,4 +62,4 @@ impl CadCommand for AtteditCommand {
 }
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["ATTEDIT", "ATE"] });
+inventory::submit!(crate::command::CommandRegistration { names: &["ATTEDIT"] });

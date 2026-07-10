@@ -206,4 +206,4 @@ fn v3(p: Vec3) -> Vector3 {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DBA", "DIMBASELINE"] });  // DimBaselineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMBASELINE"] });  // DimBaselineCommand

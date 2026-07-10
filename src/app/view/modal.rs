@@ -21,6 +21,9 @@ impl OpenCADStudio {
             super::super::ModalKind::Shortcuts => {
                 sized(crate::ui::window::shortcuts::view_window(&self.shortcut_overrides), 720, 520)
             }
+            super::super::ModalKind::Aliases => {
+                sized(crate::ui::window::alias_editor::view_window(&self.alias_editor_rows), 480, 520)
+            }
             super::super::ModalKind::PluginManager => sized(
                 crate::ui::window::plugin_manager::view_window(
                     &self.disabled_plugins,

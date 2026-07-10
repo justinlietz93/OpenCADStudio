@@ -2751,8 +2751,8 @@ impl CadCommand for ExtendCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["EX", "EXTEND"] });  // ExtendCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["TR", "TRIM"] });  // TrimCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["EXTEND"] });  // ExtendCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["TRIM"] });  // TrimCommand
 
 #[cfg(test)]
 mod tests {

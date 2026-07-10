@@ -114,4 +114,4 @@ impl CadCommand for ToleranceCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["TOL", "TOLERANCE"] });  // ToleranceCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["TOLERANCE"] });  // ToleranceCommand

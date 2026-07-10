@@ -185,4 +185,4 @@ pub fn apply_pedit(entity: &mut EntityType, op: &PeditOp) -> bool {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["PE", "PEDIT"] });  // PeditCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["PEDIT"] });  // PeditCommand

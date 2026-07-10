@@ -190,4 +190,4 @@ impl CadCommand for SplineCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["SPL", "SPLINE"] });  // SplineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["SPLINE"] });  // SplineCommand

@@ -1392,7 +1392,7 @@ impl CadCommand for ArcContCommand {
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_3P"] });  // Arc3PCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_CSA"] });  // ArcCSACommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_CSL"] });  // ArcCSLCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["A", "ARC"] });  // ArcCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["ARC"] });  // ArcCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SCA"] });  // ArcSCACommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SCE"] });  // ArcSCECommand
 inventory::submit!(crate::command::CommandRegistration { names: &["ARC_SCL"] });  // ArcSCLCommand

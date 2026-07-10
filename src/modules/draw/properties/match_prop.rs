@@ -92,4 +92,4 @@ impl CadCommand for MatchPropCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["MA", "MATCHPROP"] });  // MatchPropCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MATCHPROP"] });  // MatchPropCommand

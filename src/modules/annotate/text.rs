@@ -65,4 +65,4 @@ impl CadCommand for TextCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DT", "T", "TEXT"] });  // TextCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["TEXT"] });  // TextCommand

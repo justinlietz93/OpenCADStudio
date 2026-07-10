@@ -131,6 +131,6 @@ impl CadCommand for PasteCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["PASTECLIP", "PC"] });  // PasteCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["PASTECLIP"] });  // PasteCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["PASTEORIG"] });
 inventory::submit!(crate::command::CommandRegistration { names: &["PASTEBLOCK"] });

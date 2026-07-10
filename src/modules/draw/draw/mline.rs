@@ -170,4 +170,4 @@ fn build_mline(pts: &[Vec3], scale: f64, closed: bool, style_name: &str) -> Enti
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["ML", "MLINE"] });  // MlineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLINE"] });  // MlineCommand

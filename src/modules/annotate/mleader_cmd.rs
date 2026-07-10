@@ -192,4 +192,4 @@ fn arrowhead_wings(tip: Vec3, next: Vec3, size: f32) -> [Vec3; 2] {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["MLD", "MLEADER"] });  // MLeaderCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["MLEADER"] });  // MLeaderCommand

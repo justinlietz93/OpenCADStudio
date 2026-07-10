@@ -191,4 +191,4 @@ fn make_poly_wipeout(pts: &[Vec3]) -> EntityType {
 }
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["WIPEOUT", "WO"] });
+inventory::submit!(crate::command::CommandRegistration { names: &["WIPEOUT"] });

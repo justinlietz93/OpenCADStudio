@@ -4,14 +4,14 @@ impl OpenCADStudio {
     pub(super) fn dispatch_draw(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
             // ── Draw commands ──────────────────────────────────────────────
-            "LINE" | "L" => {
+            "LINE" => {
                 use crate::modules::draw::draw::line::LineCommand;
                 let new_cmd = LineCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "MLINE" | "ML" => {
+            "MLINE" => {
                 use crate::modules::draw::draw::mline::MlineCommand;
                 let style = self.tabs[i].scene.document.header.multiline_style.clone();
                 let cmd_obj = MlineCommand::with_style(style);
@@ -184,14 +184,14 @@ impl OpenCADStudio {
                 }
             }
 
-            "DONUT" | "DO" => {
+            "DONUT" => {
                 use crate::modules::draw::draw::donut::DonutCommand;
                 let cmd = DonutCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "CIRCLE" | "C" => {
+            "CIRCLE" => {
                 use crate::modules::draw::draw::circle::CircleCommand;
                 let new_cmd = CircleCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -232,7 +232,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "ARC" | "A" => {
+            "ARC" => {
                 use crate::modules::draw::draw::arc::ArcCommand;
                 let new_cmd = ArcCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -318,7 +318,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "RECT" | "RECTANG" | "REC" => {
+            "RECT" | "RECTANG" => {
                 use crate::modules::draw::draw::shapes::RectCommand;
                 let new_cmd = RectCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -348,7 +348,7 @@ impl OpenCADStudio {
                 }
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
-            "POLY" | "POLYGON" | "POL" => {
+            "POLY" | "POLYGON" => {
                 use crate::modules::draw::draw::shapes::PolyCommand;
                 let new_cmd = PolyCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -367,7 +367,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "PLINE" | "PL" => {
+            "PLINE" => {
                 use crate::modules::draw::draw::polyline::PlineCommand;
                 let new_cmd = PlineCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -383,7 +383,7 @@ impl OpenCADStudio {
 
             // 2D filled solid. Reached via SO / SOLID2D — the bare SOLID verb is
             // currently the shaded-display toggle (token collision tracked).
-            "SO" | "SOLID" | "SOLID2D" => {
+            "SOLID" | "SOLID2D" => {
                 use crate::modules::draw::draw::solid2d::Solid2dCommand;
                 let new_cmd = Solid2dCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -411,7 +411,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "DIMCENTER" | "DCE" | "CENTERMARK" => {
+            "DIMCENTER" | "CENTERMARK" => {
                 use crate::modules::draw::draw::dimcenter::DimCenterCommand;
                 let new_cmd = DimCenterCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -432,7 +432,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "MEASUREGEOM" | "MEA" => {
+            "MEASUREGEOM" => {
                 use crate::modules::draw::inquiry::measuregeom::MeasureGeomCommand;
                 let new_cmd = MeasureGeomCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -442,7 +442,7 @@ impl OpenCADStudio {
             // ── Modify commands ────────────────────────────────────────────
             // MOVE works from picked points, so it already relocates entities
             // in 3D; 3DMOVE is the same operation.
-            "MOVE" | "M" | "3DMOVE" => {
+            "MOVE" | "3DMOVE" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -463,7 +463,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "COPY" | "CO" => {
+            "COPY" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -484,7 +484,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "ROTATE" | "RO" => {
+            "ROTATE" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -539,7 +539,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "POINT" | "PO" => {
+            "POINT" => {
                 use crate::modules::draw::draw::point::PointCommand;
                 let new_cmd = PointCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -553,14 +553,14 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "XLINE" | "XL" | "CONSTRUCTIONLINE" => {
+            "XLINE" | "CONSTRUCTIONLINE" => {
                 use crate::modules::draw::draw::ray::XLineCommand;
                 let new_cmd = XLineCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "HATCH" | "H" => {
+            "HATCH" => {
                 use crate::modules::draw::draw::hatch::HatchCommand;
                 let outlines = self.tabs[i].scene.closed_outlines();
                 let new_cmd = HatchCommand::new(outlines);
@@ -568,7 +568,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "HATCHEDIT" | "HE" => {
+            "HATCHEDIT" => {
                 use crate::modules::draw::draw::hatchedit::HatcheditCommand;
                 // If a single hatch is already selected, skip the pick step.
                 let sel = self.tabs[i].scene.selected_entities();
@@ -610,7 +610,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "ELLIPSE" | "EL" => {
+            "ELLIPSE" => {
                 use crate::modules::draw::draw::ellipse::EllipseCommand;
                 let new_cmd = EllipseCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -631,14 +631,14 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "SPLINE" | "SPL" => {
+            "SPLINE" => {
                 use crate::modules::draw::draw::spline::SplineCommand;
                 let new_cmd = SplineCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "SCALE" | "SC" => {
+            "SCALE" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -659,7 +659,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "MIRROR" | "MI" => {
+            "MIRROR" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -682,7 +682,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "ERASE" | "E" => {
+            "ERASE" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -727,7 +727,7 @@ impl OpenCADStudio {
             }
 
             // INTERFERE — non-destructive intersect: solid from the overlap.
-            "INTERFERE" | "INF" => {
+            "INTERFERE" => {
                 return Some(self.solid_interfere());
             }
 
@@ -963,14 +963,14 @@ impl OpenCADStudio {
             }
 
             // ── Annotate commands ──────────────────────────────────────────
-            "TEXT" | "T" | "DT" => {
+            "TEXT" => {
                 use crate::modules::annotate::text::TextCommand;
                 let new_cmd = TextCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "DDEDIT" | "ED" => {
+            "DDEDIT" => {
                 use crate::modules::annotate::ddedit::DdeditCommand;
                 // A single text entity already selected opens its in-place
                 // editor directly; otherwise prompt for a pick.
@@ -994,7 +994,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "MTEXT" | "MT" => {
+            "MTEXT" => {
                 use crate::modules::annotate::mtext::MTextCommand;
                 let new_cmd = MTextCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());

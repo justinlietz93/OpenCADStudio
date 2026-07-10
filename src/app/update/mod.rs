@@ -118,6 +118,12 @@ impl OpenCADStudio {
                 self.attr_editor_selected = 0;
                 self.attr_editor_tab = crate::ui::window::attribute_editor::AttrTab::Attribute;
             }
+            // Closing (✕) discards edits made since the last Apply — matching the
+            // style editors. Committing happens only through the Apply button.
+            Some(Aliases) => {
+                self.alias_editor_rows.clear();
+                self.ribbon.deactivate_tool_if("ALIASEDIT");
+            }
             _ => {}
         }
         self.active_modal = None;
@@ -2628,6 +2634,52 @@ impl OpenCADStudio {
             }
             Message::ShortcutsPanelClose => {
                 self.close_active_modal();
+                Task::none()
+            }
+
+            // ── Command Alias Editor (ALIASEDIT) ──────────────────────────────
+            Message::AliasEditorOpen => {
+                // Seed the working buffer from the current table, sorted by alias
+                // so the list is stable and diffable.
+                let mut rows: Vec<(String, String)> = self
+                    .command_aliases
+                    .iter()
+                    .map(|(a, c)| (a.clone(), c.clone()))
+                    .collect();
+                rows.sort_by(|a, b| a.0.cmp(&b.0));
+                self.alias_editor_rows = rows;
+                self.active_modal = Some(super::ModalKind::Aliases);
+                Task::none()
+            }
+            Message::AliasEditorInput { idx, field, value } => {
+                use crate::ui::window::alias_editor::AliasField;
+                // Aliases and commands are stored uppercase; uppercasing as the
+                // user types keeps display and the committed table consistent.
+                let value = value.to_uppercase();
+                if let Some(rowdata) = self.alias_editor_rows.get_mut(idx) {
+                    match field {
+                        AliasField::Alias => rowdata.0 = value,
+                        AliasField::Command => rowdata.1 = value,
+                    }
+                }
+                Task::none()
+            }
+            Message::AliasEditorAdd => {
+                self.alias_editor_rows.push((String::new(), String::new()));
+                Task::none()
+            }
+            Message::AliasEditorRemove(idx) => {
+                if idx < self.alias_editor_rows.len() {
+                    self.alias_editor_rows.remove(idx);
+                }
+                Task::none()
+            }
+            Message::AliasEditorApply => {
+                self.apply_alias_editor_rows();
+                self.command_line.push_info(&format!(
+                    "{} alias(es) applied.",
+                    self.command_aliases.len()
+                ));
                 Task::none()
             }
 

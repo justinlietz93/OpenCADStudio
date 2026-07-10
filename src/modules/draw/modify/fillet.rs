@@ -1950,5 +1950,5 @@ impl CadCommand for ChamferCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["CHA", "CHAMFER"] });  // ChamferCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["F", "FILLET"] });  // FilletCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["CHAMFER"] });  // ChamferCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["FILLET"] });  // FilletCommand

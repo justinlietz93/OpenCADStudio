@@ -143,4 +143,4 @@ fn make_donut(cx: f64, cy: f64, inner_r: f64, outer_r: f64) -> EntityType {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DO", "DONUT"] });  // DonutCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DONUT"] });  // DonutCommand

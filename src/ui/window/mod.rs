@@ -7,3 +7,4 @@ pub mod layers;
 pub mod update_notice;
 pub mod open_progress;
 pub mod attribute_editor;
+pub mod alias_editor;

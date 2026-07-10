@@ -1,3 +1,4 @@
+mod alias;
 #[cfg(not(target_arch = "wasm32"))]
 mod automation;
 #[cfg(not(target_arch = "wasm32"))]
@@ -629,6 +630,16 @@ pub(super) struct OpenCADStudio {
     /// User-defined function-key overrides: "F3" → command string.
     shortcut_overrides: rustc_hash::FxHashMap<String, String>,
 
+    // ── Command Aliases ───────────────────────────────────────────────────
+    /// Command-line aliases: uppercase abbreviation → uppercase command
+    /// ("L" → "LINE"). Loaded from `ocad.pgp` at boot and consulted before
+    /// every dispatch (`resolve_alias`); user-editable via ALIASEDIT. See
+    /// [`alias`].
+    command_aliases: rustc_hash::FxHashMap<String, String>,
+    /// Working buffer for the ALIASEDIT modal: `(alias, command)` rows being
+    /// edited. Seeded from `command_aliases` on open, committed back on close.
+    alias_editor_rows: Vec<(String, String)>,
+
     // ── Layout Manager Panel ──────────────────────────────────────────────
     layout_manager_selected: String,
     layout_manager_rename_buf: String,
@@ -1081,6 +1092,7 @@ pub enum ModalKind {
     PointStyle,
     AttributeEditor,
     LayerDeleteWarning,
+    Aliases,
 }
 
 /// Identifies a DimStyle field that can be edited in the dialog.
@@ -1628,6 +1640,21 @@ pub enum Message {
     ShortcutsPanelOpen,
     #[allow(dead_code)]
     ShortcutsPanelClose,
+    // ── Command Alias Editor (ALIASEDIT) ────────────────────────────────
+    /// Open the command-alias editor modal, seeding rows from the alias table.
+    AliasEditorOpen,
+    /// Live edit of the alias or command in row `idx`.
+    AliasEditorInput {
+        idx: usize,
+        field: crate::ui::window::alias_editor::AliasField,
+        value: String,
+    },
+    /// Append a blank alias row.
+    AliasEditorAdd,
+    /// Remove alias row `idx`.
+    AliasEditorRemove(usize),
+    /// Commit the edited rows to the alias table (Apply button); stays open.
+    AliasEditorApply,
     // ── About window ────────────────────────────────────────────────────
     AboutOpen,
     /// Close whatever in-canvas modal dialog is open (Plan B).
@@ -2187,6 +2214,9 @@ impl OpenCADStudio {
             active_theme: Theme::Dark,
             // Keyboard shortcuts
             shortcut_overrides: rustc_hash::FxHashMap::default(),
+            // Command aliases (populated from ocad.pgp just after construction)
+            command_aliases: rustc_hash::FxHashMap::default(),
+            alias_editor_rows: Vec::new(),
             // Layout Manager
             layout_manager_selected: "Model".to_string(),
             layout_manager_rename_buf: String::new(),
@@ -2328,6 +2358,11 @@ impl OpenCADStudio {
         if let Some(s) = settings::UserSettings::load() {
             app.apply_settings(&s);
         }
+        // Load command aliases from ocad.pgp (writes the shipped default file
+        // on first launch). The hide-set keeps aliases out of autocomplete while
+        // their target command still shows.
+        app.command_aliases = alias::load_aliases();
+        app.command_line.command_aliases = app.command_aliases.clone();
         // Load external plugin packages from the plugins folder once, then fold
         // their ribbon tabs into the ribbon. Skipped under test/wasm.
         #[cfg(all(not(target_arch = "wasm32"), not(test)))]

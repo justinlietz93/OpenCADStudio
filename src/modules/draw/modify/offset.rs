@@ -816,7 +816,7 @@ impl CadCommand for OffsetCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["O", "OFFSET"] });  // OffsetCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["OFFSET"] });  // OffsetCommand
 
 #[cfg(test)]
 mod offset_tests {

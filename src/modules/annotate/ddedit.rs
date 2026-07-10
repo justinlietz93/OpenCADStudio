@@ -66,4 +66,4 @@ impl CadCommand for DdeditCommand {
 }
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DDEDIT", "ED"] });
+inventory::submit!(crate::command::CommandRegistration { names: &["DDEDIT"] });

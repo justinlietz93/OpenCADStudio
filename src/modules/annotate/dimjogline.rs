@@ -117,4 +117,4 @@ impl CadCommand for DimJogLineCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIMJOGLINE", "DJL"] });  // DimJogLineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMJOGLINE"] });  // DimJogLineCommand

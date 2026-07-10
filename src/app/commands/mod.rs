@@ -59,6 +59,12 @@ impl OpenCADStudio {
 
     fn dispatch_command_inner(&mut self, cmd: &str, allow_suggest: bool) -> Task<Message> {
         let i = self.active_tab;
+        // Expand a command alias ("L" → "LINE") on the leading token before any
+        // routing, so every path below (Start-tab gate, plugins, all dispatch
+        // families, the Repeat menu) sees the canonical command. Arguments after
+        // the first space are left untouched. A non-alias passes through as-is.
+        let resolved = self.resolve_alias(cmd);
+        let cmd = resolved.as_deref().unwrap_or(cmd);
         // Starting a command closes any open ribbon dropdown (e.g. a style
         // combo left open) so it does not stay stuck behind the new tool.
         self.ribbon.close_dropdown();
@@ -151,6 +157,7 @@ impl OpenCADStudio {
             if let Some(top) = crate::ui::command_line::ranked_matches(
                 cmd,
                 &self.command_line.dynamic_commands,
+                &self.command_line.command_aliases,
             )
             .into_iter()
             .next()

@@ -81,4 +81,4 @@ impl CadCommand for PlotWindowCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["PLOTWINDOW", "PW"] });  // PlotWindowCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["PLOTWINDOW"] });  // PlotWindowCommand

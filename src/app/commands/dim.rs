@@ -3,42 +3,42 @@ use super::*;
 impl OpenCADStudio {
     pub(super) fn dispatch_dim(&mut self, cmd: &str, i: usize) -> Option<Task<Message>> {
         match cmd {
-            "DIMALIGNED" | "DAL" => {
+            "DIMALIGNED" => {
                 use crate::modules::annotate::aligned_dim::AlignedDimensionCommand;
                 let cmd = AlignedDimensionCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMDIAMETER" | "DDI" => {
+            "DIMDIAMETER" => {
                 use crate::modules::annotate::diameter_dim::DiameterDimensionCommand;
                 let cmd = DiameterDimensionCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMLINEAR" | "DLI" => {
+            "DIMLINEAR" => {
                 use crate::modules::annotate::linear_dim::LinearDimensionCommand;
                 let new_cmd = LinearDimensionCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "DIMRADIUS" | "DRA" => {
+            "DIMRADIUS" => {
                 use crate::modules::annotate::radius_dim::RadiusDimensionCommand;
                 let new_cmd = RadiusDimensionCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "DIMANGULAR" | "DAN" => {
+            "DIMANGULAR" => {
                 use crate::modules::annotate::angular_dim::AngularDimensionCommand;
                 let new_cmd = AngularDimensionCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "DIMORDINATE" | "DOR" => {
+            "DIMORDINATE" => {
                 use crate::modules::annotate::ordinate_dim::OrdinateDimCommand;
                 let new_cmd = OrdinateDimCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -47,7 +47,7 @@ impl OpenCADStudio {
 
             // LEADER draws a leader line with an annotation; QLEADER is the same
             // quick leader-plus-annotation operation.
-            "LEADER" | "LE" | "QLEADER" | "QL" => {
+            "LEADER" | "QLEADER" => {
                 use crate::modules::annotate::leader_cmd::LeaderCommand;
                 let new_cmd = LeaderCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
@@ -400,14 +400,14 @@ impl OpenCADStudio {
                 ));
             }
 
-            "MLEADER" | "MLD" => {
+            "MLEADER" => {
                 use crate::modules::annotate::mleader_cmd::MLeaderCommand;
                 let new_cmd = MLeaderCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "TOLERANCE" | "TOL" => {
+            "TOLERANCE" => {
                 use crate::modules::annotate::tolerance_cmd::ToleranceCommand;
                 let cmd = ToleranceCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -421,7 +421,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMCONTINUE" | "DCO" => {
+            "DIMCONTINUE" => {
                 use crate::modules::annotate::dim_continue::DimContinueCommand;
                 let cmd = if let Some((p1, p2, dp, rot, trot)) =
                     find_last_linear_dim(&self.tabs[i].scene)
@@ -434,7 +434,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMBASELINE" | "DBA" => {
+            "DIMBASELINE" => {
                 use crate::modules::annotate::dim_baseline::DimBaselineCommand;
                 let cmd = if let Some((p1, p2, dp, rot, trot)) =
                     find_last_linear_dim(&self.tabs[i].scene)
@@ -548,7 +548,7 @@ impl OpenCADStudio {
                 return Some(Task::none());
             }
 
-            "DIMEDIT" | "DED" => {
+            "DIMEDIT" => {
                 use crate::modules::annotate::dimedit::DimEditCommand;
                 let cmd = DimEditCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -562,7 +562,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMBREAK" | "DBR" => {
+            "DIMBREAK" => {
                 use crate::modules::annotate::dimbreak::DimBreakCommand;
                 let cmd = DimBreakCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -576,35 +576,35 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "DIMJOGLINE" | "DJL" => {
+            "DIMJOGLINE" => {
                 use crate::modules::annotate::dimjogline::DimJogLineCommand;
                 let cmd = DimJogLineCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MLEADERADD" | "MLA" => {
+            "MLEADERADD" => {
                 use crate::modules::annotate::mleader_edit::MLeaderAddCommand;
                 let cmd = MLeaderAddCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MLEADERREMOVE" | "MLR" => {
+            "MLEADERREMOVE" => {
                 use crate::modules::annotate::mleader_edit::MLeaderRemoveCommand;
                 let cmd = MLeaderRemoveCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MLEADERALIGN" | "MLAL" => {
+            "MLEADERALIGN" => {
                 use crate::modules::annotate::mleader_edit::MLeaderAlignCommand;
                 let cmd = MLeaderAlignCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "MLEADERCOLLECT" | "MLC" => {
+            "MLEADERCOLLECT" => {
                 use crate::modules::annotate::mleader_edit::MLeaderCollectCommand;
                 let cmd = MLeaderCollectCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -647,14 +647,14 @@ impl OpenCADStudio {
                 }
             }
 
-            "PLOTWINDOW" | "PW" => {
+            "PLOTWINDOW" => {
                 use crate::modules::view::plot_window::PlotWindowCommand;
                 let cmd = PlotWindowCommand::new();
                 self.command_line.push_info(&cmd.prompt());
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            "QUICKPRINT" | "QP" => {
+            "QUICKPRINT" => {
                 use crate::modules::view::quick_print::QuickPrintCommand;
                 let cmd = QuickPrintCommand::new();
                 self.command_line.push_info(&cmd.prompt());
@@ -671,7 +671,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "STRETCH" | "SS" => {
+            "STRETCH" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -692,7 +692,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "FILLET" | "F" => {
+            "FILLET" => {
                 use crate::modules::draw::modify::fillet::FilletCommand;
                 let entities: Vec<_> = self.tabs[i]
                     .scene
@@ -717,7 +717,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "ARRAY" | "AR" | "ARRAYRECT" => {
+            "ARRAY" | "ARRAYRECT" => {
                 let handles: Vec<_> = self.tabs[i]
                     .scene
                     .selected_entities()
@@ -809,7 +809,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "CHAMFER" | "CHA" => {
+            "CHAMFER" => {
                 use crate::modules::draw::modify::fillet::ChamferCommand;
                 let entities: Vec<_> = self.tabs[i]
                     .scene
@@ -834,7 +834,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "EXPLODE" | "X" => {
+            "EXPLODE" => {
                 use crate::modules::draw::modify::explode::explode_entity;
                 let entities: Vec<_> = self.tabs[i].scene.selected_entities().into_iter().collect();
                 if entities.is_empty() {
@@ -876,7 +876,7 @@ impl OpenCADStudio {
                 }
             }
 
-            "OFFSET" | "O" => {
+            "OFFSET" => {
                 use crate::modules::draw::modify::offset::OffsetCommand;
                 let all_entities: Vec<_> = self.tabs[i]
                     .scene
@@ -892,7 +892,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "TRIM" | "TR" => {
+            "TRIM" => {
                 use crate::modules::draw::modify::trim::TrimCommand;
                 let entities: Vec<_> = self.tabs[i]
                     .scene
@@ -930,7 +930,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(new_cmd));
             }
 
-            "EXTEND" | "EX" => {
+            "EXTEND" => {
                 use crate::modules::draw::modify::trim::ExtendCommand;
                 let entities: Vec<_> = self.tabs[i]
                     .scene
@@ -955,7 +955,7 @@ impl OpenCADStudio {
             // DIMJOGGED <DJO> — create a jogged radius dimension on the selected
             // arc/circle: a standard radius dim carrying an OCS_JOGGED XData marker
             // that the geometry generator renders with a foreshortened zig-zag.
-            "DIMJOGGED" | "DJO" | "DIMJOG" => {
+            "DIMJOGGED" | "DIMJOG" => {
                 use acadrust::entities::{Dimension, DimensionRadius};
                 use acadrust::types::Vector3;
                 use acadrust::xdata::{ExtendedDataRecord, XDataValue};

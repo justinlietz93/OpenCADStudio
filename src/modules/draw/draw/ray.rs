@@ -201,4 +201,4 @@ impl CadCommand for XLineCommand {
 
 // ── Autocomplete registry ─────────────────────────────────
 inventory::submit!(crate::command::CommandRegistration { names: &["RAY"] });  // RayCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["CONSTRUCTIONLINE", "XL", "XLINE"] });  // XLineCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["CONSTRUCTIONLINE", "XLINE"] });  // XLineCommand

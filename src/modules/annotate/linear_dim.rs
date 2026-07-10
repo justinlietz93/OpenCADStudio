@@ -266,4 +266,4 @@ fn linear_text_pos(first: Vec3, second: Vec3, def: Vec3, axis: Vec3) -> Vec3 {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DIMLINEAR", "DLI"] });  // LinearDimensionCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMLINEAR"] });  // LinearDimensionCommand

@@ -100,4 +100,4 @@ impl CadCommand for DimBreakCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DBR", "DIMBREAK"] });  // DimBreakCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMBREAK"] });  // DimBreakCommand

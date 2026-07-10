@@ -208,10 +208,15 @@ impl OpenCADStudio {
                 self.command_line.push_info("Opening release notes...");
             }
 
-            // ── CUI / ALIASEDIT — customization entry points ───────────────
-            // Command-alias and key-binding editing lives in the keyboard
-            // shortcuts panel, so route the customization verbs there.
-            "CUI" | "ALIASEDIT" => {
+            // ── ALIASEDIT — command-alias editor ───────────────────────────
+            // Opens the command-alias table editor (ocad.pgp). Keyboard
+            // key-bindings are edited separately via CUI (below).
+            "ALIASEDIT" => {
+                return Some(Task::done(Message::AliasEditorOpen));
+            }
+
+            // ── CUI — keyboard shortcut / key-binding editor ───────────────
+            "CUI" => {
                 return Some(Task::done(Message::ShortcutsPanelOpen));
             }
 
@@ -380,7 +385,7 @@ impl OpenCADStudio {
             }
 
             // ── Layout / viewport ──────────────────────────────────────────
-            "MVIEW" | "MV" => {
+            "MVIEW" => {
                 if self.tabs[i].scene.current_layout == "Model" {
                     self.command_line
                         .push_error("MVIEW: switch to a paper space layout first.");
@@ -393,7 +398,7 @@ impl OpenCADStudio {
             }
 
             // ── MSPACE / PSPACE ───────────────────────────────────────────
-            "MS" | "MSPACE" => {
+            "MSPACE" => {
                 return Some(Task::done(Message::MspaceCommand));
             }
             "PSPACE" => {
@@ -970,7 +975,7 @@ impl OpenCADStudio {
             }
 
             // HIDE — hidden-line view of the active viewport.
-            "HIDE" | "HI" => {
+            "HIDE" => {
                 return Some(Task::done(Message::SetRenderMode(
                     acadrust::entities::ViewportRenderMode::HiddenLine,
                 )));

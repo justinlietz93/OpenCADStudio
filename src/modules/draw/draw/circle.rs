@@ -991,6 +991,6 @@ impl CadCommand for CircleTTTCommand {
 inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_2P"] });  // Circle2PCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_3P"] });  // Circle3PCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_CD"] });  // CircleCDCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["C", "CIRCLE"] });  // CircleCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE"] });  // CircleCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_TTR"] });  // CircleTTRCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["CIRCLE_TTT"] });  // CircleTTTCommand

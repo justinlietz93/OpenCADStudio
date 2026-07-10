@@ -1495,6 +1495,7 @@ impl OpenCADStudio {
             PointStyle => (360, 470),
             AttributeEditor => (640, 500),
             LayerDeleteWarning => (440, 200),
+            Aliases => (480, 520),
         };
         Some((w as f32 + EXTRA_W, h as f32 + EXTRA_H))
     }

@@ -329,7 +329,7 @@ pub fn empty_solid3d() -> EntityType {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["EXT", "EXTRUDE"] });  // ExtrudeCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["EXTRUDE"] });  // ExtrudeCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["LOFT"] });  // LoftCommand
-inventory::submit!(crate::command::CommandRegistration { names: &["REV", "REVOLVE"] });  // RevolveCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["REVOLVE"] });  // RevolveCommand
 inventory::submit!(crate::command::CommandRegistration { names: &["SWEEP"] });  // SweepCommand

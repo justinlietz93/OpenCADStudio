@@ -90,4 +90,4 @@ impl CadCommand for DistCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DI", "DIST"] });  // DistCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIST"] });  // DistCommand

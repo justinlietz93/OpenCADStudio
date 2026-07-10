@@ -88,4 +88,4 @@ impl CadCommand for DimEditCommand {
 
 
 // ── Autocomplete registry ─────────────────────────────────
-inventory::submit!(crate::command::CommandRegistration { names: &["DED", "DIMEDIT"] });  // DimEditCommand
+inventory::submit!(crate::command::CommandRegistration { names: &["DIMEDIT"] });  // DimEditCommand

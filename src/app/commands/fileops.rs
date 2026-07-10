@@ -70,7 +70,7 @@ impl OpenCADStudio {
                     }
                 }
             }
-            "UNDO" | "U" => return Some(Task::done(Message::Undo)),
+            "UNDO" => return Some(Task::done(Message::Undo)),
             "REDO" => return Some(Task::done(Message::Redo)),
             // OOPS — restore the objects removed by the most recent ERASE,
             // without undoing any work done since.
@@ -92,7 +92,7 @@ impl OpenCADStudio {
                 }
             }
             "CLEAR" | "CLR" => return Some(Task::done(Message::ClearScene)),
-            "WIREFRAME" | "VW" => return Some(Task::done(Message::SetWireframe(true))),
+            "WIREFRAME" => return Some(Task::done(Message::SetWireframe(true))),
             // Visual-style commands. OCS renders either a wireframe or a shaded
             // view; the named styles map onto the closest of the two and the
             // chosen style is reported so the mapping is explicit. (`SOLID` is
@@ -309,7 +309,7 @@ impl OpenCADStudio {
             "ORTHO" => return Some(Task::done(Message::ToggleOrtho)),
             "PARALLEL" => return Some(Task::done(Message::SetProjection(true))),
             "PERSP" => return Some(Task::done(Message::SetProjection(false))),
-            "LAYERS" | "LA" => return Some(Task::done(Message::ToggleLayers)),
+            "LAYERS" => return Some(Task::done(Message::ToggleLayers)),
 
             // SCRIPT <path> — run a command script: each non-blank, non-comment
             // line is fed through the same command path the `--script` startup
