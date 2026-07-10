@@ -11,8 +11,9 @@
 use crate::snap::SnapType;
 use std::path::PathBuf;
 
-/// Canonical order for serializing snap modes, so the written list is stable
-/// (a `HashSet` iterates in arbitrary order).
+/// Canonical order of the user-toggleable object-snap modes. Drives the
+/// deterministic order when decoding the `$OSMODE` bitmask (see
+/// [`snaps_from_osmode`]).
 const SNAP_ORDER: &[SnapType] = &[
     SnapType::Endpoint,
     SnapType::Midpoint,
@@ -31,32 +32,6 @@ const SNAP_ORDER: &[SnapType] = &[
     // not a global OSNAP preference, so it is deliberately excluded from the
     // persisted set. (#121)
 ];
-
-fn snap_id(s: SnapType) -> &'static str {
-    match s {
-        SnapType::Endpoint => "endpoint",
-        SnapType::Midpoint => "midpoint",
-        SnapType::Center => "center",
-        SnapType::Node => "node",
-        SnapType::Quadrant => "quadrant",
-        SnapType::Intersection => "intersection",
-        SnapType::Extension => "extension",
-        SnapType::Insertion => "insertion",
-        SnapType::Perpendicular => "perpendicular",
-        SnapType::Tangent => "tangent",
-        SnapType::Nearest => "nearest",
-        SnapType::ApparentIntersection => "apparentintersection",
-        SnapType::Parallel => "parallel",
-        SnapType::Grid => "grid",
-        // Internal plugin object-pick snap — not a user-toggleable OSNAP mode,
-        // so it never enters SNAP_ORDER / the persisted set.
-        SnapType::ObjectPick => "objectpick",
-    }
-}
-
-fn snap_from_id(s: &str) -> Option<SnapType> {
-    SNAP_ORDER.iter().copied().find(|t| snap_id(*t) == s)
-}
 
 /// `$OSMODE` bit for each running object-snap mode (standard AutoCAD bitmask).
 /// `None` for OCS-only snaps (Grid, ObjectPick) that have no standard bit.
@@ -138,13 +113,12 @@ fn rgb_to_str(c: Option<[u8; 3]>) -> String {
 #[derive(Clone, PartialEq)]
 pub struct UserSettings {
     pub dyn_input: bool,
-    pub ortho: bool,
     pub polar: bool,
     pub polar_increment_deg: f32,
-    pub snap_enabled: bool,
     pub otrack: bool,
-    /// Active snap modes, in `SNAP_ORDER`.
-    pub snap_modes: Vec<SnapType>,
+    // Ortho ($ORTHOMODE) and the running OSNAP set ($OSMODE) are per-drawing —
+    // stored in the document header, not here (they used to be persisted app-
+    // globally, which duplicated the file's own state).
     /// Whether the one-time "make Open CAD Studio the default for .dwg/.dxf?"
     /// prompt has already been shown. Set once the user answers (either way),
     /// so we never nag again on subsequent launches.
@@ -181,20 +155,9 @@ impl Default for UserSettings {
     fn default() -> Self {
         Self {
             dyn_input: true,
-            ortho: false,
             polar: false,
             polar_increment_deg: 45.0,
-            snap_enabled: false,
             otrack: false,
-            snap_modes: vec![
-                SnapType::Endpoint,
-                SnapType::Midpoint,
-                SnapType::Center,
-                SnapType::Node,
-                SnapType::Quadrant,
-                SnapType::Intersection,
-                SnapType::Nearest,
-            ],
             default_assoc_prompted: false,
             disabled_plugins: Vec::new(),
             plugin_repos: Vec::new(),
@@ -210,12 +173,6 @@ impl Default for UserSettings {
 }
 
 impl UserSettings {
-    /// Build the active-mode set in canonical order from any iterator of modes.
-    pub fn modes_from<'a>(modes: impl IntoIterator<Item = &'a SnapType>) -> Vec<SnapType> {
-        let set: std::collections::HashSet<SnapType> = modes.into_iter().copied().collect();
-        SNAP_ORDER.iter().copied().filter(|t| set.contains(t)).collect()
-    }
-
     /// Read the saved preferences, or `None` when no settings file exists yet.
     /// Unknown / missing keys fall back to [`UserSettings::default`].
     pub fn load() -> Option<Self> {
@@ -228,14 +185,12 @@ impl UserSettings {
             let (key, val) = (key.trim(), val.trim());
             match key {
                 "dyn" => s.dyn_input = val == "1",
-                "ortho" => s.ortho = val == "1",
                 "polar" => s.polar = val == "1",
                 "polar_increment_deg" => {
                     if let Ok(v) = val.parse::<f32>() {
                         s.polar_increment_deg = v;
                     }
                 }
-                "osnap" => s.snap_enabled = val == "1",
                 "otrack" => s.otrack = val == "1",
                 "bg_color" => s.bg_color = parse_rgb(val),
                 "paper_bg_color" => s.paper_bg_color = parse_rgb(val),
@@ -271,11 +226,6 @@ impl UserSettings {
                         .map(|t| t.to_string())
                         .collect();
                 }
-                "snap_modes" => {
-                    let modes: Vec<SnapType> =
-                        val.split(',').filter_map(|t| snap_from_id(t.trim())).collect();
-                    s.snap_modes = UserSettings::modes_from(modes.iter());
-                }
                 _ => {}
             }
         }
@@ -289,22 +239,13 @@ impl UserSettings {
             let _ = std::fs::create_dir_all(dir);
         }
         let b = |v: bool| if v { "1" } else { "0" };
-        let modes = self
-            .snap_modes
-            .iter()
-            .map(|t| snap_id(*t))
-            .collect::<Vec<_>>()
-            .join(",");
         let body = format!(
-            "dyn={}\northo={}\npolar={}\npolar_increment_deg={}\nosnap={}\notrack={}\ndefault_assoc_prompted={}\nsnap_modes={}\ndisabled_plugins={}\nplugin_repos={}\ntexteditmode={}\ntextfill={}\nbackup_on_save={}\nfile_assoc_enabled={}\nsavetime_min={}\nbg_color={}\npaper_bg_color={}\n",
+            "dyn={}\npolar={}\npolar_increment_deg={}\notrack={}\ndefault_assoc_prompted={}\ndisabled_plugins={}\nplugin_repos={}\ntexteditmode={}\ntextfill={}\nbackup_on_save={}\nfile_assoc_enabled={}\nsavetime_min={}\nbg_color={}\npaper_bg_color={}\n",
             b(self.dyn_input),
-            b(self.ortho),
             b(self.polar),
             self.polar_increment_deg,
-            b(self.snap_enabled),
             b(self.otrack),
             b(self.default_assoc_prompted),
-            modes,
             self.disabled_plugins.join(","),
             self.plugin_repos.join(","),
             self.texteditmode,

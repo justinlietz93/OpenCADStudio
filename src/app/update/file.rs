@@ -65,12 +65,9 @@ impl OpenCADStudio {
     pub(in crate::app) fn current_settings(&self) -> crate::app::settings::UserSettings {
         crate::app::settings::UserSettings {
             dyn_input: self.dyn_input,
-            ortho: self.ortho_mode,
             polar: self.polar_mode,
             polar_increment_deg: self.polar_increment_deg,
-            snap_enabled: self.snapper.snap_enabled,
             otrack: self.snapper.otrack_enabled,
-            snap_modes: crate::app::settings::UserSettings::modes_from(self.snapper.enabled.iter()),
             default_assoc_prompted: self.default_assoc_prompted,
             disabled_plugins: {
                 let mut v: Vec<String> = self.disabled_plugins.iter().cloned().collect();
@@ -91,12 +88,11 @@ impl OpenCADStudio {
     /// Apply restored preferences to live state.
     pub(in crate::app) fn apply_settings(&mut self, s: &crate::app::settings::UserSettings) {
         self.dyn_input = s.dyn_input;
-        self.ortho_mode = s.ortho;
         self.polar_mode = s.polar;
         self.polar_increment_deg = s.polar_increment_deg;
-        self.snapper.snap_enabled = s.snap_enabled;
+        // Ortho + running OSNAP are per-drawing (adopted from the header on
+        // open / tab switch), not app-global, so they are not applied here.
         self.snapper.otrack_enabled = s.otrack;
-        self.snapper.enabled = s.snap_modes.iter().copied().collect();
         self.default_assoc_prompted = s.default_assoc_prompted;
         self.disabled_plugins = s.disabled_plugins.iter().cloned().collect();
         self.plugin_repos = s.plugin_repos.clone();
