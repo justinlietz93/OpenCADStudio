@@ -514,6 +514,11 @@ fn render_signature(vp: &ViewportData, clip_w: u32, clip_h: u32) -> u64 {
     vp.mesh_fill.hash(&mut h);
     vp.show_3d_edges.hash(&mut h);
     vp.hidden_line.hash(&mut h);
+    // ViewCube visibility is excluded from the *scene* signature elsewhere only
+    // for the live-hover pass; here it MUST invalidate the cache so toggling the
+    // cube (NAVVCUBE) re-renders and actually clears the last cube frame
+    // instead of leaving its stale pixels on the cached surface.
+    vp.show_viewcube.hash(&mut h);
     // Interaction-LOD hatch suppression: differs the signature so the settle
     // frame (skip_hatch flips false) re-renders with hatches and re-caches.
     vp.skip_hatch.hash(&mut h);
