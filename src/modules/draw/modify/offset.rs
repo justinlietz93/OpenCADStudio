@@ -15,7 +15,7 @@ use crate::modules::draw::modify::spline_ops::{spline_pts_wire, spline_sample_xy
 use acadrust::entities::LwVertex;
 use acadrust::entities::{
     Arc as ArcEnt, Circle as CircleEnt, Ellipse as EllipseEnt, Line as LineEnt, LwPolyline,
-    Spline as SplineEnt,
+    Spline as SplineEnt, XLine as XLineEnt,
 };
 use acadrust::{EntityType, Handle};
 use glam::{DVec3, Vec3};
@@ -84,6 +84,33 @@ fn offset_line(l: &LineEnt, dist: f64, side_pt: Vec3) -> Option<EntityType> {
     new_l.end.x += ox;
     new_l.end.y += oy;
     Some(EntityType::Line(new_l))
+}
+
+// ── XLine (infinite construction line) offset ────────────────────────────────
+// A parallel infinite line: same direction, base point shifted perpendicular by
+// `dist` toward the side the cursor is on. (#296)
+
+fn offset_xline(x: &XLineEnt, dist: f64, side_pt: Vec3) -> Option<EntityType> {
+    let dx = x.direction.x;
+    let dy = x.direction.y;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len < 1e-12 {
+        return None;
+    }
+
+    let nx = -dy / len; // left-perpendicular
+    let ny = dx / len;
+
+    let vx = side_pt.x as f64 - x.base_point.x;
+    let vy = side_pt.y as f64 - x.base_point.y;
+    let cross = dx * vy - dy * vx;
+    let sign = if cross >= 0.0 { 1.0 } else { -1.0 };
+
+    let mut new_x = x.clone();
+    new_x.common.handle = Handle::NULL;
+    new_x.base_point.x += sign * nx * dist;
+    new_x.base_point.y += sign * ny * dist;
+    Some(EntityType::XLine(new_x))
 }
 
 // ── Circle offset ──────────────────────────────────────────────────────────
@@ -424,6 +451,7 @@ fn compute_offset(entity: &EntityType, dist: f64, side_pt: Vec3) -> Option<Entit
         EntityType::LwPolyline(p) => offset_lwpolyline(p, dist, side_pt),
         EntityType::Ellipse(e) => offset_ellipse(e, dist, side_pt),
         EntityType::Spline(s) => offset_spline(s, dist, side_pt),
+        EntityType::XLine(x) => offset_xline(x, dist, side_pt),
         _ => None,
     }
 }
@@ -540,6 +568,18 @@ fn entity_wire_pts(e: &EntityType) -> Vec<[f32; 3]> {
                 .collect()
         }
         EntityType::Spline(s) => spline_pts_wire(s),
+        EntityType::XLine(x) => {
+            // Infinite in both directions — represent it as a very long segment
+            // for hit-testing and the offset preview. Long enough to read as
+            // infinite at any working zoom; the committed XLine renders true.
+            const HL: f64 = 1.0e6;
+            let (bx, by, bz) = (x.base_point.x, x.base_point.y, x.base_point.z);
+            let (dx, dy, dz) = (x.direction.x, x.direction.y, x.direction.z);
+            vec![
+                [(bx - dx * HL) as f32, (by - dy * HL) as f32, (bz - dz * HL) as f32],
+                [(bx + dx * HL) as f32, (by + dy * HL) as f32, (bz + dz * HL) as f32],
+            ]
+        }
         _ => vec![],
     }
 }
@@ -690,11 +730,16 @@ impl CadCommand for OffsetCommand {
             .find(|e| e.common().handle == handle)
             .cloned();
 
+        // Accept every type compute_offset can offset — including XLine (#296),
+        // and Ellipse/Spline whose offset functions existed but weren't reachable.
         match entity {
             Some(e @ EntityType::Line(_))
             | Some(e @ EntityType::Circle(_))
             | Some(e @ EntityType::Arc(_))
-            | Some(e @ EntityType::LwPolyline(_)) => {
+            | Some(e @ EntityType::LwPolyline(_))
+            | Some(e @ EntityType::Ellipse(_))
+            | Some(e @ EntityType::Spline(_))
+            | Some(e @ EntityType::XLine(_)) => {
                 self.step = Step::PickSide {
                     handle,
                     entity: e,
