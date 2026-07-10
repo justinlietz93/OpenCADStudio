@@ -1,15 +1,15 @@
-//! Persisted user preferences — DYN, ORTHO, POLAR, the polar increment, the
-//! grid toggle, and the object-snap configuration (OSNAP on/off, which snap
-//! modes are active, OTRACK). These are UI choices, not drawing data, so they
-//! live in a per-user config file and survive across sessions.
+//! Persisted user preferences — DYN, POLAR (+ increment), OTRACK, and assorted
+//! app-level flags (backup, autosave, plugin lists, viewport background). These
+//! are UI choices, not drawing data, so they live in the consolidated per-user
+//! config ([`crate::app::config`], the "settings" section) and survive across
+//! sessions. Drawing-scoped state (Ortho `$ORTHOMODE`, running OSNAP `$OSMODE`,
+//! lineweight display `$LWDISPLAY`, …) belongs to the file, not here.
 //!
-//! Plain `key=value` text, matching the recent-files / status-bar stores so we
-//! don't pull in a serialization crate just for a handful of flags. Drawing
-//! header settings such as LWT (lineweight display) are intentionally NOT here
-//! — those belong to the file.
+//! Also home to the `$OSMODE` bit conversions ([`osmode_from_snaps`] /
+//! [`snaps_from_osmode`]) that bridge the running-snap set and the drawing header.
 
 use crate::snap::SnapType;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 
 /// Canonical order of the user-toggleable object-snap modes. Drives the
 /// deterministic order when decoding the `$OSMODE` bitmask (see
@@ -88,29 +88,11 @@ pub(crate) fn snaps_from_osmode(osmode: i32) -> (Vec<SnapType>, bool) {
     (modes, osmode & OSMODE_SUPPRESS == 0)
 }
 
-/// Parse a persisted `r,g,b` background triplet (each 0–255). Returns `None`
-/// for an empty or malformed value so a missing/garbage key falls back to the
-/// app default rather than a wrong colour.
-fn parse_rgb(val: &str) -> Option<[u8; 3]> {
-    let mut it = val.split(',').map(|t| t.trim().parse::<u8>());
-    let r = it.next()?.ok()?;
-    let g = it.next()?.ok()?;
-    let b = it.next()?.ok()?;
-    if it.next().is_some() {
-        return None;
-    }
-    Some([r, g, b])
-}
-
-/// Serialize an optional background triplet back to `r,g,b`, or empty when unset.
-fn rgb_to_str(c: Option<[u8; 3]>) -> String {
-    c.map(|[r, g, b]| format!("{r},{g},{b}")).unwrap_or_default()
-}
-
-/// A snapshot of the persisted preferences. Field defaults mirror the app's
-/// in-code defaults so a missing key restores the same value the app boots
-/// with.
-#[derive(Clone, PartialEq)]
+/// The "settings" section of the consolidated config ([`crate::app::config`]).
+/// Field defaults mirror the app's in-code defaults so a missing key restores
+/// the value the app boots with.
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct UserSettings {
     pub dyn_input: bool,
     pub polar: bool,
@@ -170,117 +152,6 @@ impl Default for UserSettings {
             paper_bg_color: None,
         }
     }
-}
-
-impl UserSettings {
-    /// Read the saved preferences, or `None` when no settings file exists yet.
-    /// Unknown / missing keys fall back to [`UserSettings::default`].
-    pub fn load() -> Option<Self> {
-        let path = config_path()?;
-        let body = std::fs::read_to_string(path).ok()?;
-        let mut s = UserSettings::default();
-        for line in body.lines() {
-            let line = line.trim();
-            let Some((key, val)) = line.split_once('=') else { continue };
-            let (key, val) = (key.trim(), val.trim());
-            match key {
-                "dyn" => s.dyn_input = val == "1",
-                "polar" => s.polar = val == "1",
-                "polar_increment_deg" => {
-                    if let Ok(v) = val.parse::<f32>() {
-                        s.polar_increment_deg = v;
-                    }
-                }
-                "otrack" => s.otrack = val == "1",
-                "bg_color" => s.bg_color = parse_rgb(val),
-                "paper_bg_color" => s.paper_bg_color = parse_rgb(val),
-                "default_assoc_prompted" => s.default_assoc_prompted = val == "1",
-                "texteditmode" => {
-                    if let Some(v) =
-                        crate::modules::annotate::textedit::parse_texteditmode(val)
-                    {
-                        s.texteditmode = v;
-                    }
-                }
-                "backup_on_save" => s.backup_on_save = val == "1",
-                "textfill" => s.textfill = val == "1",
-                "file_assoc_enabled" => s.file_assoc_enabled = val == "1",
-                "savetime_min" => {
-                    if let Ok(v) = val.parse::<i32>() {
-                        s.savetime_min = v.max(0);
-                    }
-                }
-                "disabled_plugins" => {
-                    s.disabled_plugins = val
-                        .split(',')
-                        .map(|t| t.trim())
-                        .filter(|t| !t.is_empty())
-                        .map(|t| t.to_string())
-                        .collect();
-                }
-                "plugin_repos" => {
-                    s.plugin_repos = val
-                        .split(',')
-                        .map(|t| t.trim())
-                        .filter(|t| !t.is_empty())
-                        .map(|t| t.to_string())
-                        .collect();
-                }
-                _ => {}
-            }
-        }
-        Some(s)
-    }
-
-    /// Best-effort persist; silent on failure (read-only home, full disk).
-    pub fn save(&self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let b = |v: bool| if v { "1" } else { "0" };
-        let body = format!(
-            "dyn={}\npolar={}\npolar_increment_deg={}\notrack={}\ndefault_assoc_prompted={}\ndisabled_plugins={}\nplugin_repos={}\ntexteditmode={}\ntextfill={}\nbackup_on_save={}\nfile_assoc_enabled={}\nsavetime_min={}\nbg_color={}\npaper_bg_color={}\n",
-            b(self.dyn_input),
-            b(self.polar),
-            self.polar_increment_deg,
-            b(self.otrack),
-            b(self.default_assoc_prompted),
-            self.disabled_plugins.join(","),
-            self.plugin_repos.join(","),
-            self.texteditmode,
-            b(self.textfill),
-            b(self.backup_on_save),
-            b(self.file_assoc_enabled),
-            self.savetime_min,
-            rgb_to_str(self.bg_color),
-            rgb_to_str(self.paper_bg_color),
-        );
-        let _ = std::fs::write(path, body);
-    }
-}
-
-/// `<config-dir>/OpenCADStudio/settings.txt`, matching the recent-files store.
-fn config_path() -> Option<PathBuf> {
-    let base: PathBuf = if cfg!(target_os = "windows") {
-        std::env::var_os("APPDATA").map(PathBuf::from)?
-    } else if cfg!(target_os = "macos") {
-        let home = std::env::var_os("HOME")?;
-        let mut p = PathBuf::from(home);
-        p.push("Library");
-        p.push("Application Support");
-        p
-    } else if let Some(d) = std::env::var_os("XDG_CONFIG_HOME") {
-        PathBuf::from(d)
-    } else {
-        let home = std::env::var_os("HOME")?;
-        let mut p = PathBuf::from(home);
-        p.push(".config");
-        p
-    };
-    let mut p = base;
-    p.push("OpenCADStudio");
-    Some(p.join("settings.txt"))
 }
 
 #[cfg(test)]

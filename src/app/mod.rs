@@ -1,6 +1,7 @@
 mod alias;
 #[cfg(not(target_arch = "wasm32"))]
 mod automation;
+mod config;
 #[cfg(not(target_arch = "wasm32"))]
 pub use automation::{export_headless, serve};
 mod command_driver;
@@ -283,7 +284,7 @@ pub(super) struct OpenCADStudio {
     statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig,
     /// Last persisted user preferences (DYN/OSNAP/OTRACK/POLAR/…). Compared
     /// after each message so a change is written to disk exactly once.
-    last_saved_settings: Option<settings::UserSettings>,
+    last_saved_config: Option<config::AppConfig>,
     /// Active OTRACK alignment `(tracking_point, unit_direction)` when the
     /// cursor is on a tracking ray. Lets a typed distance place a point along
     /// the ray from the tracking point (issue #69). `None` when not aligned.
@@ -2086,10 +2087,11 @@ impl OpenCADStudio {
             active_tab: 0,
             tab_counter: 0,
             ribbon: Ribbon::new(),
-            // Restore recents from disk so the Start page lists them across runs.
-            recent_files: recent::load_recent_files(),
-            recent_limit: recent::load_recent_limit(),
-            recent_limit_input: recent::load_recent_limit().to_string(),
+            // Populated from the consolidated config after construction
+            // (`apply_config`); default empty here.
+            recent_files: Vec::new(),
+            recent_limit: recent::RECENT_DEFAULT,
+            recent_limit_input: recent::RECENT_DEFAULT.to_string(),
             command_line: CommandLine::new(),
             patrons: Vec::new(),
             start_section: StartSection::default(),
@@ -2109,8 +2111,8 @@ impl OpenCADStudio {
             units_popup_open: false,
             isolate_popup_open: false,
             selection_filter_popup_open: false,
-            statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig::load(),
-            last_saved_settings: None,
+            statusbar_config: crate::ui::statusbar::statusbar_config::StatusBarConfig::default(),
+            last_saved_config: None,
             otrack_active: None,
             clean_screen: false,
             quick_properties: false,
@@ -2204,7 +2206,7 @@ impl OpenCADStudio {
             plot_window: None,
             plot_format: crate::io::paper_sizes::PaperSize::A4,
             plot_orientation: crate::io::paper_sizes::Orientation::Landscape,
-            plot_dialog: crate::ui::window::plot::PlotDialogState::load(),
+            plot_dialog: crate::ui::window::plot::PlotDialogState::default(),
             plot_prev: None,
             opening: None,
             pending_close: None,
@@ -2359,13 +2361,11 @@ impl OpenCADStudio {
             ds_dimtolj: "1".to_string(),
             ds_dimtzin: "0".to_string(),
         };
-        // Restore persisted UI preferences (DYN/OSNAP/OTRACK/POLAR/…) so they
-        // survive across sessions (issue #68). Seed `last_saved_settings` from
-        // the resulting state so the first change — not the boot — triggers a
-        // write.
-        if let Some(s) = settings::UserSettings::load() {
-            app.apply_settings(&s);
-        }
+        // Restore the consolidated user config (settings.json) into live state
+        // so preferences, recents, status-bar layout, ribbon density and print
+        // options survive across sessions (issue #68). `last_saved_config` is
+        // seeded below so the first change — not the boot — triggers a write.
+        app.apply_config(config::AppConfig::load());
         // Load command aliases from ocad.pgp (writes the shipped default file
         // on first launch). The hide-set keeps aliases out of autocomplete while
         // their target command still shows.
@@ -2384,7 +2384,7 @@ impl OpenCADStudio {
             app.loaded_plugin_ids = crate::plugin::external::loaded_ids().into_iter().collect();
             app.rebuild_ribbon_modules();
         }
-        app.last_saved_settings = Some(app.current_settings());
+        app.last_saved_config = Some(app.current_config());
         app.sync_ribbon_layers();
         app
     }

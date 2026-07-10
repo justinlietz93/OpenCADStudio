@@ -38,6 +38,7 @@ dependencies = [
  "rayon",
  "rfd",
  "rustc-hash 2.1.2",
+ "serde",
  "serde_json",
  "truck-meshalgo",
  "truck-modeling",

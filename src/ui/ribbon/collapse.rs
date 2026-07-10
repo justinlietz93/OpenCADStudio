@@ -54,7 +54,9 @@ const MAX_PANEL_SQUEEZE: f32 = 8.0;
 /// How the ribbon tool panels are sized. `Auto` adapts to the window width (the
 /// step-by-step degradation); the others pin every panel to one density so the
 /// user can override the automatic choice. The selection is persisted.
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize,
+)]
 pub enum CollapseMode {
     /// Size panels to the window: degrade from the right as space runs out.
     #[default]
@@ -86,19 +88,6 @@ impl CollapseMode {
         }
     }
 
-    /// Stable identifier used for persistence.
-    fn id(self) -> &'static str {
-        match self {
-            CollapseMode::Auto => "auto",
-            CollapseMode::Full => "full",
-            CollapseMode::Compact => "compact",
-            CollapseMode::Collapsed => "collapsed",
-        }
-    }
-
-    fn from_id(s: &str) -> Option<Self> {
-        CollapseMode::ALL.iter().copied().find(|m| m.id() == s)
-    }
 
     /// The degradation level every panel is pinned to, or `None` for `Auto`.
     fn forced_level(self) -> Option<u8> {
@@ -110,27 +99,6 @@ impl CollapseMode {
         }
     }
 
-    /// Load the saved mode, defaulting to `Auto`.
-    pub fn load() -> Self {
-        config_path()
-            .and_then(|p| std::fs::read_to_string(p).ok())
-            .and_then(|s| CollapseMode::from_id(s.trim()))
-            .unwrap_or_default()
-    }
-
-    /// Persist this mode (best-effort; silent on failure).
-    pub fn save(self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let _ = std::fs::write(path, self.id());
-    }
-}
-
-/// `<config-dir>/OpenCADStudio/ribbon.txt`, matching the other settings stores.
-fn config_path() -> Option<std::path::PathBuf> {
-    Some(crate::config::config_dir()?.join("ribbon.txt"))
 }
 
 impl std::fmt::Display for CollapseMode {

@@ -22,8 +22,10 @@ default = ["solid3d"]
 solid3d = ["dep:truck-meshalgo", "dep:truck-shapeops", "dep:lzma-sys"]
 
 [dependencies]
-# JSON: plugin marketplace / Patreon fetch (native) + web supporters.json parse.
+# JSON: plugin marketplace / Patreon fetch (native) + web supporters.json parse,
+# and the consolidated user config (settings.json) via serde-derived structs.
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
 # Stable, dependency-free add-on contract (manifest + ribbon/CadModule types).
 # Plugin authors target this crate's semver, not OpenCADStudio internals.
 # The `host` feature (out-of-process plugin runtime: interprocess, libloading,

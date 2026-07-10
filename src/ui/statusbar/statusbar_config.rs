@@ -6,10 +6,10 @@
 //! survives across sessions.
 
 use rustc_hash::FxHashSet as HashSet;
-use std::path::PathBuf;
+use serde::{Deserialize, Serialize};
 
 /// Identifies a toggleable status-bar pill.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, Serialize, Deserialize)]
 pub enum StatusPill {
     Coords,
     Ortho,
@@ -99,13 +99,12 @@ impl StatusPill {
         }
     }
 
-    fn from_id(s: &str) -> Option<StatusPill> {
-        StatusPill::ALL.iter().copied().find(|p| p.id() == s)
-    }
 }
 
-/// Tracks which pills the user has hidden.
-#[derive(Clone)]
+/// Tracks which pills the user has hidden. Serialized as the "statusbar" section
+/// of the app config ([`crate::app::config`]).
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StatusBarConfig {
     hidden: HashSet<StatusPill>,
 }
@@ -133,50 +132,15 @@ impl Default for StatusBarConfig {
 }
 
 impl StatusBarConfig {
-    /// Load the saved customization. When no config file exists yet, fall back
-    /// to the shipped defaults ([`StatusBarConfig::default`]); an existing file
-    /// (even an empty one — the user showed every pill) is authoritative.
-    pub fn load() -> Self {
-        match config_path().and_then(|p| std::fs::read_to_string(p).ok()) {
-            Some(body) => {
-                let hidden = body
-                    .lines()
-                    .filter_map(|l| StatusPill::from_id(l.trim()))
-                    .collect();
-                Self { hidden }
-            }
-            None => Self::default(),
-        }
-    }
-
     pub fn is_visible(&self, pill: StatusPill) -> bool {
         !self.hidden.contains(&pill)
     }
 
-    /// Flip a pill's visibility and persist the change.
+    /// Flip a pill's visibility. Persistence is handled by the caller via the
+    /// consolidated app config (`save_config`).
     pub fn toggle(&mut self, pill: StatusPill) {
         if !self.hidden.remove(&pill) {
             self.hidden.insert(pill);
         }
-        self.save();
     }
-
-    fn save(&self) {
-        let Some(path) = config_path() else { return };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let body: String = StatusPill::ALL
-            .iter()
-            .filter(|p| self.hidden.contains(p))
-            .map(|p| p.id())
-            .collect::<Vec<_>>()
-            .join("\n");
-        let _ = std::fs::write(path, body);
-    }
-}
-
-/// `<config-dir>/OpenCADStudio/statusbar.txt`, matching the recent-files store.
-fn config_path() -> Option<PathBuf> {
-    Some(crate::config::config_dir()?.join("statusbar.txt"))
 }

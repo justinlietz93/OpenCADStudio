@@ -93,22 +93,34 @@ pub enum PlotDlgMsg {
 
 /// Transient state backing the Plot dialog. Seeded from the layout's plot
 /// settings when the dialog opens; consumed on commit.
-#[derive(Debug, Clone)]
+// The persisted fields form the "plot" section of the app config
+// ([`crate::app::config`]); `#[serde(skip)]` marks the runtime-only fields
+// (discovered printers, live page/offset choices, name-entry state) so only the
+// user's print preferences are written, matching the former plot.txt subset.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct PlotDialogState {
     /// Printer names discovered on the system (via `lpstat`), never the
     /// sentinels.
+    #[serde(skip)]
     pub printers: Vec<String>,
     /// Chosen printer name, or `None` for the system default.
     pub printer: Option<String>,
     /// Output goes to a PDF file instead of a printer.
     pub to_file: bool,
+    #[serde(skip)]
     pub paper: String,
+    #[serde(skip)]
     pub orientation: String,
+    #[serde(skip)]
     pub rotation: String,
     pub copies: String,
     pub area: String,
+    #[serde(skip)]
     pub center: bool,
+    #[serde(skip)]
     pub offset_x: String,
+    #[serde(skip)]
     pub offset_y: String,
     pub scale: String,
     pub scale_lw: bool,
@@ -126,12 +138,16 @@ pub struct PlotDialogState {
     /// Display name of the active plot style table ("" = none).
     pub style_name: String,
     /// Named page setups in the document (refreshed when the dialog opens).
+    #[serde(skip)]
     pub page_setups: Vec<String>,
     /// Currently selected named page setup ("" = none / current layout).
+    #[serde(skip)]
     pub selected_setup: String,
     /// When `Some`, a name-entry row is showing (for New / Rename).
+    #[serde(skip)]
     pub name_input: Option<String>,
     /// `true` when `name_input` is renaming the selected setup, else creating.
+    #[serde(skip)]
     pub name_rename: bool,
 }
 
@@ -202,97 +218,6 @@ impl PlotDialogState {
         self.style_name = o.style_name.clone();
     }
 
-    /// Load the persisted print preferences (printer, copies, quality, output
-    /// options) from `<config>/OpenCADStudio/plot.txt`. Drawing-specific fields
-    /// (paper, scale, offset, rotation…) are NOT persisted here — they are
-    /// seeded from the active layout each time the dialog opens.
-    pub fn load() -> Self {
-        #[cfg(target_arch = "wasm32")]
-        {
-            Self::default()
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            let mut s = Self::default();
-            if let Some(body) = prefs_path().and_then(|p| std::fs::read_to_string(p).ok()) {
-                let flag = |v: &str| v == "1";
-                for line in body.lines() {
-                    let Some((k, v)) = line.split_once('=') else {
-                        continue;
-                    };
-                    let (k, v) = (k.trim(), v.trim());
-                    match k {
-                        "printer" => {
-                            s.printer = if v.is_empty() { None } else { Some(v.to_string()) }
-                        }
-                        "to_file" => s.to_file = flag(v),
-                        "area" => s.area = v.to_string(),
-                        "scale" => s.scale = v.to_string(),
-                        "copies" => s.copies = v.to_string(),
-                        "quality" => s.quality = v.to_string(),
-                        "dpi" => s.dpi = v.to_string(),
-                        "shade" => s.shade = v.to_string(),
-                        "mono" => s.mono = flag(v),
-                        "lineweights" => s.lineweights = flag(v),
-                        "with_styles" => s.with_styles = flag(v),
-                        "transparency" => s.transparency = flag(v),
-                        "paperspace_last" => s.paperspace_last = flag(v),
-                        "hide_paperspace" => s.hide_paperspace = flag(v),
-                        "stamp" => s.stamp = flag(v),
-                        "save_layout" => s.save_layout = flag(v),
-                        "scale_lw" => s.scale_lw = flag(v),
-                        _ => {}
-                    }
-                }
-            }
-            s
-        }
-    }
-
-    /// Best-effort persist of the print preferences (silent on failure).
-    #[cfg(not(target_arch = "wasm32"))]
-    pub fn save(&self) {
-        let Some(path) = prefs_path() else {
-            return;
-        };
-        if let Some(dir) = path.parent() {
-            let _ = std::fs::create_dir_all(dir);
-        }
-        let b = |v: bool| if v { "1" } else { "0" };
-        let printer = self.printer.clone().unwrap_or_default();
-        let body = format!(
-            "printer={}\nto_file={}\narea={}\nscale={}\ncopies={}\nquality={}\ndpi={}\nshade={}\nmono={}\n\
-             lineweights={}\nwith_styles={}\ntransparency={}\npaperspace_last={}\n\
-             hide_paperspace={}\nstamp={}\nsave_layout={}\nscale_lw={}\n",
-            printer,
-            b(self.to_file),
-            self.area,
-            self.scale,
-            self.copies,
-            self.quality,
-            self.dpi,
-            self.shade,
-            b(self.mono),
-            b(self.lineweights),
-            b(self.with_styles),
-            b(self.transparency),
-            b(self.paperspace_last),
-            b(self.hide_paperspace),
-            b(self.stamp),
-            b(self.save_layout),
-            b(self.scale_lw),
-        );
-        let _ = std::fs::write(path, body);
-    }
-
-    /// No-op persist on the web build (no filesystem).
-    #[cfg(target_arch = "wasm32")]
-    pub fn save(&self) {}
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn prefs_path() -> Option<std::path::PathBuf> {
-    Some(crate::config::config_dir()?.join("plot.txt"))
 }
 
 fn btn(accent: bool) -> impl Fn(&Theme, button::Status) -> button::Style {

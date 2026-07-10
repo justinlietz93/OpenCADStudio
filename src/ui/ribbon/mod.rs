@@ -161,15 +161,20 @@ impl Ribbon {
             active_table_style: String::new(),
             tab_bar_h: Arc::new(AtomicU32::new(28.0f32.to_bits())),
             tool_bar_h: Arc::new(AtomicU32::new(TOOL_BAR_H.to_bits())),
-            collapse_mode: CollapseMode::load(),
+            collapse_mode: CollapseMode::default(),
             collapse_tight: Arc::new(AtomicBool::new(false)),
         }
     }
 
-    /// Change the tool-panel density and persist the choice.
+    /// Change the tool-panel density. Persistence is handled by the caller via
+    /// the consolidated app config (`save_config`).
     pub fn set_collapse_mode(&mut self, mode: CollapseMode) {
         self.collapse_mode = mode;
-        mode.save();
+    }
+
+    /// The current tool-panel density (for saving into the app config).
+    pub fn collapse_mode(&self) -> CollapseMode {
+        self.collapse_mode
     }
 
     /// Current tab-bar height as last measured by the `WrapBar` widget.

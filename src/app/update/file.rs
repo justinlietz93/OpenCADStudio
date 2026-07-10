@@ -261,14 +261,59 @@ impl OpenCADStudio {
         Task::none()
     }
 
-    /// Write preferences to disk only when they differ from the last write,
-    /// so a toggle persists immediately without thrashing the file.
-    pub(in crate::app) fn persist_settings_if_changed(&mut self) {
-        let cur = self.current_settings();
-        if self.last_saved_settings.as_ref() != Some(&cur) {
-            cur.save();
-            self.last_saved_settings = Some(cur);
+    /// Gather the full persisted config (all sections) from live app state.
+    pub(in crate::app) fn current_config(&self) -> crate::app::config::AppConfig {
+        crate::app::config::AppConfig {
+            settings: self.current_settings(),
+            recent: crate::app::config::RecentConfig {
+                files: self
+                    .recent_files
+                    .iter()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .collect(),
+                limit: self.recent_limit,
+            },
+            statusbar: self.statusbar_config.clone(),
+            ribbon: crate::app::config::RibbonConfig {
+                collapse: self.ribbon.collapse_mode(),
+            },
+            plot: self.plot_dialog.clone(),
         }
+    }
+
+    /// Distribute a loaded config into live app state (called once at startup).
+    pub(in crate::app) fn apply_config(&mut self, cfg: crate::app::config::AppConfig) {
+        self.apply_settings(&cfg.settings);
+        self.recent_files = cfg
+            .recent
+            .files
+            .iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        self.recent_limit = cfg
+            .recent
+            .limit
+            .clamp(crate::app::recent::RECENT_MIN, crate::app::recent::RECENT_MAX);
+        self.recent_files.truncate(self.recent_limit);
+        self.recent_limit_input = self.recent_limit.to_string();
+        self.statusbar_config = cfg.statusbar;
+        self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
+        self.plot_dialog = cfg.plot;
+    }
+
+    /// Write the config to disk only when it changed since the last write, so a
+    /// toggle persists immediately without thrashing the file.
+    pub(in crate::app) fn save_config(&mut self) {
+        let cur = self.current_config();
+        if self.last_saved_config.as_ref() != Some(&cur) {
+            cur.save();
+            self.last_saved_config = Some(cur);
+        }
+    }
+
+    /// Back-compat name for the many "a preference changed, persist it" sites.
+    pub(in crate::app) fn persist_settings_if_changed(&mut self) {
+        self.save_config();
     }
 
     /// Record that the one-time default-association prompt has been answered and
@@ -1774,7 +1819,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// preview PDF, export a PDF, or send the job to the chosen printer.
     fn on_plot_dlg_commit(&mut self, preview: bool) -> Task<Message> {
         // Remember the user's print preferences across sessions.
-        self.plot_dialog.save();
+        self.save_config();
         let d = self.plot_dialog.clone();
         // Persist the dialog's page settings into the layout, then reuse the
         // tested layout-plot derivation.

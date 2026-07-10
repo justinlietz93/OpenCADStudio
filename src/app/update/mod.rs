@@ -641,6 +641,7 @@ impl OpenCADStudio {
             Message::SetRibbonCollapseMode(mode) => {
                 self.ribbon.set_collapse_mode(mode);
                 self.ribbon.close_dropdown();
+                self.save_config();
                 Task::none()
             }
 
@@ -1674,6 +1675,7 @@ impl OpenCADStudio {
             Message::ToggleStatusPill(pill) => {
                 // Keep the menu open so several pills can be toggled in a row.
                 self.statusbar_config.toggle(pill);
+                self.save_config();
                 Task::none()
             }
             Message::ToggleCleanScreen => {
