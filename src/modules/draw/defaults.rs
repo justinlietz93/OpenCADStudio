@@ -4,29 +4,29 @@
 use std::cell::Cell;
 
 thread_local! {
-    static CIRCLE_RADIUS:   Cell<f32> = Cell::new(1.0);
-    static CIRCLE_DIAM:     Cell<f32> = Cell::new(2.0);
-    static ROTATE_ANGLE:    Cell<f32> = Cell::new(0.0);   // degrees
-    static SCALE_FACTOR:    Cell<f32> = Cell::new(1.0);
-    static OFFSET_DIST:     Cell<f32> = Cell::new(1.0);
-    static FILLET_RADIUS:   Cell<f32> = Cell::new(1.0);
-    static CHAMFER_DIST1:   Cell<f32> = Cell::new(10.0);
-    static CHAMFER_DIST2:   Cell<f32> = Cell::new(10.0);
-    static ARRAY_ROWS:      Cell<f32> = Cell::new(2.0);
-    static ARRAY_COLS:      Cell<f32> = Cell::new(2.0);
-    static ARRAY_ROW_SP:    Cell<f32> = Cell::new(100.0);
-    static ARRAY_COL_SP:    Cell<f32> = Cell::new(100.0);
-    static ARRAY_P_COUNT:   Cell<f32> = Cell::new(6.0);
-    static ARRAY_P_ANGLE:   Cell<f32> = Cell::new(360.0); // degrees
-    static ARRAY_PATH_COUNT: Cell<f32> = Cell::new(6.0);
+    static CIRCLE_RADIUS:   Cell<f64> = Cell::new(1.0);
+    static CIRCLE_DIAM:     Cell<f64> = Cell::new(2.0);
+    static ROTATE_ANGLE:    Cell<f64> = Cell::new(0.0);   // degrees
+    static SCALE_FACTOR:    Cell<f64> = Cell::new(1.0);
+    static OFFSET_DIST:     Cell<f64> = Cell::new(1.0);
+    static FILLET_RADIUS:   Cell<f64> = Cell::new(1.0);
+    static CHAMFER_DIST1:   Cell<f64> = Cell::new(10.0);
+    static CHAMFER_DIST2:   Cell<f64> = Cell::new(10.0);
+    static ARRAY_ROWS:      Cell<f64> = Cell::new(2.0);
+    static ARRAY_COLS:      Cell<f64> = Cell::new(2.0);
+    static ARRAY_ROW_SP:    Cell<f64> = Cell::new(100.0);
+    static ARRAY_COL_SP:    Cell<f64> = Cell::new(100.0);
+    static ARRAY_P_COUNT:   Cell<f64> = Cell::new(6.0);
+    static ARRAY_P_ANGLE:   Cell<f64> = Cell::new(360.0); // degrees
+    static ARRAY_PATH_COUNT: Cell<f64> = Cell::new(6.0);
 }
 
 macro_rules! accessors {
     ($get:ident, $set:ident, $var:ident) => {
-        pub fn $get() -> f32 {
+        pub fn $get() -> f64 {
             $var.with(|c| c.get())
         }
-        pub fn $set(v: f32) {
+        pub fn $set(v: f64) {
             $var.with(|c| c.set(v));
         }
     };

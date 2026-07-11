@@ -1211,7 +1211,7 @@ pub struct FilletCommand {
 }
 
 impl FilletCommand {
-    pub fn new(radius: f32, all_entities: Vec<EntityType>) -> Self {
+    pub fn new(radius: f64, all_entities: Vec<EntityType>) -> Self {
         Self {
             radius: radius as f64,
             step: FilletStep::First,
@@ -1298,7 +1298,7 @@ impl CadCommand for FilletCommand {
                 if let Ok(v) = t.replace(',', ".").parse::<f64>() {
                     if v >= 0.0 {
                         self.radius = v;
-                        defaults::set_fillet_radius(v as f32);
+                        defaults::set_fillet_radius(v);
                     }
                     self.resume_after_radius();
                     return Some(CmdResult::NeedPoint);
@@ -1320,7 +1320,7 @@ impl CadCommand for FilletCommand {
                     if let Ok(v) = body.replace(',', ".").parse::<f64>() {
                         if v >= 0.0 {
                             self.radius = v;
-                            defaults::set_fillet_radius(v as f32);
+                            defaults::set_fillet_radius(v);
                         }
                         // Stay in the current step (keeps any first pick).
                         return Some(CmdResult::NeedPoint);
@@ -1590,10 +1590,10 @@ pub struct ChamferCommand {
 }
 
 impl ChamferCommand {
-    pub fn new(dist: f32, all_entities: Vec<EntityType>) -> Self {
+    pub fn new(dist: f64, all_entities: Vec<EntityType>) -> Self {
         Self {
             dist1: dist as f64,
-            dist2: defaults::get_chamfer_dist2() as f64,
+            dist2: defaults::get_chamfer_dist2(),
             step: ChamferStep::First,
             all_entities,
             resume_pick: None,
@@ -1695,7 +1695,7 @@ impl CadCommand for ChamferCommand {
                 }
                 if let Ok(v) = t.replace(',', ".").parse::<f64>() {
                     self.dist1 = v.max(0.0);
-                    defaults::set_chamfer_dist1(self.dist1 as f32);
+                    defaults::set_chamfer_dist1(self.dist1);
                     self.step = ChamferStep::WaitingForDist2;
                     return Some(CmdResult::NeedPoint);
                 }
@@ -1711,7 +1711,7 @@ impl CadCommand for ChamferCommand {
                 }
                 if let Ok(v) = t.replace(',', ".").parse::<f64>() {
                     self.dist2 = v.max(0.0);
-                    defaults::set_chamfer_dist2(self.dist2 as f32);
+                    defaults::set_chamfer_dist2(self.dist2);
                     self.resume_after_dist();
                     return Some(CmdResult::NeedPoint);
                 }
@@ -1738,14 +1738,14 @@ impl CadCommand for ChamferCommand {
                     if !parts.is_empty() {
                         if let Some(&v) = parts.first() {
                             self.dist1 = v.max(0.0);
-                            defaults::set_chamfer_dist1(self.dist1 as f32);
+                            defaults::set_chamfer_dist1(self.dist1);
                         }
                         if let Some(&v) = parts.get(1) {
                             self.dist2 = v.max(0.0);
-                            defaults::set_chamfer_dist2(self.dist2 as f32);
+                            defaults::set_chamfer_dist2(self.dist2);
                         } else {
                             self.dist2 = self.dist1;
-                            defaults::set_chamfer_dist2(self.dist2 as f32);
+                            defaults::set_chamfer_dist2(self.dist2);
                         }
                         return Some(CmdResult::NeedPoint);
                     }

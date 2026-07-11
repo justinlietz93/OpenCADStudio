@@ -8,22 +8,22 @@ fn to_v3(v: DVec3) -> Vector3 {
     Vector3::new(v.x, v.y, v.z)
 }
 
-pub fn apply_standard_transform<T>(entity: &mut T, center: DVec3, angle_rad: f32)
+pub fn apply_standard_transform<T>(entity: &mut T, center: DVec3, angle_rad: f64)
 where
     T: acadrust::Entity,
 {
     let z_axis = Vector3::new(0.0, 0.0, 1.0);
     let t = Transform::from_translation(to_v3(-center))
-        .then(&Transform::from_rotation(z_axis, angle_rad as f64))
+        .then(&Transform::from_rotation(z_axis, angle_rad))
         .then(&Transform::from_translation(to_v3(center)));
     entity.apply_transform(&t);
 }
 
-pub fn apply_standard_scale<T>(entity: &mut T, center: DVec3, factor: f32)
+pub fn apply_standard_scale<T>(entity: &mut T, center: DVec3, factor: f64)
 where
     T: acadrust::Entity,
 {
-    let s = factor as f64;
+    let s = factor;
     let t = Transform::from_scaling_with_origin(Vector3::new(s, s, s), to_v3(center));
     entity.apply_transform(&t);
 }

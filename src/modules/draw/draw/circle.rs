@@ -113,7 +113,7 @@ fn circumcircle(a: DVec3, b: DVec3, c: DVec3) -> Option<(DVec3, f64)> {
 
 pub struct CircleCommand {
     step: StepCR,
-    default_r: f32,
+    default_r: f64,
 }
 enum StepCR {
     Center,
@@ -168,7 +168,7 @@ impl CadCommand for CircleCommand {
             }
             StepCR::Radius(c) => {
                 let r = c.distance(pt);
-                defaults::set_circle_radius(r as f32);
+                defaults::set_circle_radius(r);
                 CmdResult::CommitAndExit(make_circle(*c, r))
             }
         }
@@ -177,7 +177,7 @@ impl CadCommand for CircleCommand {
         if let StepCR::Radius(c) = &self.step {
             let c = *c;
             let r = self.default_r;
-            return CmdResult::CommitAndExit(make_circle(c, r as f64));
+            return CmdResult::CommitAndExit(make_circle(c, r));
         }
         CmdResult::Cancel
     }
@@ -207,7 +207,7 @@ impl CadCommand for CircleCommand {
         if let StepCR::Radius(c) = &self.step {
             let r: f64 = text.trim().replace(',', ".").parse().ok()?;
             if r > 0.0 {
-                defaults::set_circle_radius(r as f32);
+                defaults::set_circle_radius(r);
                 return Some(CmdResult::CommitAndExit(make_circle(*c, r)));
             }
         }
@@ -241,7 +241,7 @@ impl CadCommand for CircleCommand {
 
 pub struct CircleCDCommand {
     step: StepCR,
-    default_d: f32,
+    default_d: f64,
 }
 
 impl CircleCDCommand {
@@ -274,7 +274,7 @@ impl CadCommand for CircleCDCommand {
             }
             StepCR::Radius(c) => {
                 let d = c.distance(pt) * 2.0;
-                defaults::set_circle_diam(d as f32);
+                defaults::set_circle_diam(d);
                 CmdResult::CommitAndExit(make_circle(*c, d / 2.0))
             }
         }
@@ -302,7 +302,7 @@ impl CadCommand for CircleCDCommand {
         if let StepCR::Radius(c) = &self.step {
             let d: f64 = text.trim().replace(',', ".").parse().ok()?;
             if d > 0.0 {
-                defaults::set_circle_diam(d as f32);
+                defaults::set_circle_diam(d);
                 return Some(CmdResult::CommitAndExit(make_circle(*c, d / 2.0)));
             }
         }

@@ -28,9 +28,9 @@ pub enum EntityTransform {
     /// Move every point by the given world-space delta (world XY plane).
     Translate(DVec3),
     /// Rotate around `center` by `angle_rad` in the world XY plane.
-    Rotate { center: DVec3, angle_rad: f32 },
+    Rotate { center: DVec3, angle_rad: f64 },
     /// Uniform scale from `center` by `factor`.
-    Scale { center: DVec3, factor: f32 },
+    Scale { center: DVec3, factor: f64 },
     /// Mirror across the line through `p1`→`p2` in the world XY plane.
     Mirror { p1: DVec3, p2: DVec3 },
 }
@@ -236,8 +236,8 @@ pub enum CmdResult {
         handles: Vec<Handle>,
         src1: DVec3,
         dst1: DVec3,
-        angle_rad: f32,
-        scale: f32,
+        angle_rad: f64,
+        scale: f64,
     },
     /// Set the plot window on the active layout's PlotSettings.
     SetPlotWindow { p1: DVec3, p2: DVec3 },
@@ -291,7 +291,7 @@ pub enum CmdResult {
     /// Extrude the profile entity `handle` by `height` along Z.
     ExtrudeEntity {
         handle: Handle,
-        height: f32,
+        height: f64,
         color: [f32; 4],
     },
     /// Revolve the profile entity `handle` around the given axis by `angle_deg`.

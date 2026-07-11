@@ -184,10 +184,8 @@ impl AlignCommand {
             handles: self.handles.clone(),
             src1: s1,
             dst1: d1,
-            // Reference points (src1/dst1) stay f64 exact; the derived
-            // similarity scalars feed the f32 EntityTransform, so downcast here.
-            angle_rad: angle as f32,
-            scale: scale_factor as f32,
+            angle_rad: angle,
+            scale: scale_factor,
         }
     }
 }

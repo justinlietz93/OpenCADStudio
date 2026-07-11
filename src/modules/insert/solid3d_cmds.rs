@@ -61,7 +61,7 @@ impl CadCommand for ExtrudeCommand {
         self.step = ExtrudeStep::Height;
         CmdResult::NeedPoint
     }
-    fn on_point(&mut self, pt: DVec3) -> CmdResult { let pt = pt.as_vec3();
+    fn on_point(&mut self, pt: DVec3) -> CmdResult {
         if self.step == ExtrudeStep::Height {
             return CmdResult::ExtrudeEntity {
                 handle: self.target_handle,
@@ -76,7 +76,7 @@ impl CadCommand for ExtrudeCommand {
     }
     fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
         text.trim()
-            .parse::<f32>()
+            .parse::<f64>()
             .ok()
             .filter(|&h| h.abs() > 1e-6)
             .map(|h| CmdResult::ExtrudeEntity {

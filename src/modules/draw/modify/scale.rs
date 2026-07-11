@@ -37,14 +37,14 @@ enum Step {
     /// Reference flow: defining the reference length from `base`.
     RefLen { base: DVec3 },
     /// Reference flow: factor is `cursor_dist / ref_dist` from `base`.
-    RefNew { base: DVec3, ref_dist: f32 },
+    RefNew { base: DVec3, ref_dist: f64 },
 }
 
 pub struct ScaleCommand {
     handles: Vec<Handle>,
     wire_models: Vec<WireModel>,
     step: Step,
-    default_factor: f32,
+    default_factor: f64,
 }
 
 impl ScaleCommand {
@@ -58,7 +58,7 @@ impl ScaleCommand {
     }
 
     /// Commit a uniform scale about `base` and end the command.
-    fn commit(&self, base: DVec3, factor: f32) -> CmdResult {
+    fn commit(&self, base: DVec3, factor: f64) -> CmdResult {
         defaults::set_scale_factor(factor);
         CmdResult::TransformSelected(
             self.handles.clone(),
@@ -112,18 +112,18 @@ impl CadCommand for ScaleCommand {
             }
             Step::Factor { base } => {
                 let base = *base;
-                let factor = base.distance(pt).max(1e-6) as f32;
+                let factor = base.distance(pt).max(1e-6);
                 self.commit(base, factor)
             }
             Step::RefLen { base } => {
                 let base = *base;
-                let ref_dist = base.distance(pt).max(1e-6) as f32;
+                let ref_dist = base.distance(pt).max(1e-6);
                 self.step = Step::RefNew { base, ref_dist };
                 CmdResult::NeedPoint
             }
             Step::RefNew { base, ref_dist } => {
                 let base = *base;
-                let new_dist = base.distance(pt).max(1e-6) as f32;
+                let new_dist = base.distance(pt).max(1e-6);
                 self.commit(base, new_dist / *ref_dist)
             }
         }
@@ -152,12 +152,12 @@ impl CadCommand for ScaleCommand {
                     self.step = Step::RefLen { base };
                     return Some(CmdResult::NeedPoint);
                 }
-                let factor: f32 = t.replace(',', ".").parse().ok()?;
+                let factor: f64 = t.replace(',', ".").parse().ok()?;
                 (factor > 0.0).then(|| self.commit(base, factor))
             }
             Step::RefLen { base } => {
                 let base = *base;
-                let ref_dist: f32 = t.replace(',', ".").parse().ok()?;
+                let ref_dist: f64 = t.replace(',', ".").parse().ok()?;
                 if ref_dist > 0.0 {
                     self.step = Step::RefNew { base, ref_dist };
                     return Some(CmdResult::NeedPoint);
@@ -166,7 +166,7 @@ impl CadCommand for ScaleCommand {
             }
             Step::RefNew { base, ref_dist } => {
                 let (base, ref_dist) = (*base, *ref_dist);
-                let new_len: f32 = t.replace(',', ".").parse().ok()?;
+                let new_len: f64 = t.replace(',', ".").parse().ok()?;
                 (new_len > 0.0).then(|| self.commit(base, new_len / ref_dist))
             }
             Step::Base => None,
@@ -179,7 +179,7 @@ impl CadCommand for ScaleCommand {
             Step::Factor { base } => (*base, base.distance(pt).max(1e-6) as f32),
             // Reference flow, new-length step: factor = cursor_dist / ref_dist.
             Step::RefNew { base, ref_dist } => {
-                (*base, base.distance(pt).max(1e-6) as f32 / ref_dist)
+                (*base, (base.distance(pt).max(1e-6) / ref_dist) as f32)
             }
             // Reference-length step: rubber-band only, no factor defined yet.
             Step::RefLen { base } => {

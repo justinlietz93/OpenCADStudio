@@ -37,7 +37,7 @@ pub struct RotateCommand {
     handles: Vec<Handle>,
     wire_models: Vec<WireModel>,
     step: Step,
-    default_angle: f32, // degrees
+    default_angle: f64, // degrees
 }
 
 impl RotateCommand {
@@ -90,13 +90,13 @@ impl CadCommand for RotateCommand {
                 let ref_angle = *ref_angle;
                 let dest_angle = (pt.y - center.y).atan2(pt.x - center.x);
                 let delta = dest_angle - ref_angle;
-                defaults::set_rotate_angle(delta.to_degrees() as f32);
-                self.default_angle = delta.to_degrees() as f32;
+                defaults::set_rotate_angle(delta.to_degrees());
+                self.default_angle = delta.to_degrees();
                 CmdResult::TransformSelected(
                     self.handles.clone(),
                     EntityTransform::Rotate {
                         center,
-                        angle_rad: delta as f32,
+                        angle_rad: delta,
                     },
                 )
             }
@@ -131,7 +131,7 @@ impl CadCommand for RotateCommand {
         };
         // The value already carries the correct sign (the dynamic-input
         // layer applies the cursor's side for a bare magnitude).
-        let deg: f32 = text.trim().replace(',', ".").parse().ok()?;
+        let deg: f64 = text.trim().replace(',', ".").parse().ok()?;
         defaults::set_rotate_angle(deg);
         Some(CmdResult::TransformSelected(
             self.handles.clone(),
@@ -165,7 +165,7 @@ impl CadCommand for RotateCommand {
         // committing with Enter rotates the way the cursor is dragging — the
         // dynamic-input box shows the unsigned magnitude, but the committed
         // value must keep its direction (clockwise = negative).
-        self.default_angle = angle_rad.to_degrees() as f32;
+        self.default_angle = angle_rad.to_degrees();
         // Object ghosts rotated to the new angle. The rotation sweep arc is
         // drawn by the dynamic-input overlay (polar guide), not here.
         self.wire_models

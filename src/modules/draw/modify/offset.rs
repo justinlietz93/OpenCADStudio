@@ -779,7 +779,7 @@ impl CadCommand for OffsetCommand {
             if !t.is_empty() {
                 if let Ok(d) = t.parse::<f64>() {
                     let d = d.abs().max(1e-9);
-                    defaults::set_offset_dist(d as f32);
+                    defaults::set_offset_dist(d);
                     *locked = Some(d);
                 }
             }

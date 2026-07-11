@@ -51,7 +51,7 @@ enum RectStep {
     Rows,
     Cols { rows: u32 },
     RowSp { rows: u32, cols: u32 },
-    ColSp { rows: u32, cols: u32, row_sp: f32 },
+    ColSp { rows: u32, cols: u32, row_sp: f64 },
 }
 
 pub struct ArrayRectCommand {
@@ -60,8 +60,8 @@ pub struct ArrayRectCommand {
     step: RectStep,
     default_rows: u32,
     default_cols: u32,
-    default_row_sp: f32,
-    default_col_sp: f32,
+    default_row_sp: f64,
+    default_col_sp: f64,
     ucs: Mat4,
 }
 
@@ -84,8 +84,8 @@ impl ArrayRectCommand {
     fn build_transforms(
         rows: u32,
         cols: u32,
-        row_sp: f32,
-        col_sp: f32,
+        row_sp: f64,
+        col_sp: f64,
         ucs: Mat4,
     ) -> Vec<EntityTransform> {
         let mut t = Vec::new();
@@ -95,7 +95,7 @@ impl ArrayRectCommand {
                     continue;
                 }
                 t.push(EntityTransform::Translate(ucs.as_dmat4().transform_vector3(
-                    glam::DVec3::new((col_sp * c as f32) as f64, (row_sp * r as f32) as f64, 0.0),
+                    glam::DVec3::new(col_sp * c as f64, row_sp * r as f64, 0.0),
                 )));
             }
         }
@@ -147,7 +147,7 @@ impl CadCommand for ArrayRectCommand {
                     self.default_rows
                 } else {
                     let v = t.parse::<u32>().unwrap_or(self.default_rows).max(1);
-                    defaults::set_array_rows(v as f32);
+                    defaults::set_array_rows(v as f64);
                     self.default_rows = v;
                     v
                 };
@@ -159,7 +159,7 @@ impl CadCommand for ArrayRectCommand {
                     self.default_cols
                 } else {
                     let v = t.parse::<u32>().unwrap_or(self.default_cols).max(1);
-                    defaults::set_array_cols(v as f32);
+                    defaults::set_array_cols(v as f64);
                     self.default_cols = v;
                     v
                 };
@@ -170,7 +170,7 @@ impl CadCommand for ArrayRectCommand {
                 let row_sp = if t.is_empty() {
                     self.default_row_sp
                 } else {
-                    let v = t.parse::<f32>().unwrap_or(self.default_row_sp);
+                    let v = t.parse::<f64>().unwrap_or(self.default_row_sp);
                     defaults::set_array_row_sp(v);
                     self.default_row_sp = v;
                     v
@@ -182,7 +182,7 @@ impl CadCommand for ArrayRectCommand {
                 let col_sp = if t.is_empty() {
                     self.default_col_sp
                 } else {
-                    let v = t.parse::<f32>().unwrap_or(self.default_col_sp);
+                    let v = t.parse::<f64>().unwrap_or(self.default_col_sp);
                     defaults::set_array_col_sp(v);
                     v
                 };
@@ -255,7 +255,7 @@ pub struct ArrayPolarCommand {
     wire_models: Vec<WireModel>,
     step: PolarStep,
     default_count: u32,
-    default_angle: f32,
+    default_angle: f64,
 }
 
 impl ArrayPolarCommand {
@@ -313,7 +313,7 @@ impl CadCommand for ArrayPolarCommand {
                     self.default_count
                 } else {
                     let v = t.parse::<u32>().unwrap_or(self.default_count).max(2);
-                    defaults::set_array_p_count(v as f32);
+                    defaults::set_array_p_count(v as f64);
                     self.default_count = v;
                     v
                 };
@@ -326,15 +326,15 @@ impl CadCommand for ArrayPolarCommand {
                 let total_deg = if t.is_empty() {
                     self.default_angle
                 } else {
-                    let v = t.parse::<f32>().unwrap_or(self.default_angle);
+                    let v = t.parse::<f64>().unwrap_or(self.default_angle);
                     defaults::set_array_p_angle(v);
                     v
                 };
-                let step_rad = total_deg.to_radians() / count as f32;
+                let step_rad = total_deg.to_radians() / count as f64;
                 let transforms = (1..count)
                     .map(|n| EntityTransform::Rotate {
                         center,
-                        angle_rad: step_rad * n as f32,
+                        angle_rad: step_rad * n as f64,
                     })
                     .collect();
                 Some(CmdResult::BatchCopy(self.handles.clone(), transforms))
@@ -354,10 +354,10 @@ impl CadCommand for ArrayPolarCommand {
                 (center.as_vec3(), *count, self.default_angle)
             }
         };
-        let step_rad = total_deg.to_radians() / count as f32;
+        let step_rad = total_deg.to_radians() / count as f64;
         let mut out: Vec<WireModel> = (1..count)
             .flat_map(|n| {
-                let angle_rad = step_rad * n as f32;
+                let angle_rad = (step_rad * n as f64) as f32;
                 self.wire_models
                     .iter()
                     .map(move |w| w.rotated(center, angle_rad))
@@ -667,7 +667,7 @@ impl ArrayPathCommand {
                     let center = Self::rigid_center(p0, p, dth);
                     EntityTransform::Rotate {
                         center,
-                        angle_rad: dth as f32,
+                        angle_rad: dth,
                     }
                 }
             })
@@ -779,7 +779,7 @@ impl CadCommand for ArrayPathCommand {
             self.default_count
         } else {
             let v = t.parse::<u32>().unwrap_or(self.default_count).max(2);
-            defaults::set_array_path_count(v as f32);
+            defaults::set_array_path_count(v as f64);
             self.default_count = v;
             v
         };
@@ -808,7 +808,7 @@ impl CadCommand for ArrayPathCommand {
                 EntityTransform::Rotate { center, angle_rad } => self
                     .wire_models
                     .iter()
-                    .map(|w| w.rotated(center.as_vec3(), *angle_rad))
+                    .map(|w| w.rotated(center.as_vec3(), *angle_rad as f32))
                     .collect::<Vec<_>>(),
                 _ => vec![],
             })
@@ -851,14 +851,14 @@ enum Array3DStep {
         rows: u32,
         cols: u32,
         levels: u32,
-        row_sp: f32,
+        row_sp: f64,
     },
     LvlSp {
         rows: u32,
         cols: u32,
         levels: u32,
-        row_sp: f32,
-        col_sp: f32,
+        row_sp: f64,
+        col_sp: f64,
     },
 }
 
@@ -879,9 +879,9 @@ impl Array3DCommand {
         rows: u32,
         cols: u32,
         levels: u32,
-        row_sp: f32,
-        col_sp: f32,
-        lvl_sp: f32,
+        row_sp: f64,
+        col_sp: f64,
+        lvl_sp: f64,
     ) -> Vec<EntityTransform> {
         let mut t = Vec::new();
         for l in 0..levels {
@@ -893,9 +893,9 @@ impl Array3DCommand {
                     // Drawing plane is world XY: X = col dir, Y = row dir,
                     // Z = level (elevation).
                     t.push(EntityTransform::Translate(DVec3::new(
-                        (col_sp * c as f32) as f64,
-                        (row_sp * r as f32) as f64,
-                        (lvl_sp * l as f32) as f64,
+                        col_sp * c as f64,
+                        row_sp * r as f64,
+                        lvl_sp * l as f64,
                     )));
                 }
             }
@@ -981,7 +981,7 @@ impl CadCommand for Array3DCommand {
                 Some(CmdResult::NeedPoint)
             }
             Array3DStep::RowSp { rows, cols, levels } => {
-                let v: f32 = if t.is_empty() {
+                let v: f64 = if t.is_empty() {
                     1.0
                 } else {
                     t.parse().unwrap_or(1.0)
@@ -1000,7 +1000,7 @@ impl CadCommand for Array3DCommand {
                 levels,
                 row_sp,
             } => {
-                let v: f32 = if t.is_empty() {
+                let v: f64 = if t.is_empty() {
                     1.0
                 } else {
                     t.parse().unwrap_or(1.0)
@@ -1021,7 +1021,7 @@ impl CadCommand for Array3DCommand {
                 row_sp,
                 col_sp,
             } => {
-                let v: f32 = if t.is_empty() {
+                let v: f64 = if t.is_empty() {
                     1.0
                 } else {
                     t.parse().unwrap_or(1.0)

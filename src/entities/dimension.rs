@@ -559,16 +559,16 @@ where
     }
 }
 
-fn rotate_point(p: &mut acadrust::types::Vector3, center: DVec3, angle_rad: f32) {
+fn rotate_point(p: &mut acadrust::types::Vector3, center: DVec3, angle_rad: f64) {
     let dx = p.x - center.x;
     let dy = p.y - center.y;
-    let (s, c) = (angle_rad as f64).sin_cos();
+    let (s, c) = angle_rad.sin_cos();
     p.x = center.x + dx * c - dy * s;
     p.y = center.y + dx * s + dy * c;
 }
 
-fn scale_point(p: &mut acadrust::types::Vector3, center: DVec3, factor: f32) {
-    let f = factor as f64;
+fn scale_point(p: &mut acadrust::types::Vector3, center: DVec3, factor: f64) {
+    let f = factor;
     p.x = center.x + (p.x - center.x) * f;
     p.y = center.y + (p.y - center.y) * f;
     p.z = center.z + (p.z - center.z) * f;
