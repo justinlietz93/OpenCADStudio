@@ -250,7 +250,7 @@ impl Scene {
         &mut self,
         handles: &[Handle],
         name: &str,
-        base: glam::Vec3,
+        base: glam::DVec3,
     ) -> Result<Handle, String> {
         let name = name.trim();
         if name.is_empty() {
@@ -299,7 +299,7 @@ impl Scene {
             .add_entity(EntityType::BlockEnd(block_end))
             .map_err(|e| e.to_string())?;
 
-        let local = EntityTransform::Translate((-base).as_dvec3());
+        let local = EntityTransform::Translate(-base);
         for (old_handle, mut entity) in source_entities {
             view::dispatch::apply_transform(&mut entity, &local);
             entity = crate::modules::draw::modify::explode::normalize_entity_for_block(entity);
@@ -313,7 +313,7 @@ impl Scene {
 
         let insert = DxfInsert::new(
             name,
-            acadrust::types::Vector3::new(base.x as f64, base.y as f64, base.z as f64),
+            acadrust::types::Vector3::new(base.x, base.y, base.z),
         );
         Ok(self.add_entity(EntityType::Insert(insert)))
     }

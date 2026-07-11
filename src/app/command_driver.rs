@@ -378,7 +378,7 @@ impl OpenCADStudio {
                 self.push_undo_snapshot(i, "BLOCK");
                 match self.tabs[i]
                     .scene
-                    .create_block_from_entities(&handles, &name, base.as_vec3())
+                    .create_block_from_entities(&handles, &name, base)
                 {
                     Ok(insert_handle) => {
                         self.tabs[i].dirty = true;
@@ -1858,7 +1858,7 @@ impl OpenCADStudio {
             } => {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
-                self.open_mtext_editor(pos.as_vec3(), handle, &initial, height);
+                self.open_mtext_editor(pos, handle, &initial, height);
             }
             CmdResult::OpenTextEditor {
                 pos,
@@ -1869,7 +1869,7 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.open_text_inline(
-                    pos.as_vec3(),
+                    pos,
                     handle,
                     &initial,
                     height,

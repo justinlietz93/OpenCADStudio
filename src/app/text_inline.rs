@@ -10,7 +10,7 @@
 
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle, Text};
-use glam::Vec3;
+use glam::DVec3;
 
 /// Which text slot of which entity an editor session reads from and writes to.
 /// `Text`/`AttDef`/`AttEnt`/`Dim`/`Tolerance` are plain (single-line box);
@@ -78,15 +78,15 @@ pub fn write_text_field(entity: &mut EntityType, field: TextEntityField, value: 
     true
 }
 
-fn vec3(v: Vector3) -> Vec3 {
-    Vec3::new(v.x as f32, v.y as f32, v.z as f32)
+fn vec3(v: Vector3) -> DVec3 {
+    DVec3::new(v.x, v.y, v.z)
 }
 
 /// Live state of the open in-place TEXT editor. Absent (`None`) when no editor
 /// is up.
 pub struct TextInlineState {
     /// World insertion point (WCS, same convention the committed entity uses).
-    pub pos: Vec3,
+    pub pos: DVec3,
     /// The plain text being entered.
     pub value: String,
     /// Text height (drawing units), used when creating a new TEXT entity.
@@ -156,7 +156,7 @@ impl super::OpenCADStudio {
             EntityType::MultiLeader(ml) => {
                 (vec3(ml.context.text_location), ml.context.text_height)
             }
-            _ => (Vec3::ZERO, 0.25),
+            _ => (DVec3::ZERO, 0.25),
         };
 
         if field.is_rich() {
@@ -172,7 +172,7 @@ impl super::OpenCADStudio {
     /// commit. `handle` is `Some` when editing an existing entity.
     pub(super) fn open_text_inline(
         &mut self,
-        pos: Vec3,
+        pos: DVec3,
         handle: Option<Handle>,
         initial: &str,
         height: f64,
@@ -211,7 +211,7 @@ impl super::OpenCADStudio {
         } else {
             let mut t = Text::with_value(
                 &ed.value,
-                Vector3::new(ed.pos.x as f64, ed.pos.y as f64, ed.pos.z as f64),
+                Vector3::new(ed.pos.x, ed.pos.y, ed.pos.z),
             )
             .with_height(ed.height);
             // New text inherits the document's current text style (STYLE), not

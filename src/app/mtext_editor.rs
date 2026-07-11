@@ -12,7 +12,7 @@ use acadrust::entities::mtext_format::{
 };
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle, MText};
-use glam::Vec3;
+use glam::DVec3;
 use iced::widget::text_editor;
 
 /// Character-level format toggles applied to the current selection by the
@@ -76,7 +76,7 @@ impl std::fmt::Display for JustifyChoice {
 /// Live state of the open MText editor. Absent (`None`) when no editor is up.
 pub struct MTextEditorState {
     /// World insertion point (WCS, same convention the committed entity uses).
-    pub pos: Vec3,
+    pub pos: DVec3,
     /// The editable text buffer (raw value with inline codes).
     pub content: text_editor::Content,
     /// Structured mirror of `content`, parsed via acadrust `parse_mtext` — the
@@ -133,7 +133,7 @@ pub struct MTextEditorState {
 }
 
 impl MTextEditorState {
-    pub fn new(pos: Vec3, initial: &str, height: f64, editing: Option<Handle>) -> Self {
+    pub fn new(pos: DVec3, initial: &str, height: f64, editing: Option<Handle>) -> Self {
         Self {
             pos,
             content: text_editor::Content::with_text(initial),
@@ -224,7 +224,7 @@ impl MTextEditorState {
         let h = self.height_value();
         MText {
             value: self.folded_value(),
-            insertion_point: Vector3::new(self.pos.x as f64, self.pos.y as f64, self.pos.z as f64),
+            insertion_point: Vector3::new(self.pos.x, self.pos.y, self.pos.z),
             height: h,
             rectangle_width: self.rect_width,
             attachment_point: self.attachment,
@@ -495,7 +495,7 @@ impl super::OpenCADStudio {
     /// The committed slot is chosen by the edited entity's type.
     pub(super) fn open_mtext_editor(
         &mut self,
-        pos: Vec3,
+        pos: DVec3,
         handle: Option<Handle>,
         initial: &str,
         height: f64,
@@ -1234,7 +1234,7 @@ mod cell_tests {
     // (replacing the old hand-built `\f;\C;…` prefix), and survive serialization.
     #[test]
     fn global_defaults_fold_into_spans() {
-        let mut ed = MTextEditorState::new(Vec3::ZERO, "hello world", 2.5, None);
+        let mut ed = MTextEditorState::new(DVec3::ZERO, "hello world", 2.5, None);
         ed.font = "Arial".to_string();
         ed.color_aci = 1; // red
         ed.oblique = "15".to_string();

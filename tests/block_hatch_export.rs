@@ -77,7 +77,7 @@ fn block_internal_hatch_reaches_export() {
     // minimal shape of "coloured fill nested in a block".
     let h = scene.add_entity(EntityType::Hatch(square_hatch(5)));
     scene
-        .create_block_from_entities(&[h], "LOGO", glam::Vec3::ZERO)
+        .create_block_from_entities(&[h], "LOGO", glam::DVec3::ZERO)
         .expect("wrap hatch into a block + insert");
     scene.populate_hatches_from_document();
 
