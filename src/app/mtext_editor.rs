@@ -6,6 +6,7 @@
 // change so the user sees the actual drawing result while typing.
 
 use acadrust::entities::mtext::AttachmentPoint;
+use acadrust::entities::mtext_format::{parse_mtext, MTextDocument, StackingType};
 use acadrust::types::Vector3;
 use acadrust::{EntityType, Handle, MText};
 use glam::Vec3;
@@ -86,6 +87,11 @@ pub struct MTextEditorState {
     pub pos: Vec3,
     /// The editable text buffer (raw value with inline codes).
     pub content: text_editor::Content,
+    /// Structured mirror of `content`, parsed via acadrust `parse_mtext` — the
+    /// target authority for the editor. Phase 1: passive mirror kept in sync on
+    /// every rebuild, cross-checked against the rendered glyph boxes; later
+    /// phases make it the source of truth and delete the raw-string path.
+    pub doc: MTextDocument,
     /// Text height, edited as a string so partial input is allowed.
     pub height: String,
     /// Text style name (entity field).
@@ -137,6 +143,7 @@ impl MTextEditorState {
         Self {
             pos,
             content: text_editor::Content::with_text(initial),
+            doc: parse_mtext(initial, true),
             height: format!("{:.4}", height)
                 .trim_end_matches('0')
                 .trim_end_matches('.')
@@ -229,6 +236,77 @@ fn parse_non_default(s: &str, default: f64) -> Option<f64> {
 /// counts glyph boxes (paragraphs split on `\P`/`\n`/`\N`, leading/trailing
 /// spaces trimmed per paragraph, inline codes skipped). Lets a preview
 /// selection (visible-char range) be spliced back into the raw value.
+/// A slot in the flat visible-index space of a structured MText document — the
+/// structured replacement for [`visible_spans`]. `doc_vis_map(doc).len()` is the
+/// caret index space (`0..=count`) and each entry locates that visible slot
+/// inside the document. Built to match `layout_mtext`'s glyph-box `vis`
+/// assignment (`text_support.rs`) so the caret and the rendered glyphs never
+/// desync — one caret slot per paragraph break, one per visible char, and
+/// none for a tab (which has no glyph box).
+// Consumed by the caret/selection + edit ops in the next phase (structured
+// model migration); defined here so the map is ready and reviewed in isolation.
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum VisSlot {
+    /// A visible glyph: the char at byte `byte` of
+    /// `doc.paragraphs[para].spans[span].text`.
+    Char { para: usize, span: usize, byte: usize },
+    /// The zero-width caret slot at the start of paragraph `para` (a `\P` break).
+    Break { para: usize },
+}
+
+/// Flatten a structured MText document into the editor's visible-index space.
+/// Mirrors the layout's `vis` counting so `doc_vis_map(doc).len()` equals
+/// `glyph_boxes(mt).len()` for the same document.
+#[allow(dead_code)]
+pub(super) fn doc_vis_map(doc: &MTextDocument) -> Vec<VisSlot> {
+    let mut out: Vec<VisSlot> = Vec::new();
+    for (pi, para) in doc.paragraphs.iter().enumerate() {
+        // Every paragraph after the first opens with a caret slot for its break
+        // (mirrors the `i > 0 && is_first_in_paragraph` line-start box).
+        if pi > 0 {
+            out.push(VisSlot::Break { para: pi });
+        }
+        for (si, span) in para.spans.iter().enumerate() {
+            // A stacking span (`\S`) renders its flattened `num<sep>den`; count
+            // one slot per flattened char (edits inside are clamped to the span
+            // boundary in later phases).
+            if let Some(st) = &span.stacking {
+                let sep = if st.stacking_type == StackingType::Limit {
+                    '^'
+                } else {
+                    '/'
+                };
+                let mut flat = st.numerator.clone();
+                if !st.denominator.is_empty() {
+                    flat.push(sep);
+                    flat.push_str(&st.denominator);
+                }
+                for _ in flat.chars() {
+                    out.push(VisSlot::Char {
+                        para: pi,
+                        span: si,
+                        byte: 0,
+                    });
+                }
+                continue;
+            }
+            for (byte, ch) in span.text.char_indices() {
+                // Tab has no glyph box (`AtomKind::Tab`) → no vis slot.
+                if ch == '\t' {
+                    continue;
+                }
+                out.push(VisSlot::Char {
+                    para: pi,
+                    span: si,
+                    byte,
+                });
+            }
+        }
+    }
+    out
+}
+
 pub fn visible_spans(raw: &str) -> Vec<(usize, usize)> {
     let mut result: Vec<(usize, usize)> = Vec::new();
     let mut para: Vec<(usize, usize, char)> = Vec::new();
@@ -418,6 +496,10 @@ impl super::OpenCADStudio {
         if let Some(ed) = self.mtext_editor.as_mut() {
             ed.preview_wires = wires;
             ed.glyph_boxes = boxes;
+            // Phase 1: keep the structured mirror in sync with the raw content.
+            // The doc is passive (nothing consumes it yet), so this cannot change
+            // behaviour — it just makes the model available for the next phase.
+            ed.doc = parse_mtext(&ed.content.text(), true);
         }
     }
 
