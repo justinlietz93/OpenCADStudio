@@ -36,21 +36,17 @@ impl OpenCADStudio {
         self.save_dialog_format =
             crate::io::format_for_version(acadrust::DxfVersion::AC1032, is_dxf);
 
-        // Pre-fill filename and folder from current path or defaults.
+        // Pre-fill the default file name from the current path or the tab name;
+        // the destination folder comes from the native OS dialog that follows.
         if let Some(p) = &self.tabs[tab_idx].current_path.clone() {
             if let Some(name) = p.file_name() {
                 self.save_dialog_filename = name.to_string_lossy().into_owned();
-            }
-            if let Some(dir) = p.parent() {
-                self.save_dialog_folder = dir.to_path_buf();
             }
         } else {
             let (ext, _) = crate::io::parse_save_format(&self.save_dialog_format);
             self.save_dialog_filename = format!("{}.{ext}", self.tabs[tab_idx].tab_display_name());
         }
-        self.save_dialog_entries = crate::io::read_dir_entries(&self.save_dialog_folder.clone());
         self.aec_drop_acknowledged = false;
-        self.overwrite_acknowledged = false;
         self.active_modal = Some(crate::app::ModalKind::SaveDialog);
         Task::none()
     }
@@ -58,7 +54,6 @@ impl OpenCADStudio {
 
     pub(in crate::app) fn close_save_dialog_window(&mut self) -> Task<Message> {
         self.aec_drop_acknowledged = false;
-        self.overwrite_acknowledged = false;
         if self.active_modal == Some(crate::app::ModalKind::SaveDialog) {
             self.active_modal = None;
         }
@@ -221,11 +216,13 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                                 }
                             }
                         } else {
-                            // No path — close unsaved dialog, open custom Save As dialog.
+                            // No path — close unsaved dialog and save a default
+                            // DWG 2018 via the native destination dialog (no
+                            // version picker; that is reserved for Save As).
                             self.pending_close = Some(crate::app::PendingClose::Tab(idx));
                             self.save_dialog_for_unsaved = true;
                             let close_win = self.close_unsaved_dialog_window();
-                            let open_save = self.open_save_dialog_window(idx);
+                            let open_save = self.save_default_dwg2018(idx);
                             return Task::batch([close_win, open_save]);
                         }
                     }
@@ -245,12 +242,14 @@ pub(super) fn on_ribbon_tool_click(&mut self, tool_id: String, event: ModuleEven
                                     }
                                 }
                             } else {
-                                // No path — close unsaved dialog, open custom Save As dialog.
+                                // No path — close unsaved dialog and save a
+                                // default DWG 2018 via the native destination
+                                // dialog (version picker is Save-As only).
                                 self.active_tab = idx;
                                 self.pending_close = Some(crate::app::PendingClose::Quit);
                                 self.save_dialog_for_unsaved = true;
                                 let close_win = self.close_unsaved_dialog_window();
-                                let open_save = self.open_save_dialog_window(idx);
+                                let open_save = self.save_default_dwg2018(idx);
                                 return Task::batch([close_win, open_save]);
                             }
                         }

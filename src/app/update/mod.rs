@@ -558,28 +558,15 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::SaveDialogNavigate(path) => {
-                self.save_dialog_folder = path.clone();
-                self.save_dialog_entries = crate::io::read_dir_entries(&path);
-                Task::none()
-            }
-
-            Message::SaveDialogEntryClicked(path, is_dir) => {
-                if is_dir {
-                    self.save_dialog_folder = path.clone();
-                    self.save_dialog_entries = crate::io::read_dir_entries(&path);
-                } else {
-                    // Fill filename from clicked file.
-                    if let Some(name) = path.file_name() {
-                        self.save_dialog_filename = name.to_string_lossy().into_owned();
-                    }
-                }
-                Task::none()
-            }
-
             Message::SaveDialogConfirm => self.on_save_dialog_confirm(),
 
             Message::SaveDialogCancel => self.close_save_dialog_window(),
+
+            #[cfg(not(target_arch = "wasm32"))]
+            Message::SaveDialogPathPicked(picked) => self.on_save_dialog_path_picked(picked),
+
+            #[cfg(target_arch = "wasm32")]
+            Message::SaveDialogPathPicked(_) => Task::none(),
 
             Message::ClearScene => {
                 let i = self.active_tab;
@@ -3139,11 +3126,6 @@ impl OpenCADStudio {
                 Task::none()
             }
 
-            Message::OverwriteConfirm => self.on_overwrite_confirm(),
-            Message::OverwriteCancel => {
-                self.active_modal = Some(crate::app::ModalKind::SaveDialog);
-                Task::none()
-            }
             Message::AutoSave => self.on_autosave(),
 
             Message::UnsavedPickedSavePath(Some(path)) => {

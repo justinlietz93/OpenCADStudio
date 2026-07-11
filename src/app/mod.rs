@@ -435,8 +435,6 @@ pub(super) struct OpenCADStudio {
     aec_drop_acknowledged: bool,
     /// Number of unsupported objects shown in the AEC-drop warning modal.
     aec_drop_count: usize,
-    /// Set once the user confirms overwriting an existing file on Save-As.
-    overwrite_acknowledged: bool,
     /// Layers awaiting a "delete non-empty layer(s)" confirmation: `(names,
     /// total object count)`. Set when the user deletes one or more layers that
     /// still have objects; the warning modal reads it, and confirming erases
@@ -677,12 +675,9 @@ pub(super) struct OpenCADStudio {
     /// OS window for the custom Save As dialog.
     /// Currently selected format string, e.g. "DWG 2013".
     save_dialog_format: String,
-    /// Editable filename (without path), e.g. "drawing.dwg".
+    /// Editable filename (without path), e.g. "drawing.dwg" — seeds the native
+    /// OS save dialog's default name (native) or the download name (web).
     save_dialog_filename: String,
-    /// Currently browsed folder (PathBuf for reliable fs ops).
-    save_dialog_folder: std::path::PathBuf,
-    /// Cached directory listing: (display_name, is_dir, full_path).
-    save_dialog_entries: Vec<(String, bool, std::path::PathBuf)>,
     /// True when triggered from the unsaved-changes flow.
     save_dialog_for_unsaved: bool,
 
@@ -1097,7 +1092,6 @@ pub enum ModalKind {
     Unsaved,
     SaveDialog,
     AecDropWarning,
-    OverwriteWarning,
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     AssocPrompt,
     PointStyle,
@@ -1234,12 +1228,10 @@ pub enum Message {
     // ── Custom Save-As dialog ─────────────────────────────────────────────
     SaveDialogFormatChanged(String),
     SaveDialogFilenameChanged(String),
-    /// Navigate the file-chooser to the given directory.
-    SaveDialogNavigate(std::path::PathBuf),
-    /// User clicked a file entry (fill filename) or directory entry (navigate).
-    SaveDialogEntryClicked(std::path::PathBuf, bool),
     SaveDialogConfirm,
     SaveDialogCancel,
+    /// Destination picked in the native OS save dialog (`None` = cancelled).
+    SaveDialogPathPicked(Option<std::path::PathBuf>),
     ClearScene,
     SetWireframe(bool),
     /// Set the active tab's render mode (one of acadrust's seven visual
@@ -1285,11 +1277,6 @@ pub enum Message {
     AecDropProceed,
     /// Go back to the Save dialog from the AEC-drop warning.
     AecDropBack,
-    // ── Overwrite confirmation (Save-As over an existing file) ────────────
-    /// Replace the existing file and save.
-    OverwriteConfirm,
-    /// Go back to the Save dialog from the overwrite warning.
-    OverwriteCancel,
     /// Periodic autosave tick — write `.sv$` recovery files for dirty tabs.
     AutoSave,
     /// Save-as path picked for the unsaved-changes → save → close flow.
@@ -2170,7 +2157,6 @@ impl OpenCADStudio {
             active_modal: None,
             aec_drop_acknowledged: false,
             aec_drop_count: 0,
-            overwrite_acknowledged: false,
             layer_delete_pending: None,
             modal_offset: iced::Vector::ZERO,
             modal_drag_last: None,
@@ -2218,11 +2204,6 @@ impl OpenCADStudio {
             pending_close: None,
             save_dialog_format: "DWG 2018".to_string(),
             save_dialog_filename: "drawing.dwg".to_string(),
-            save_dialog_folder: std::env::var("HOME")
-                .or_else(|_| std::env::var("USERPROFILE"))
-                .unwrap_or_else(|_| ".".to_string())
-                .into(),
-            save_dialog_entries: Vec::new(),
             save_dialog_for_unsaved: false,
             // Plot style
             active_plot_style: None,

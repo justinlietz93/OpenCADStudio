@@ -1565,8 +1565,10 @@ impl OpenCADStudio {
             AssocPrompt => (440, 210),
             Unsaved => (420, 160),
             AecDropWarning => (480, 230),
-            OverwriteWarning => (420, 180),
-            SaveDialog => (560, 480),
+            #[cfg(target_arch = "wasm32")]
+            SaveDialog => (420, 200),
+            #[cfg(not(target_arch = "wasm32"))]
+            SaveDialog => (420, 150),
             PointStyle => (360, 470),
             AttributeEditor => (640, 500),
             LayerDeleteWarning => (440, 200),

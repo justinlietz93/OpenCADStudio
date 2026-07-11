@@ -723,7 +723,24 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     return Task::none();
                 }
                 self.save_dialog_for_unsaved = false;
-                self.open_save_dialog_window(i)
+                self.save_default_dwg2018(i)
+    }
+
+    /// Save without the version picker: default to DWG 2018 and go straight to
+    /// the native destination dialog (native) or the browser download (web).
+    /// Used by plain Save (QSAVE) on an as-yet-unsaved drawing and by the
+    /// save-before-close flow — the version picker is reserved for Save As.
+    pub(in crate::app) fn save_default_dwg2018(&mut self, tab_idx: usize) -> Task<Message> {
+        self.active_tab = tab_idx;
+        self.save_dialog_format = "DWG 2018".to_string();
+        self.save_dialog_filename = self.tabs[tab_idx]
+            .current_path
+            .as_ref()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| format!("{}.dwg", self.tabs[tab_idx].tab_display_name()));
+        self.aec_drop_acknowledged = false;
+        self.on_save_dialog_confirm()
     }
 
     pub(super) fn on_save_dialog_confirm(&mut self) -> Task<Message> {
@@ -756,52 +773,49 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     name.to_string()
                 };
                 self.save_dialog_filename = filename.clone();
-                // Confirm before overwriting an existing file in the folder.
-                #[cfg(not(target_arch = "wasm32"))]
-                if !self.overwrite_acknowledged
-                    && self.save_dialog_folder.join(&filename).exists()
-                {
-                    self.active_modal = Some(crate::app::ModalKind::OverwriteWarning);
-                    return Task::none();
-                }
-                let close = self.close_save_dialog_window();
                 let i = self.active_tab;
-                sync_annotation_scale_header(&mut self.tabs[i].scene);
-                // Persist Ortho / running OSNAP into the header (Save-As path).
-                self.stamp_header_sysvars(i);
-                self.sync_truck_solids_to_acis(i);
-                self.stamp_thumbnail(i);
 
-                // Native: write to the chosen path. Web: download the bytes
-                // under the chosen name (no filesystem).
+                // Native: hand the destination choice to the OS save dialog —
+                // it provides folder browsing and overwrite confirmation. The
+                // chosen version rides in `save_dialog_format` and the write
+                // happens in `on_save_dialog_path_picked` once a path returns.
                 #[cfg(not(target_arch = "wasm32"))]
                 {
-                    let path = self.save_dialog_folder.join(&filename);
-                    if self.backup_on_save {
-                        crate::io::write_backup(&path);
-                    }
-                    match crate::io::save_as_version(&self.tabs[i].scene.document, &path, version) {
-                        Ok(()) => {
-                            self.command_line
-                                .push_output(&format!("Saved: {}", path.display()));
-                            // Drop any prior autosave copy — including the temp
-                            // one used while the drawing was still unsaved —
-                            // before the tab takes on its new path.
-                            let _ = std::fs::remove_file(self.autosave_target(i));
-                            self.tabs[i].current_path = Some(path.clone());
-                            self.tabs[i].dirty = false;
-                            let _ = std::fs::remove_file(path.with_extension("sv$"));
-                            if self.save_dialog_for_unsaved {
-                                let next = self.update(Message::UnsavedPickedSavePath(Some(path)));
-                                return Task::batch([close, next]);
+                    let seed_dir = self.tabs[i]
+                        .current_path
+                        .as_ref()
+                        .and_then(|p| p.parent().map(|d| d.to_path_buf()));
+                    let default_name = filename;
+                    let (filter_label, filter_ext): (&str, &str) =
+                        if ext.eq_ignore_ascii_case("dxf") {
+                            ("DXF Files", "dxf")
+                        } else {
+                            ("DWG Files", "dwg")
+                        };
+                    let close = self.close_save_dialog_window();
+                    let pick = Task::perform(
+                        async move {
+                            let mut dlg = rfd::AsyncFileDialog::new()
+                                .set_title("Save Drawing As")
+                                .set_file_name(default_name)
+                                .add_filter(filter_label, &[filter_ext]);
+                            if let Some(dir) = seed_dir {
+                                dlg = dlg.set_directory(dir);
                             }
-                        }
-                        Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
-                    }
-                    close
+                            dlg.save_file().await.map(|h| crate::sys::handle_path(&h))
+                        },
+                        Message::SaveDialogPathPicked,
+                    );
+                    Task::batch([close, pick])
                 }
+                // Web: no filesystem — serialize and hand the browser a download.
                 #[cfg(target_arch = "wasm32")]
                 {
+                    let close = self.close_save_dialog_window();
+                    sync_annotation_scale_header(&mut self.tabs[i].scene);
+                    self.stamp_header_sysvars(i);
+                    self.sync_truck_solids_to_acis(i);
+                    self.stamp_thumbnail(i);
                     match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
                         Ok(bytes) => {
                             crate::sys::download_bytes(&filename, &bytes);
@@ -819,6 +833,51 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     }
                     close
                 }
+    }
+
+    /// Native: a destination path came back from the OS save dialog — write the
+    /// file there in the chosen version. `None` means the user cancelled.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn on_save_dialog_path_picked(
+        &mut self,
+        picked: Option<std::path::PathBuf>,
+    ) -> Task<Message> {
+        let Some(path) = picked else {
+            // Cancelled the OS dialog — if this came from the unsaved-changes →
+            // save → close flow, re-show the confirmation so the tab isn't lost.
+            if self.save_dialog_for_unsaved && self.pending_close.is_some() {
+                return self.open_unsaved_dialog_window();
+            }
+            return Task::none();
+        };
+        let (_ext, version) = crate::io::parse_save_format(&self.save_dialog_format);
+        let i = self.active_tab;
+        sync_annotation_scale_header(&mut self.tabs[i].scene);
+        // Persist Ortho / running OSNAP into the header (Save-As path).
+        self.stamp_header_sysvars(i);
+        self.sync_truck_solids_to_acis(i);
+        self.stamp_thumbnail(i);
+        if self.backup_on_save {
+            crate::io::write_backup(&path);
+        }
+        match crate::io::save_as_version(&self.tabs[i].scene.document, &path, version) {
+            Ok(()) => {
+                self.command_line
+                    .push_output(&format!("Saved: {}", path.display()));
+                // Drop any prior autosave copy — including the temp one used
+                // while the drawing was still unsaved — before the tab takes on
+                // its new path.
+                let _ = std::fs::remove_file(self.autosave_target(i));
+                self.tabs[i].current_path = Some(path.clone());
+                self.tabs[i].dirty = false;
+                let _ = std::fs::remove_file(path.with_extension("sv$"));
+                if self.save_dialog_for_unsaved {
+                    return self.update(Message::UnsavedPickedSavePath(Some(path)));
+                }
+            }
+            Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
+        }
+        Task::none()
     }
 
     /// AEC-drop warning → "Save anyway": accept the loss and proceed with the
@@ -842,13 +901,6 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             .unwrap_or_else(|| self.save_dialog_filename.clone());
         self.save_dialog_filename = stem;
         self.aec_drop_acknowledged = true;
-        self.active_modal = Some(crate::app::ModalKind::SaveDialog);
-        self.on_save_dialog_confirm()
-    }
-
-    /// Overwrite warning → "Replace": save over the existing file.
-    pub(super) fn on_overwrite_confirm(&mut self) -> Task<Message> {
-        self.overwrite_acknowledged = true;
         self.active_modal = Some(crate::app::ModalKind::SaveDialog);
         self.on_save_dialog_confirm()
     }

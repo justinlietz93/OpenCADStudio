@@ -1,8 +1,5 @@
 use super::super::{Message, OpenCADStudio};
-use iced::widget::{
-    button, column, container, mouse_area, pick_list, row, text, text_input,
-    Space,
-};
+use iced::widget::{button, column, container, pick_list, row, text, Space};
 use iced::{Background, Border, Color, Element, Fill, Theme};
 
 impl OpenCADStudio {
@@ -474,9 +471,6 @@ impl OpenCADStudio {
                     230,
                 )
             }
-            super::super::ModalKind::OverwriteWarning => {
-                sized(overwrite_dialog_window(&self.save_dialog_filename), 420, 180)
-            }
             super::super::ModalKind::LayerDeleteWarning => {
                 let (names, count) = self
                     .layer_delete_pending
@@ -540,16 +534,19 @@ impl OpenCADStudio {
                     500,
                 )
             }
-            super::super::ModalKind::SaveDialog => sized(
-                save_as_dialog_window(
-                    &self.save_dialog_filename,
-                    &self.save_dialog_folder,
-                    &self.save_dialog_entries,
-                    &self.save_dialog_format,
-                ),
-                560,
-                480,
-            ),
+            super::super::ModalKind::SaveDialog => {
+                // Native omits the file-name field (the OS dialog collects it),
+                // so it stands shorter than the web build.
+                #[cfg(target_arch = "wasm32")]
+                let h = 200;
+                #[cfg(not(target_arch = "wasm32"))]
+                let h = 150;
+                sized(
+                    save_as_dialog_window(&self.save_dialog_filename, &self.save_dialog_format),
+                    420,
+                    h,
+                )
+            }
         })
     }
 }
@@ -559,22 +556,14 @@ const SAVE_FORMAT_OPTIONS: &[&str] = &[
     "DXF 2013", "DXF 2010", "DXF 2007", "DXF 2004", "DXF 2000", "DXF R14",
 ];
 
-fn save_as_dialog_window<'a>(
-    filename: &'a str,
-    folder: &'a std::path::Path,
-    entries: &'a [(String, bool, std::path::PathBuf)],
-    format: &'a str,
-) -> Element<'a, Message> {
+/// Compact Save-As options dialog: pick the format/version and a default file
+/// name. The destination folder and overwrite confirmation come from the
+/// native OS save dialog (native) or the browser download (web) that follows.
+fn save_as_dialog_window<'a>(filename: &'a str, format: &'a str) -> Element<'a, Message> {
     const BG: Color = Color {
         r: 0.15,
         g: 0.15,
         b: 0.17,
-        a: 1.0,
-    };
-    const LIST_BG: Color = Color {
-        r: 0.11,
-        g: 0.11,
-        b: 0.13,
         a: 1.0,
     };
     const BORDER: Color = Color {
@@ -593,12 +582,6 @@ fn save_as_dialog_window<'a>(
         r: 0.58,
         g: 0.58,
         b: 0.62,
-        a: 1.0,
-    };
-    const INPUT_BG: Color = Color {
-        r: 0.10,
-        g: 0.10,
-        b: 0.12,
         a: 1.0,
     };
     const BTN_OK: Color = Color {
@@ -625,38 +608,6 @@ fn save_as_dialog_window<'a>(
         b: 0.38,
         a: 1.0,
     };
-    const DIR_COL: Color = Color {
-        r: 0.75,
-        g: 0.85,
-        b: 1.00,
-        a: 1.0,
-    };
-    const FILE_COL: Color = TEXT;
-    const ROW_HOV: Color = Color {
-        r: 0.22,
-        g: 0.24,
-        b: 0.28,
-        a: 1.0,
-    };
-
-    let input_sty =
-        |_: &Theme, _: iced::widget::text_input::Status| iced::widget::text_input::Style {
-            background: Background::Color(INPUT_BG),
-            border: Border {
-                color: BORDER,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            icon: TEXT,
-            placeholder: DIM,
-            value: TEXT,
-            selection: Color {
-                r: 0.20,
-                g: 0.46,
-                b: 0.80,
-                a: 0.45,
-            },
-        };
 
     let btn = |lbl: &'static str, msg: Message, base: Color, hov: Color| {
         button(text(lbl).size(12).color(TEXT))
@@ -680,163 +631,94 @@ fn save_as_dialog_window<'a>(
             .padding([4, 12])
     };
 
-    // ── Path bar ─────────────────────────────────────────────────────────
-    let path_str = if crate::io::is_drives_root(folder) {
-        crate::io::drives_root_label().to_string()
-    } else {
-        folder.to_string_lossy().into_owned()
-    };
-    let up_path = crate::io::parent_folder(folder);
-    let path_bar = row![
-        {
-            let up_msg = up_path.map(Message::SaveDialogNavigate);
-            let b = button(crate::ui::icons::tinted(crate::ui::icons::UP, 14.0, TEXT))
-                .style(|_: &Theme, st| button::Style {
-                    background: Some(Background::Color(
-                        if matches!(st, button::Status::Hovered | button::Status::Pressed) {
-                            BTN_GHOV
-                        } else {
-                            BTN_GREY
-                        },
-                    )),
-                    text_color: TEXT,
-                    border: Border {
-                        color: BORDER,
-                        width: 1.0,
-                        radius: 4.0.into(),
-                    },
-                    ..Default::default()
-                })
-                .padding([3, 10]);
-            if let Some(msg) = up_msg {
-                b.on_press(msg)
-            } else {
-                b
-            }
-        },
-        Space::new().width(8),
-        container(text(path_str.clone()).size(12).color(DIM))
-            .style(|_: &Theme| container::Style {
-                background: Some(Background::Color(INPUT_BG)),
-                border: Border {
-                    color: BORDER,
-                    width: 1.0,
-                    radius: 4.0.into()
-                },
-                ..Default::default()
-            })
-            .padding([4, 8])
-            .width(Fill),
-    ]
-    .align_y(iced::Alignment::Center);
-
-    // ── File list ─────────────────────────────────────────────────────────
-    let file_list: Element<'_, Message> = {
-        let rows: Vec<Element<'_, Message>> = entries
-            .iter()
-            .map(|(name, is_dir, path)| {
-                let icon_bytes = if *is_dir {
-                    crate::ui::icons::FOLDER
-                } else {
-                    crate::ui::icons::DOC
-                };
-                let color = if *is_dir { DIR_COL } else { FILE_COL };
-                let p = path.clone();
-                let d = *is_dir;
-                mouse_area(
-                    container(
-                        row![
-                            crate::ui::icons::tinted(icon_bytes, 13.0, color),
-                            Space::new().width(6),
-                            text(crate::ui::text_util::elide(name.as_str(), 48))
-                                .size(13)
-                                .color(color),
-                        ]
-                        .align_y(iced::Alignment::Center),
-                    )
-                    .style(|_: &Theme| container::Style {
-                        ..Default::default()
-                    })
-                    .padding([3, 8])
-                    .width(Fill),
-                )
-                .on_press(Message::SaveDialogEntryClicked(p, d))
-                .into()
-            })
-            .collect();
-
-        container(iced::widget::scrollable(
-            column(rows).spacing(1).width(Fill),
-        ))
-        .style(|_: &Theme| container::Style {
-            background: Some(Background::Color(LIST_BG)),
-            border: Border {
-                color: BORDER,
-                width: 1.0,
-                radius: 4.0.into(),
-            },
-            ..Default::default()
-        })
-        .width(Fill)
-        .height(Fill)
-        .into()
-    };
-    let _ = ROW_HOV; // used conceptually, suppress warning
-
     let sel_fmt = SAVE_FORMAT_OPTIONS.iter().copied().find(|&s| s == format);
     let label = |s: &'static str| text(s).size(11).color(DIM);
 
-    // ── Bottom controls ───────────────────────────────────────────────────
-    let bottom = column![
+    let mut items: Vec<Element<'a, Message>> = Vec::new();
+    items.push(text("Save Drawing As").size(14).color(TEXT).into());
+    items.push(Space::new().height(12).into());
+
+    // Web has no native file dialog, so the file name is typed here. On native
+    // the OS save dialog collects the name, so this field is omitted.
+    #[cfg(target_arch = "wasm32")]
+    {
+        const INPUT_BG: Color = Color {
+            r: 0.10,
+            g: 0.10,
+            b: 0.12,
+            a: 1.0,
+        };
+        let input_sty =
+            |_: &Theme, _: iced::widget::text_input::Status| iced::widget::text_input::Style {
+                background: Background::Color(INPUT_BG),
+                border: Border {
+                    color: BORDER,
+                    width: 1.0,
+                    radius: 4.0.into(),
+                },
+                icon: TEXT,
+                placeholder: DIM,
+                value: TEXT,
+                selection: Color {
+                    r: 0.20,
+                    g: 0.46,
+                    b: 0.80,
+                    a: 0.45,
+                },
+            };
+        items.push(
+            row![
+                label("File name:").width(70),
+                iced::widget::text_input("drawing.dwg", filename)
+                    .on_input(Message::SaveDialogFilenameChanged)
+                    .style(input_sty)
+                    .size(13)
+                    .padding([5, 8])
+                    .width(Fill),
+            ]
+            .align_y(iced::Alignment::Center)
+            .spacing(6)
+            .into(),
+        );
+        items.push(Space::new().height(8).into());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    let _ = filename;
+
+    items.push(
         row![
-            label("File name:").width(90),
-            text_input("drawing.dwg", filename)
-                .on_input(Message::SaveDialogFilenameChanged)
-                .style(input_sty)
-                .size(13)
-                .padding([5, 8])
-                .width(Fill),
-        ]
-        .align_y(iced::Alignment::Center)
-        .spacing(6),
-        Space::new().height(6),
-        row![
-            label("Format:").width(90),
+            label("Format:").width(70),
             pick_list(SAVE_FORMAT_OPTIONS, sel_fmt, |s: &str| {
                 Message::SaveDialogFormatChanged(s.to_string())
             })
             .width(Fill),
         ]
         .align_y(iced::Alignment::Center)
-        .spacing(6),
-        Space::new().height(12),
+        .spacing(6)
+        .into(),
+    );
+    items.push(Space::new().height(16).into());
+    items.push(
         row![
             Space::new().width(Fill),
             btn("Save", Message::SaveDialogConfirm, BTN_OK, BTN_HOV),
             Space::new().width(8),
             btn("Cancel", Message::SaveDialogCancel, BTN_GREY, BTN_GHOV),
-        ],
-    ]
-    .spacing(0);
-
-    container(
-        column![
-            path_bar,
-            Space::new().height(8),
-            file_list,
-            Space::new().height(10),
-            bottom,
         ]
-        .spacing(0),
-    )
-    .style(|_: &Theme| container::Style {
-        background: Some(Background::Color(BG)),
-        ..Default::default()
-    })
-    .padding([14, 16])
-    .width(Fill)
-    .height(Fill)
-    .into()
+        .into(),
+    );
+
+    let body = column(items).spacing(0);
+
+    container(body)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(BG)),
+            ..Default::default()
+        })
+        .padding([14, 16])
+        .width(Fill)
+        .height(Fill)
+        .into()
 }
 
 fn unsaved_changes_dialog_window(name: &str) -> Element<'static, Message> {
@@ -992,59 +874,6 @@ fn aec_drop_dialog_window(count: usize, target: &str, src_version: &str) -> Elem
 
 /// Confirmation shown when the chosen Save-As filename already exists in the
 /// target folder. "Replace" overwrites; "Cancel" returns to the Save dialog.
-fn overwrite_dialog_window(filename: &str) -> Element<'static, Message> {
-    const BG: Color = Color { r: 0.18, g: 0.18, b: 0.20, a: 1.0 };
-    const BORDER_COL: Color = Color { r: 0.38, g: 0.38, b: 0.42, a: 1.0 };
-    const TEXT_COL: Color = Color { r: 0.90, g: 0.90, b: 0.90, a: 1.0 };
-    const BTN_SAVE: Color = Color { r: 0.20, g: 0.46, b: 0.80, a: 1.0 };
-    const BTN_HOVER: Color = Color { r: 0.26, g: 0.55, b: 0.92, a: 1.0 };
-    const BTN_DISC: Color = Color { r: 0.28, g: 0.28, b: 0.30, a: 1.0 };
-    const BTN_DHOV: Color = Color { r: 0.36, g: 0.36, b: 0.40, a: 1.0 };
-
-    let body_text =
-        format!("\"{filename}\" already exists in this folder.\n\nDo you want to replace it?");
-
-    let btn = |label: &'static str, msg: Message, base: Color, hov: Color| {
-        button(text(label).size(13).color(TEXT_COL))
-            .on_press(msg)
-            .style(move |_: &Theme, status| button::Style {
-                background: Some(Background::Color(match status {
-                    button::Status::Hovered | button::Status::Pressed => hov,
-                    _ => base,
-                })),
-                text_color: TEXT_COL,
-                border: Border {
-                    color: BORDER_COL,
-                    width: 1.0,
-                    radius: 4.0.into(),
-                },
-                shadow: iced::Shadow::default(),
-                snap: false,
-            })
-            .padding([6, 18])
-    };
-
-    container(
-        column![
-            text(body_text).size(13).color(TEXT_COL),
-            iced::widget::Space::new().height(20),
-            row![
-                btn("Replace", Message::OverwriteConfirm, BTN_SAVE, BTN_HOVER),
-                iced::widget::Space::new().width(8),
-                btn("Cancel", Message::OverwriteCancel, BTN_DISC, BTN_DHOV),
-            ],
-        ]
-        .spacing(0),
-    )
-    .style(move |_: &Theme| container::Style {
-        background: Some(Background::Color(BG)),
-        ..Default::default()
-    })
-    .center(Fill)
-    .padding([24, 28])
-    .into()
-}
-
 /// Confirm deleting layer(s) that still have objects on them. "Delete Objects"
 /// erases them and removes the layers; "Cancel" leaves everything.
 fn layer_delete_warning_window(names: &[String], count: usize) -> Element<'static, Message> {
