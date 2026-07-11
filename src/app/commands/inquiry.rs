@@ -258,28 +258,7 @@ impl OpenCADStudio {
             // that block; otherwise the pick command runs and the editor opens
             // once a block is chosen (see `command_driver`).
             "ATTEDIT" => {
-                let selected_attr_insert = {
-                    let sel = self.tabs[i].scene.selected_entities();
-                    if sel.len() == 1 {
-                        let (h, e) = sel[0];
-                        match e {
-                            acadrust::EntityType::Insert(ins) if !ins.attributes.is_empty() => {
-                                Some(h)
-                            }
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                };
-                if let Some(handle) = selected_attr_insert {
-                    self.open_attribute_editor(handle);
-                } else {
-                    use crate::modules::draw::modify::attedit::AtteditCommand;
-                    let cmd_obj = AtteditCommand::new();
-                    self.command_line.push_info(&cmd_obj.prompt());
-                    self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
-                }
+                self.open_attedit_dialog();
             }
 
             // ── REFEDIT — in-place block editing ─────────────────────────────
@@ -1248,6 +1227,37 @@ fn arith_eval(expr: &str) -> Result<f64, String> {
         return Err(format!("unexpected '{}'", p.chars[p.pos]));
     }
     Ok(v)
+}
+
+impl OpenCADStudio {
+    /// Open the attribute editor. If a single block with attributes is already
+    /// selected it opens directly on that block; otherwise it starts the
+    /// block-pick command and opens once a block is chosen (see
+    /// `command_driver`). Shared by ATTEDIT and its command aliases
+    /// ATTMAN / BATTMAN.
+    pub(in crate::app) fn open_attedit_dialog(&mut self) {
+        let i = self.active_tab;
+        let selected_attr_insert = {
+            let sel = self.tabs[i].scene.selected_entities();
+            if sel.len() == 1 {
+                let (h, e) = sel[0];
+                match e {
+                    acadrust::EntityType::Insert(ins) if !ins.attributes.is_empty() => Some(h),
+                    _ => None,
+                }
+            } else {
+                None
+            }
+        };
+        if let Some(handle) = selected_attr_insert {
+            self.open_attribute_editor(handle);
+        } else {
+            use crate::modules::draw::modify::attedit::AtteditCommand;
+            let cmd_obj = AtteditCommand::new();
+            self.command_line.push_info(&cmd_obj.prompt());
+            self.tabs[i].active_cmd = Some(Box::new(cmd_obj));
+        }
+    }
 }
 
 struct ArithParser {

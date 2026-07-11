@@ -427,64 +427,15 @@ impl OpenCADStudio {
                 }
             }
 
-            // ATTMAN — list the attribute definitions of each block (or one named
-            // block). The full graphical manager is not built; this reports the
-            // same information from the command line.
+            // ATTMAN / BATTMAN — the Block Attribute Manager. Rather than a
+            // command-line listing, both route to the attribute editor
+            // (ATTEDIT): edit the selected block's attributes, or pick a block.
             cmd if cmd == "ATTMAN"
                 || cmd == "BATTMAN"
                 || cmd.starts_with("ATTMAN ")
                 || cmd.starts_with("BATTMAN ") =>
             {
-                // BATTMAN is an alias for ATTMAN. Strip whichever keyword was
-                // typed so the remainder is the optional block-name argument;
-                // check BATTMAN first since ATTMAN is a suffix of it.
-                let arg = cmd
-                    .strip_prefix("BATTMAN")
-                    .or_else(|| cmd.strip_prefix("ATTMAN"))
-                    .unwrap_or("")
-                    .trim();
-                let blocks = self.tabs[i].scene.custom_block_names();
-                let targets: Vec<String> = if arg.is_empty() {
-                    blocks
-                } else {
-                    blocks
-                        .into_iter()
-                        .filter(|b| b.eq_ignore_ascii_case(arg))
-                        .collect()
-                };
-                if targets.is_empty() {
-                    self.command_line
-                        .push_info("ATTMAN: no matching block.  Usage: ATTMAN [block name]");
-                } else {
-                    let doc = &self.tabs[i].scene.document;
-                    let mut lines: Vec<String> = Vec::new();
-                    for block in &targets {
-                        let attdefs: Vec<String> = doc
-                            .block_records
-                            .get(block)
-                            .map(|br| {
-                                br.entity_handles
-                                    .iter()
-                                    .filter_map(|h| doc.get_entity(*h))
-                                    .filter_map(|e| match e {
-                                        acadrust::EntityType::AttributeDefinition(a) => {
-                                            Some(format!("{}={}", a.tag, a.default_value))
-                                        }
-                                        _ => None,
-                                    })
-                                    .collect()
-                            })
-                            .unwrap_or_default();
-                        lines.push(if attdefs.is_empty() {
-                            format!("  {block}: no attributes.")
-                        } else {
-                            format!("  {block}: {}", attdefs.join(", "))
-                        });
-                    }
-                    for l in lines {
-                        self.command_line.push_output(&l);
-                    }
-                }
+                self.open_attedit_dialog();
             }
 
             "XATTACH" => {
@@ -653,30 +604,9 @@ impl OpenCADStudio {
 mod tests {
     use crate::app::OpenCADStudio;
 
-    /// Build a headless app with a single custom block "MYBLK" carrying one
-    /// attribute definition (COST=0), so ATTMAN/BATTMAN have something to list.
-    fn app_with_attributed_block() -> OpenCADStudio {
+    fn fresh_app() -> OpenCADStudio {
         let mut app = OpenCADStudio::new_for_test();
         app.automation_op(r#"{"op":"new"}"#);
-
-        let i = app.active_tab;
-        let doc = &mut app.tabs[i].scene.document;
-        let br_h = acadrust::Handle::new(doc.next_handle());
-        let mut br = acadrust::tables::BlockRecord::new("MYBLK");
-        br.handle = br_h;
-        doc.block_records.add(br).unwrap();
-
-        let mut ad = acadrust::entities::AttributeDefinition {
-            tag: "COST".into(),
-            prompt: "Cost".into(),
-            default_value: "0".into(),
-            insertion_point: acadrust::types::Vector3::new(0.0, 0.0, 0.0),
-            height: 1.0,
-            ..Default::default()
-        };
-        ad.common.owner_handle = br_h;
-        doc.add_entity(acadrust::EntityType::AttributeDefinition(ad))
-            .unwrap();
         app
     }
 
@@ -691,49 +621,27 @@ mod tests {
             .join("\n")
     }
 
-    // Regression for #295: BATTMAN triggered the ATTMAN handler but the argument
-    // was extracted with `trim_start_matches("ATTMAN")`, which leaves "BATTMAN"
-    // as a bogus block-name argument — so BATTMAN always reported
-    // "ATTMAN: no matching block" instead of listing attributes like ATTMAN.
+    // ATTMAN and BATTMAN are the Block Attribute Manager; this build routes both
+    // to the attribute editor (ATTEDIT) instead of the old command-line listing.
+    // With nothing selected they start the same interactive pick as ATTEDIT,
+    // byte for byte, and never emit the old "no matching block" listing text.
     #[test]
-    fn battman_is_a_working_alias_for_attman() {
-        let attman_out = run_capture(&mut app_with_attributed_block(), "ATTMAN");
-        let battman_out = run_capture(&mut app_with_attributed_block(), "BATTMAN");
+    fn attman_and_battman_route_to_attedit() {
+        let attedit = run_capture(&mut fresh_app(), "ATTEDIT");
+        let attman = run_capture(&mut fresh_app(), "ATTMAN");
+        let battman = run_capture(&mut fresh_app(), "BATTMAN");
 
-        // ATTMAN lists the block; the reported bug is that BATTMAN did not.
-        assert!(
-            attman_out.contains("MYBLK"),
-            "ATTMAN should list the block, got: {attman_out:?}"
-        );
-        assert!(
-            battman_out.contains("MYBLK"),
-            "BATTMAN should list the block like ATTMAN, got: {battman_out:?}"
-        );
-        assert!(
-            !battman_out.contains("no matching block"),
-            "BATTMAN must not fall into the no-argument error path, got: {battman_out:?}"
-        );
-        // The alias must behave identically, attribute listing included.
         assert_eq!(
-            attman_out, battman_out,
-            "BATTMAN output must match ATTMAN output exactly"
+            attman, attedit,
+            "ATTMAN must behave like ATTEDIT, got: {attman:?} vs {attedit:?}"
         );
-    }
-
-    // The keyword-stripping fix must also honour an explicit block-name argument
-    // on BATTMAN (`BATTMAN <name>`), which the old code never matched at all.
-    #[test]
-    fn battman_honours_a_block_name_argument() {
-        let hit = run_capture(&mut app_with_attributed_block(), "BATTMAN MYBLK");
-        assert!(
-            hit.contains("MYBLK") && !hit.contains("no matching block"),
-            "BATTMAN MYBLK should list that block, got: {hit:?}"
+        assert_eq!(
+            battman, attedit,
+            "BATTMAN must behave like ATTEDIT, got: {battman:?} vs {attedit:?}"
         );
-
-        let miss = run_capture(&mut app_with_attributed_block(), "BATTMAN NOPE");
         assert!(
-            miss.contains("no matching block"),
-            "BATTMAN NOPE should report no match, got: {miss:?}"
+            !attman.contains("no matching block"),
+            "ATTMAN must not run the old command-line listing, got: {attman:?}"
         );
     }
 }

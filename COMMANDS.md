@@ -194,7 +194,7 @@ Status of every standard CAD command in Open CAD Studio:
 | `ATTEXT` | — | Extract attributes (legacy) | ✅ |
 | `ATTSYNC` | — | Synchronize attribute definitions | ✅ |
 | `BLOCKPALETTE` | — | Multi-view block palette (command-line list) | 🔶 |
-| `ATTMAN` | `BATTMAN` | Attribute manager (command-line list) | 🔶 |
+| `ATTMAN` | `BATTMAN` | Block attribute manager (opens the attribute editor) | ✅ |
 | `XBIND` | XB | Bind xref elements to drawing | ❌ |
 | `XOPEN` | — | Open xref for editing | ✅ |
 | `BSAVE` | — | Save block in editor | ❌ |
