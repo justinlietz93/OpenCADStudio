@@ -35,6 +35,8 @@ pub struct Ribbon {
     active_tool: Option<String>,
     pub wireframe: bool,
     pub ortho_mode: bool,
+    /// ViewCube (NAVVCUBE) visibility — drives the View Cube button highlight.
+    pub show_viewcube: bool,
     pub open_dropdown: Option<String>,
     /// Title of the collapsed panel whose flyout is currently open, if any.
     pub collapsed_open: Option<String>,
@@ -133,6 +135,7 @@ impl Ribbon {
             active_tool: None,
             wireframe: false,
             ortho_mode: true,
+            show_viewcube: true,
             open_dropdown: None,
             collapsed_open: None,
             last_panel_tool: HashMap::default(),
@@ -273,6 +276,9 @@ impl Ribbon {
     }
     pub fn set_ortho(&mut self, ortho: bool) {
         self.ortho_mode = ortho;
+    }
+    pub fn set_viewcube(&mut self, on: bool) {
+        self.show_viewcube = on;
     }
 
     pub fn toggle_dropdown(&mut self, id: &str) {
@@ -536,6 +542,7 @@ impl Ribbon {
                             &self.last_cmd,
                             self.wireframe,
                             self.ortho_mode,
+                            self.show_viewcube,
                             &self.layer_infos,
                             &self.active_layer,
                             self.active_color,
@@ -551,6 +558,7 @@ impl Ribbon {
                             &self.last_cmd,
                             self.wireframe,
                             self.ortho_mode,
+                            self.show_viewcube,
                             &self.layer_infos,
                             &self.active_layer,
                             self.active_color,
@@ -566,6 +574,7 @@ impl Ribbon {
                             &self.last_cmd,
                             self.wireframe,
                             self.ortho_mode,
+                            self.show_viewcube,
                             &self.layer_infos,
                             &self.active_layer,
                             self.active_color,
@@ -582,6 +591,7 @@ impl Ribbon {
                             &self.last_cmd,
                             self.wireframe,
                             self.ortho_mode,
+                            self.show_viewcube,
                             &self.layer_infos,
                             &self.active_layer,
                             self.active_color,
@@ -598,6 +608,7 @@ impl Ribbon {
                             &self.last_cmd,
                             self.wireframe,
                             self.ortho_mode,
+                            self.show_viewcube,
                             &self.layer_infos,
                             &self.active_layer,
                             self.active_color,
@@ -1291,6 +1302,7 @@ fn render_group<'a>(
     last_cmd: &HashMap<&'static str, &'static str>,
     wireframe: bool,
     ortho_mode: bool,
+    show_viewcube: bool,
     layer_infos: &'a [LayerInfo],
     active_layer: &'a str,
     active_color: AcadColor,
@@ -1319,6 +1331,7 @@ fn render_group<'a>(
                 last_cmd,
                 wireframe,
                 ortho_mode,
+                show_viewcube,
                 layer_infos,
                 active_layer,
                 active_color,
@@ -1335,6 +1348,7 @@ fn render_group<'a>(
                 last_cmd,
                 wireframe,
                 ortho_mode,
+                show_viewcube,
             ));
             if small_buf.len() == 3 {
                 flush_small_col(&mut small_buf, &mut items_row);
@@ -1414,6 +1428,7 @@ fn collapse_button<'a>(
     last_cmd: &HashMap<&'static str, &'static str>,
     wireframe: bool,
     ortho_mode: bool,
+    show_viewcube: bool,
     layer_infos: &'a [LayerInfo],
     active_layer: &'a str,
     active_color: AcadColor,
@@ -1481,6 +1496,7 @@ fn collapse_button<'a>(
             last_cmd,
             wireframe,
             ortho_mode,
+            show_viewcube,
             layer_infos,
             active_layer,
             active_color,
@@ -1496,6 +1512,7 @@ fn collapse_button<'a>(
             last_cmd,
             wireframe,
             ortho_mode,
+            show_viewcube,
             layer_infos,
             active_layer,
             active_color,

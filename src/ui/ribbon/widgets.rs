@@ -289,12 +289,14 @@ pub(super) fn is_active_tool(
     active_tool: &Option<String>,
     wireframe: bool,
     ortho_mode: bool,
+    show_viewcube: bool,
 ) -> bool {
     match id {
         "WIREFRAME" => wireframe,
         "SOLID" => !wireframe,
         "ORTHO" => ortho_mode,
         "PERSP" => !ortho_mode,
+        "NAVVCUBE" => show_viewcube,
         id => active_tool.as_deref() == Some(id),
     }
 }
@@ -349,12 +351,13 @@ pub(super) fn render_small<'a>(
     last_cmd: &HashMap<&'static str, &'static str>,
     wireframe: bool,
     ortho_mode: bool,
+    show_viewcube: bool,
 ) -> Element<'a, Message> {
     match item {
         // Large variants render small too, so the ribbon can shrink a panel of
         // large buttons to icon-only columns when the width is tight.
         RibbonItem::Tool(t) | RibbonItem::LargeTool(t) => {
-            let active = is_active_tool(t.id, active_tool, wireframe, ortho_mode);
+            let active = is_active_tool(t.id, active_tool, wireframe, ortho_mode, show_viewcube);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
             let tip_text = format!("{}\nCommand: {}", t.label, t.id);
@@ -584,6 +587,7 @@ pub(super) fn render_large<'a>(
     last_cmd: &HashMap<&'static str, &'static str>,
     wireframe: bool,
     ortho_mode: bool,
+    show_viewcube: bool,
     layer_infos: &'a [LayerInfo],
     active_layer: &'a str,
     active_color: AcadColor,
@@ -597,7 +601,7 @@ pub(super) fn render_large<'a>(
         // A plain Tool renders large too, so a collapsed panel can show its
         // representative tool as a big icon.
         RibbonItem::LargeTool(t) | RibbonItem::Tool(t) => {
-            let active = is_active_tool(t.id, active_tool, wireframe, ortho_mode);
+            let active = is_active_tool(t.id, active_tool, wireframe, ortho_mode, show_viewcube);
             let event = t.event.clone();
             let tool_id = t.id.to_string();
             let tip_text = format!("{}\nCommand: {}", t.label, t.id);
@@ -783,9 +787,10 @@ pub(super) fn render_large<'a>(
                     last_cmd,
                     wireframe,
                     ortho_mode,
+                    show_viewcube,
                 )
             } else {
-                let mp_active = is_active_tool(match_prop.id, active_tool, wireframe, ortho_mode);
+                let mp_active = is_active_tool(match_prop.id, active_tool, wireframe, ortho_mode, show_viewcube);
                 let mp_event = match_prop.event.clone();
                 let mp_id = match_prop.id.to_string();
                 let mp_tip = format!("{}\nCommand: {}", match_prop.label, match_prop.id);
