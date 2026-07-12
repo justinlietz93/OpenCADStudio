@@ -1316,6 +1316,82 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 }
                             }
                         }
+                    } else if matches!(field, "arrow_block" | "dim_line_lw" | "text_pos_vert") {
+                        // Leader dim-var overrides picked from a dropdown. The
+                        // arrow block resolves a friendly arrowhead name to a
+                        // block handle ("Closed filled" clears the override →
+                        // reverts to the style); the other two map a label to
+                        // the DIMLWD / DIMTAD enum value.
+                        use crate::entities::dim_override as dov;
+                        use acadrust::xdata::XDataValue;
+                        let arrow_h: Option<acadrust::Handle> =
+                            if field == "arrow_block" && value != "Closed filled" {
+                                self.tabs[i]
+                                    .scene
+                                    .document
+                                    .block_records
+                                    .iter()
+                                    .find(|b| {
+                                        crate::app::properties::arrowhead_label(&b.name) == value
+                                    })
+                                    .map(|b| b.handle)
+                            } else {
+                                None
+                            };
+                        for &handle in &handles {
+                            if self.tabs[i].scene.is_layer_locked(handle) {
+                                continue;
+                            }
+                            // Only leaders carry these rows; skip anything else so
+                            // a multi-type selection can't get stray overrides.
+                            if !matches!(
+                                self.tabs[i].scene.document.get_entity(handle),
+                                Some(acadrust::EntityType::Leader(_))
+                            ) {
+                                continue;
+                            }
+                            let doc = &mut self.tabs[i].scene.document;
+                            match field {
+                                "dim_line_lw" => dov::set(
+                                    doc,
+                                    handle,
+                                    dov::DIMLWD,
+                                    Some(XDataValue::Integer16(
+                                        crate::app::properties::dim_lineweight_from_label(&value),
+                                    )),
+                                ),
+                                "text_pos_vert" => dov::set(
+                                    doc,
+                                    handle,
+                                    dov::DIMTAD,
+                                    Some(XDataValue::Integer16(
+                                        crate::app::properties::dimtad_from_label(&value),
+                                    )),
+                                ),
+                                "arrow_block" => {
+                                    // "Closed filled" is an explicit override to
+                                    // the null-handle default arrow (not a clear),
+                                    // so the pick sticks even when the style's
+                                    // arrow differs.
+                                    if value == "Closed filled" {
+                                        dov::set(
+                                            doc,
+                                            handle,
+                                            dov::DIMLDRBLK,
+                                            Some(XDataValue::Handle(acadrust::Handle::NULL)),
+                                        );
+                                    } else if let Some(h) = arrow_h {
+                                        dov::set(
+                                            doc,
+                                            handle,
+                                            dov::DIMLDRBLK,
+                                            Some(XDataValue::Handle(h)),
+                                        );
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
                     } else if field == "plot_style" {
                         // Named plot-style pick: ByLayer / ByBlock clear the
                         // handle; a named style resolves through the drawing's
@@ -1451,30 +1527,66 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 if self.tabs[i].scene.is_layer_locked(handle) {
                                     continue;
                                 }
-                                if let Some(entity) =
-                                    self.tabs[i].scene.document.get_entity_mut(handle)
-                                {
-                                    match field {
-                                        "linetype_scale" | "transparency" => {
+                                match field {
+                                    "hyperlink" => {
+                                        // Stored in the standard PE_URL XDATA
+                                        // record; an empty value clears it.
+                                        let vals = if val.trim().is_empty() {
+                                            None
+                                        } else {
+                                            Some(vec![acadrust::xdata::XDataValue::String(
+                                                val.clone(),
+                                            )])
+                                        };
+                                        crate::scene::view::dispatch::set_entity_xdata(
+                                            &mut self.tabs[i].scene.document,
+                                            handle,
+                                            "PE_URL",
+                                            vals,
+                                        );
+                                    }
+                                    "arrow_size" | "text_offset" | "dim_scale_overall" => {
+                                        // Real-valued leader dim-var overrides
+                                        // (ACAD_DSTYLE). A blank value clears the
+                                        // override → reverts to the style; an
+                                        // unparseable entry is ignored so a typo
+                                        // can't silently wipe a stored override.
+                                        use crate::entities::dim_override as dov;
+                                        let code = match field {
+                                            "arrow_size" => dov::DIMASZ,
+                                            "text_offset" => dov::DIMGAP,
+                                            _ => dov::DIMSCALE,
+                                        };
+                                        let trimmed = val.trim();
+                                        if trimmed.is_empty() {
+                                            dov::set(
+                                                &mut self.tabs[i].scene.document,
+                                                handle,
+                                                code,
+                                                None,
+                                            );
+                                        } else if let Ok(n) = trimmed.parse::<f64>() {
+                                            dov::set(
+                                                &mut self.tabs[i].scene.document,
+                                                handle,
+                                                code,
+                                                Some(acadrust::xdata::XDataValue::Real(n)),
+                                            );
+                                        }
+                                    }
+                                    "linetype_scale" | "transparency" => {
+                                        if let Some(entity) =
+                                            self.tabs[i].scene.document.get_entity_mut(handle)
+                                        {
                                             crate::scene::view::dispatch::apply_common_prop(
                                                 entity, field, &val,
                                             );
                                         }
-                                        "hyperlink" => {
-                                            // Stored in the standard PE_URL XDATA
-                                            // record; an empty value clears it.
-                                            let vals = if val.trim().is_empty() {
-                                                None
-                                            } else {
-                                                Some(vec![acadrust::xdata::XDataValue::String(
-                                                    val.clone(),
-                                                )])
-                                            };
-                                            crate::scene::view::dispatch::set_common_xdata(
-                                                entity, "PE_URL", vals,
-                                            );
-                                        }
-                                        _ => {
+                                    }
+                                    _ => {
+                                        if let Some(entity) =
+                                            self.tabs[i].scene.document.get_entity_mut(handle)
+                                        {
                                             crate::scene::view::dispatch::apply_geom_prop(
                                                 entity, field, &val,
                                             );

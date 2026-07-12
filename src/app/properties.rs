@@ -490,32 +490,109 @@ impl OpenCADStudio {
                                     }
                                 }
                             }
-                            // Lines & Arrows / Text / Fit are derived from the
-                            // assigned dimension style (same source the leader
-                            // tessellator uses), not stored on the entity.
+                            // Lines & Arrows / Text / Fit default to the assigned
+                            // dimension style (the same source the tessellator
+                            // uses); most rows are editable per-object overrides
+                            // stored in ACAD_DSTYLE. Arrow size / block / overall
+                            // scale and dim-line lineweight drive the render; text
+                            // offset / vertical position round-trip to file but
+                            // don't change the leader glyph here (its annotation
+                            // is a separate entity). Dim-line colour is read-only.
                             if let Some(ds) = find_dim_style(doc, &ld.dimension_style) {
-                                set_row(
+                                use crate::entities::dim_override as dov;
+                                use crate::scene::model::object::PropValue;
+                                let xd = &ld.common.extended_data;
+
+                                // Arrow block (DIMLDRBLK): override handle → name,
+                                // else the style's arrow. Options are the arrowhead
+                                // blocks the drawing carries plus the default.
+                                let arrow_label = match dov::handle(xd, dov::DIMLDRBLK) {
+                                    Some(h) => doc
+                                        .block_records
+                                        .iter()
+                                        .find(|b| b.handle == h)
+                                        .map(|b| arrowhead_label(&b.name))
+                                        .unwrap_or_else(|| "Closed filled".to_string()),
+                                    None => leader_arrow_label(doc, ds, ld.arrow_enabled),
+                                };
+                                let mut arrow_opts: Vec<String> =
+                                    std::iter::once("Closed filled".to_string())
+                                        .chain(
+                                            doc.block_records
+                                                .iter()
+                                                .filter(|b| b.name.starts_with('_'))
+                                                .map(|b| arrowhead_label(&b.name)),
+                                        )
+                                        .collect();
+                                // Keep the current value selectable even when it
+                                // isn't in the standard list (e.g. "None", or a
+                                // style arrow whose block isn't underscore-named).
+                                if !arrow_opts.contains(&arrow_label) {
+                                    arrow_opts.insert(0, arrow_label.clone());
+                                }
+                                set_row_value(
                                     &mut sections,
                                     "arrow_block",
-                                    leader_arrow_label(doc, ds, ld.arrow_enabled),
+                                    PropValue::Choice {
+                                        selected: arrow_label,
+                                        options: arrow_opts,
+                                    },
                                 );
-                                set_row(&mut sections, "arrow_size", format!("{:.4}", ds.dimasz));
-                                set_row(&mut sections, "dim_line_lw", dim_lineweight_label(ds.dimlwd));
+
+                                let asz = dov::real(xd, dov::DIMASZ).unwrap_or(ds.dimasz);
+                                set_row_value(
+                                    &mut sections,
+                                    "arrow_size",
+                                    PropValue::EditText(format!("{asz:.4}")),
+                                );
+
+                                let lwd = dov::int(xd, dov::DIMLWD).unwrap_or(ds.dimlwd);
+                                let lw_sel = dim_lineweight_label(lwd);
+                                let mut lw_opts = lineweight_options();
+                                if !lw_opts.contains(&lw_sel) {
+                                    lw_opts.insert(0, lw_sel.clone());
+                                }
+                                set_row_value(
+                                    &mut sections,
+                                    "dim_line_lw",
+                                    PropValue::Choice {
+                                        selected: lw_sel,
+                                        options: lw_opts,
+                                    },
+                                );
+
+                                // Dim-line colour stays read-only: it lives in the
+                                // leader's override_color, which the file format
+                                // layer does not yet serialise, so making it
+                                // editable would silently lose the pick on save.
                                 set_row(
                                     &mut sections,
                                     "dim_line_color",
                                     dim_color_label(ds.dimclrd, &ld.override_color),
                                 );
-                                set_row(&mut sections, "text_offset", format!("{:.4}", ds.dimgap));
-                                set_row(
+
+                                let gap = dov::real(xd, dov::DIMGAP).unwrap_or(ds.dimgap);
+                                set_row_value(
+                                    &mut sections,
+                                    "text_offset",
+                                    PropValue::EditText(format!("{gap:.4}")),
+                                );
+
+                                let tad = dov::int(xd, dov::DIMTAD).unwrap_or(ds.dimtad);
+                                set_row_value(
                                     &mut sections,
                                     "text_pos_vert",
-                                    dimtad_label(ds.dimtad).to_string(),
+                                    PropValue::Choice {
+                                        selected: dimtad_label(tad).to_string(),
+                                        options: tad_options(),
+                                    },
                                 );
-                                set_row(
+
+                                let scl = dov::real(xd, dov::DIMSCALE).unwrap_or(ds.dimscale);
+                                set_row_value(
                                     &mut sections,
                                     "dim_scale_overall",
-                                    format!("{:.4}", ds.dimscale),
+                                    PropValue::EditText(format!("{scl:.4}")),
                                 );
                             }
                         }
@@ -1325,6 +1402,72 @@ fn set_row(
     }
 }
 
+/// Replace a row's value with an arbitrary control (editable field, dropdown,
+/// colour picker …) rather than plain read-only text.
+fn set_row_value(
+    sections: &mut [crate::scene::model::object::PropSection],
+    field: &str,
+    value: crate::scene::model::object::PropValue,
+) {
+    for section in sections.iter_mut() {
+        if let Some(row) = section.props.iter_mut().find(|p| p.field == field) {
+            row.value = value;
+            return;
+        }
+    }
+}
+
+/// The lineweight dropdown options (named defaults + the standard millimetre
+/// steps), matching the labels `dim_lineweight_label` produces.
+pub(crate) fn lineweight_options() -> Vec<String> {
+    let mut v = vec![
+        "ByLayer".to_string(),
+        "ByBlock".to_string(),
+        "Default".to_string(),
+    ];
+    for lw in [
+        0, 5, 9, 13, 15, 18, 20, 25, 30, 35, 40, 50, 53, 60, 70, 80, 90, 100, 106, 120, 140, 158,
+        200, 211,
+    ] {
+        v.push(format!("{:.2} mm", lw as f64 / 100.0));
+    }
+    v
+}
+
+/// Inverse of `dim_lineweight_label`: a lineweight label → DIMLWD enum value.
+pub(crate) fn dim_lineweight_from_label(label: &str) -> i16 {
+    match label.trim() {
+        "ByLayer" => -1,
+        "ByBlock" => -2,
+        "Default" => -3,
+        s => s
+            .trim_end_matches("mm")
+            .trim()
+            .parse::<f64>()
+            .map(|mm| (mm * 100.0).round() as i16)
+            .unwrap_or(-3),
+    }
+}
+
+/// The vertical-text-position dropdown options, matching `dimtad_label`.
+pub(crate) fn tad_options() -> Vec<String> {
+    ["Centered", "Above", "Outside", "JIS", "Below"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Inverse of `dimtad_label`: a vertical-position label → DIMTAD value.
+pub(crate) fn dimtad_from_label(label: &str) -> i16 {
+    match label.trim() {
+        "Above" => 1,
+        "Outside" => 2,
+        "JIS" => 3,
+        "Below" => 4,
+        _ => 0,
+    }
+}
+
 /// Resolve a dimension style by name (case-insensitive), falling back to
 /// "Standard" when the name is blank.
 fn find_dim_style<'a>(
@@ -1365,7 +1508,7 @@ fn dimtad_label(dimtad: i16) -> &'static str {
 /// Friendly arrowhead name from an arrowhead block-record name (the `_CLOSED…`
 /// style internal names map to their palette labels; a null/empty name is the
 /// closed-filled default).
-fn arrowhead_label(name: &str) -> String {
+pub(crate) fn arrowhead_label(name: &str) -> String {
     let key = name.trim().trim_start_matches('_').to_ascii_uppercase();
     let label = match key.as_str() {
         "" | "CLOSEDFILLED" => "Closed filled",

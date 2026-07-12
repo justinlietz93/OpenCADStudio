@@ -86,15 +86,33 @@ pub fn apply_common_prop(entity: &mut EntityType, field: &str, value: &str) {
 }
 
 /// Replace — or, when `values` is `None`, remove — the single XDATA record for
-/// application `app` on an entity's common data, preserving every other record
-/// and the verbatim DWG EED blob. `ExtendedData` only appends, so a plain
-/// `add_record` would leave a stale duplicate that the reader picks first;
-/// rebuilding the collection is the only way to edit or clear a record.
-pub fn set_common_xdata(
-    entity: &mut EntityType,
+/// application `app` on the entity `handle`, leaving every other record intact.
+///
+/// This is document-level rather than entity-level for two DWG-correctness
+/// reasons the entity alone can't satisfy:
+///   * the writer skips a record whose application is not registered in the
+///     APPID table, so a brand-new hyperlink/override would silently vanish —
+///     register the app (with a real handle) first;
+///   * on a DWG read each application's XDATA is captured verbatim in
+///     `raw_dwg_eed`, and that verbatim blob *wins* over a structured record on
+///     save. Editing an existing record therefore also has to drop that app's
+///     stale verbatim block (matched by APPID handle) so the new value wins.
+/// Other applications' verbatim blocks are preserved for round-trip fidelity.
+pub fn set_entity_xdata(
+    doc: &mut acadrust::CadDocument,
+    handle: acadrust::Handle,
     app: &str,
     values: Option<Vec<acadrust::xdata::XDataValue>>,
 ) {
+    if values.is_some() && !doc.app_ids.contains(app) {
+        let mut a = acadrust::tables::AppId::new(app);
+        a.handle = doc.allocate_handle();
+        let _ = doc.app_ids.add(a);
+    }
+    let app_handle = doc.app_ids.get(app).map(|a| a.handle.value());
+    let Some(entity) = doc.get_entity_mut(handle) else {
+        return;
+    };
     let common = entity.common_mut();
     let mut rebuilt = acadrust::xdata::ExtendedData::new();
     for r in common.extended_data.records() {
@@ -109,7 +127,13 @@ pub fn set_common_xdata(
         }
         rebuilt.add_record(rec);
     }
-    rebuilt.raw_dwg_eed = common.extended_data.raw_dwg_eed.clone();
+    rebuilt.raw_dwg_eed = common
+        .extended_data
+        .raw_dwg_eed
+        .iter()
+        .filter(|(h, _)| Some(*h) != app_handle)
+        .cloned()
+        .collect();
     common.extended_data = rebuilt;
 }
 

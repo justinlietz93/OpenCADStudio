@@ -544,11 +544,21 @@ impl LeaderTess for Leader {
         anno_scale: f32,
     ) -> crate::scene::model::wire_model::WireModel {
         use crate::scene::convert::tessellate::{append_arrow, arrow_from_block, ArrowKind, DimGeom};
+        use crate::entities::dim_override as dov;
         use crate::scene::model::wire_model::WireModel;
+        let xd = &self.common.extended_data;
         let color = if selected {
             WireModel::SELECTED
         } else {
             entity_color
+        };
+        // A concrete DIMLWD override sets the leader line's weight; ByLayer /
+        // ByBlock / Default and no override keep the resolved weight passed in.
+        let line_weight_px = match dov::int(xd, dov::DIMLWD) {
+            Some(lwd) if lwd >= 0 => crate::scene::view::render::lineweight_to_px(
+                &acadrust::types::LineWeight::from_value(lwd),
+            ),
+            _ => line_weight_px,
         };
         let name = handle.value().to_string();
         let p3 = |v: &acadrust::types::Vector3| -> [f32; 3] {
@@ -602,21 +612,22 @@ impl LeaderTess for Leader {
                     || (self.dimension_style.trim().is_empty()
                         && s.name.eq_ignore_ascii_case("Standard"))
             });
-            let dim_scale = style
-                .map(|s| {
-                    if s.dimscale > 1e-6 {
-                        s.dimscale
-                    } else {
-                        anno_scale as f64
-                    }
-                })
+            // Each of DIMSCALE / DIMASZ / DIMLDRBLK prefers a per-object override
+            // over the style, so an edited leader arrow renders at its new size,
+            // scale and shape.
+            let dim_scale = dov::real(xd, dov::DIMSCALE)
+                .filter(|v| *v > 1e-6)
+                .or_else(|| style.map(|s| s.dimscale).filter(|v| *v > 1e-6))
                 .unwrap_or(anno_scale as f64);
-            let arrow_size = match style {
-                Some(s) => (s.dimasz * dim_scale) as f32,
-                None => (self.text_height as f32).max(1.0) * anno_scale,
+            let ovr_asz = dov::real(xd, dov::DIMASZ);
+            let arrow_size = match (ovr_asz, style) {
+                (Some(a), _) => (a * dim_scale) as f32,
+                (None, Some(s)) => (s.dimasz * dim_scale) as f32,
+                (None, None) => (self.text_height as f32).max(1.0) * anno_scale,
             };
-            let arrow = match style {
-                Some(s) => arrow_from_block(document, s.dimldrblk, arrow_size.max(0.001)),
+            let arrow_blk = dov::handle(xd, dov::DIMLDRBLK).or_else(|| style.map(|s| s.dimldrblk));
+            let arrow = match arrow_blk {
+                Some(h) => arrow_from_block(document, h, arrow_size.max(0.001)),
                 None => ArrowKind::Triangle {
                     size: arrow_size.max(0.001),
                     filled: true,
