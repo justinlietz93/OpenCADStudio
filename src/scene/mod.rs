@@ -1874,6 +1874,77 @@ impl Scene {
         list
     }
 
+    /// Add a named annotation scale to the drawing's `ACAD_SCALELIST`. Returns
+    /// `false` if a scale with that name already exists. Creates the SCALELIST
+    /// dictionary (and registers it in the root dictionary) when the drawing
+    /// has none of its own — many minimal files carry no scale list at all.
+    pub fn add_scale(&mut self, name: &str, paper: f64, drawing: f64) -> bool {
+        use acadrust::objects::{Dictionary, ObjectType, Scale};
+        let root_h = self.document.header.named_objects_dict_handle;
+        let scalelist_h = match crate::scene::annotative::as_dict(&self.document, root_h)
+            .and_then(|d| d.get("ACAD_SCALELIST"))
+        {
+            Some(h) => h,
+            None => {
+                let h = self.document.allocate_handle();
+                let mut d = Dictionary::new();
+                d.handle = h;
+                d.owner = root_h;
+                self.document.objects.insert(h, ObjectType::Dictionary(d));
+                if let Some(ObjectType::Dictionary(root)) =
+                    self.document.objects.get_mut(&root_h)
+                {
+                    root.add_entry("ACAD_SCALELIST", h);
+                }
+                h
+            }
+        };
+        // Reject a duplicate name (case-insensitive).
+        if crate::scene::annotative::as_dict(&self.document, scalelist_h)
+            .is_some_and(|d| d.entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)))
+        {
+            return false;
+        }
+        let sh = self.document.allocate_handle();
+        let mut s = Scale::new(name, paper, drawing);
+        s.handle = sh;
+        s.owner_handle = scalelist_h;
+        self.document.objects.insert(sh, ObjectType::Scale(s));
+        if let Some(ObjectType::Dictionary(sl)) = self.document.objects.get_mut(&scalelist_h) {
+            sl.add_entry(name, sh);
+        }
+        true
+    }
+
+    /// Remove a named annotation scale from the drawing's `ACAD_SCALELIST`
+    /// (both the `Scale` object and its dictionary entry). Returns `false` if
+    /// no such scale exists. The current annotation scale should not be removed
+    /// — the caller guards that.
+    pub fn remove_scale(&mut self, name: &str) -> bool {
+        use acadrust::objects::ObjectType;
+        let root_h = self.document.header.named_objects_dict_handle;
+        let Some(scalelist_h) = crate::scene::annotative::as_dict(&self.document, root_h)
+            .and_then(|d| d.get("ACAD_SCALELIST"))
+        else {
+            return false;
+        };
+        let Some(sh) = crate::scene::annotative::as_dict(&self.document, scalelist_h).and_then(
+            |d| {
+                d.entries
+                    .iter()
+                    .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                    .map(|(_, h)| *h)
+            },
+        ) else {
+            return false;
+        };
+        self.document.objects.remove(&sh);
+        if let Some(ObjectType::Dictionary(sl)) = self.document.objects.get_mut(&scalelist_h) {
+            sl.entries.retain(|(n, _)| !n.eq_ignore_ascii_case(name));
+        }
+        true
+    }
+
     /// List of user viewports in the current layout: (handle, label, frozen_layer_handles).
     pub fn viewport_list(&self) -> Vec<(acadrust::Handle, String, Vec<acadrust::Handle>)> {
         if self.current_layout == "Model" {

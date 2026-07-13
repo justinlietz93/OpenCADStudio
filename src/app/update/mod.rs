@@ -1647,6 +1647,31 @@ impl OpenCADStudio {
                 self.scale_popup_open = false;
                 Task::none()
             }
+            Message::ScaleListDelete(name) => {
+                let i = self.active_tab;
+                let current = self.tabs[i]
+                    .scene
+                    .document
+                    .header
+                    .current_annotation_scale
+                    .clone();
+                // Keep the popup open so several can be removed in a row; never
+                // remove the current annotation scale out from under the drawing.
+                if !name.eq_ignore_ascii_case(&current) {
+                    self.push_undo_snapshot(i, "SCALELISTEDIT");
+                    if self.tabs[i].scene.remove_scale(&name) {
+                        self.tabs[i].dirty = true;
+                    }
+                }
+                Task::none()
+            }
+            Message::ScaleListAddPrompt => {
+                // Close the popup and prime the command line; the user types the
+                // ratio (e.g. 1:50) and commits it via SCALELISTEDIT ADD.
+                self.scale_popup_open = false;
+                self.command_line.input = "SCALELISTEDIT ADD ".to_string();
+                Task::none()
+            }
             Message::ToggleLayoutList => {
                 self.layout_list_open ^= true;
                 Task::none()

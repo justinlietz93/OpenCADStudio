@@ -23,7 +23,7 @@ pub fn scale_popup_overlay(
     pill: Option<Rectangle>,
     win: (f32, f32),
 ) -> Element<'static, Message> {
-    let rows: Vec<Element<'static, Message>> = file_scales
+    let mut rows: Vec<Element<'static, Message>> = file_scales
         .into_iter()
         .map(|(label, anno_scale, vp_scale)| {
             let active = if is_model {
@@ -38,10 +38,18 @@ pub fn scale_popup_overlay(
             } else {
                 Message::SetViewportScale(vp_scale)
             };
-            scale_row(label, active, msg)
+            // Editing the drawing's scale list is a model-space concept; in paper
+            // space the popup only picks a viewport scale, so no delete there.
+            scale_row(label, active, is_model && !active, msg)
         })
         .collect();
 
+    // Model space gets an "add scale" affordance at the bottom.
+    if is_model {
+        rows.push(add_scale_row());
+    }
+
+    let width = if is_model { 150.0 } else { 120.0 };
     let panel = container(column(rows))
         .style(|_: &Theme| container::Style {
             background: Some(Background::Color(PANEL_BG)),
@@ -52,25 +60,30 @@ pub fn scale_popup_overlay(
             },
             ..Default::default()
         })
-        .width(Length::Fixed(120.0));
+        .width(Length::Fixed(width));
 
-    let positioned = super::position_statusbar_popup(panel.into(), pill, win, 120.0, true);
+    let positioned = super::position_statusbar_popup(panel.into(), pill, win, width, true);
 
     mouse_area(positioned)
         .on_press(Message::CloseScalePopup)
         .into()
 }
 
-fn scale_row(label: String, active: bool, msg: Message) -> Element<'static, Message> {
+fn scale_row(
+    label: String,
+    active: bool,
+    deletable: bool,
+    msg: Message,
+) -> Element<'static, Message> {
     let check = crate::ui::icons::check_cell(active, CHECK_COLOR);
 
-    let lbl = text(label)
+    let lbl = text(label.clone())
         .size(11)
         .color(if active { LABEL_ON } else { LABEL_OFF });
 
     let content = row![check, lbl].spacing(6).align_y(iced::Center);
 
-    button(content)
+    let select = button(content)
         .on_press(msg)
         .style(|_: &Theme, status| button::Style {
             background: Some(Background::Color(match status {
@@ -80,7 +93,41 @@ fn scale_row(label: String, active: bool, msg: Message) -> Element<'static, Mess
             ..Default::default()
         })
         .width(Fill)
-        .padding([4, 10])
+        .padding([4, 10]);
+
+    if deletable {
+        let del = button(text("\u{00d7}").size(13).color(LABEL_OFF))
+            .on_press(Message::ScaleListDelete(label))
+            .style(|_: &Theme, status| button::Style {
+                background: Some(Background::Color(match status {
+                    button::Status::Hovered => ROW_HOVER,
+                    _ => Color::TRANSPARENT,
+                })),
+                text_color: match status {
+                    button::Status::Hovered => DELETE_HOVER,
+                    _ => LABEL_OFF,
+                },
+                ..Default::default()
+            })
+            .padding([4, 8]);
+        row![select, del].align_y(iced::Center).into()
+    } else {
+        select.into()
+    }
+}
+
+fn add_scale_row() -> Element<'static, Message> {
+    button(text("+ Add scale...").size(11).color(CHECK_COLOR))
+        .on_press(Message::ScaleListAddPrompt)
+        .style(|_: &Theme, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered => ROW_HOVER,
+                _ => Color::TRANSPARENT,
+            })),
+            ..Default::default()
+        })
+        .width(Fill)
+        .padding([5, 10])
         .into()
 }
 
@@ -108,6 +155,12 @@ const CHECK_COLOR: Color = Color {
     r: 0.35,
     g: 0.75,
     b: 1.00,
+    a: 1.0,
+};
+const DELETE_HOVER: Color = Color {
+    r: 0.95,
+    g: 0.45,
+    b: 0.40,
     a: 1.0,
 };
 const LABEL_ON: Color = Color {

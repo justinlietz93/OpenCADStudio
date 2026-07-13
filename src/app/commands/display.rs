@@ -704,19 +704,79 @@ impl OpenCADStudio {
                 }
             }
 
-            // SCALELISTEDIT — list the drawing's annotation scales.
+            // SCALELISTEDIT — list / add / delete the drawing's annotation scales.
+            //   SCALELISTEDIT              list
+            //   SCALELISTEDIT ADD 1:50     add (name is a paper:drawing ratio)
+            //   SCALELISTEDIT DELETE 1:50  remove (not the current scale)
             cmd if cmd == "SCALELISTEDIT" || cmd.starts_with("SCALELISTEDIT ") => {
-                let names: Vec<String> = self.tabs[i]
-                    .scene
-                    .scale_list()
-                    .into_iter()
-                    .map(|(n, _, _)| n)
-                    .collect();
-                if names.is_empty() {
-                    self.command_line.push_info("No annotation scales defined.");
-                } else {
-                    self.command_line
-                        .push_output(&format!("Annotation scales: {}", names.join(", ")));
+                let rest = cmd.trim_start_matches("SCALELISTEDIT").trim();
+                let mut parts = rest.splitn(2, char::is_whitespace);
+                let sub = parts.next().unwrap_or("").to_uppercase();
+                let arg = parts.next().unwrap_or("").trim();
+                match sub.as_str() {
+                    "ADD" => match arg.split_once(':') {
+                        Some((p, d)) => match (p.trim().parse::<f64>(), d.trim().parse::<f64>()) {
+                            (Ok(paper), Ok(drawing)) if paper > 0.0 && drawing > 0.0 => {
+                                self.push_undo_snapshot(i, "SCALELISTEDIT");
+                                if self.tabs[i].scene.add_scale(arg, paper, drawing) {
+                                    self.tabs[i].dirty = true;
+                                    self.command_line
+                                        .push_output(&format!("Added annotation scale {arg}."));
+                                } else {
+                                    self.command_line
+                                        .push_info(&format!("Scale {arg} already exists."));
+                                }
+                            }
+                            _ => self
+                                .command_line
+                                .push_error("SCALELISTEDIT ADD: use a ratio like 1:50."),
+                        },
+                        None => self
+                            .command_line
+                            .push_error("SCALELISTEDIT ADD: use a ratio like 1:50."),
+                    },
+                    "DELETE" | "REMOVE" => {
+                        let current = self.tabs[i]
+                            .scene
+                            .document
+                            .header
+                            .current_annotation_scale
+                            .clone();
+                        if arg.is_empty() {
+                            self.command_line.push_info("Usage: SCALELISTEDIT DELETE <name>");
+                        } else if arg.eq_ignore_ascii_case(&current) {
+                            self.command_line.push_error(&format!(
+                                "Cannot delete the current annotation scale ({arg})."
+                            ));
+                        } else {
+                            self.push_undo_snapshot(i, "SCALELISTEDIT");
+                            if self.tabs[i].scene.remove_scale(arg) {
+                                self.tabs[i].dirty = true;
+                                self.command_line
+                                    .push_output(&format!("Removed annotation scale {arg}."));
+                            } else {
+                                self.command_line
+                                    .push_info(&format!("No annotation scale named {arg}."));
+                            }
+                        }
+                    }
+                    "" => {
+                        let names: Vec<String> = self.tabs[i]
+                            .scene
+                            .scale_list()
+                            .into_iter()
+                            .map(|(n, _, _)| n)
+                            .collect();
+                        if names.is_empty() {
+                            self.command_line.push_info("No annotation scales defined.");
+                        } else {
+                            self.command_line
+                                .push_output(&format!("Annotation scales: {}", names.join(", ")));
+                        }
+                    }
+                    _ => self
+                        .command_line
+                        .push_info("Usage: SCALELISTEDIT [ADD 1:50 | DELETE 1:50]"),
                 }
             }
 

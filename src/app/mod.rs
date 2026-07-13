@@ -1455,6 +1455,10 @@ pub enum Message {
     ToggleScalePopup,
     /// Close the scale picker popup.
     CloseScalePopup,
+    /// Delete a named annotation scale from the drawing's ACAD_SCALELIST.
+    ScaleListDelete(String),
+    /// Prime the command line to add a new annotation scale.
+    ScaleListAddPrompt,
     /// Toggle the leftmost hamburger's Model/layout list dropdown.
     ToggleLayoutList,
     /// Close the Model/layout list dropdown.
