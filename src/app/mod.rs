@@ -664,6 +664,12 @@ pub(super) struct OpenCADStudio {
     scale_manager_name_buf: String,
     scale_manager_paper_buf: String,
     scale_manager_drawing_buf: String,
+    /// The editor holds an unsaved *new* scale (created only on Apply) rather
+    /// than editing the selected one. Reset when a row is selected.
+    scale_manager_new: bool,
+    /// Open transaction for the scale manager — restored if the window closes
+    /// without Apply, mirroring the style managers' staging.
+    scale_stage: Option<crate::app::style_ops::ScaleStage>,
 
     // ── Plot Style Panel ──────────────────────────────────────────────────
     /// Selected ACI index in the panel (1-255).
@@ -2257,6 +2263,8 @@ impl OpenCADStudio {
             scale_manager_name_buf: String::new(),
             scale_manager_paper_buf: String::new(),
             scale_manager_drawing_buf: String::new(),
+            scale_manager_new: false,
+            scale_stage: None,
             layout_manager_rename_buf: String::new(),
             plotstyle_panel_aci: 1,
             ps_color_buf: String::new(),

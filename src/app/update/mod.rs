@@ -77,6 +77,9 @@ impl OpenCADStudio {
         ) {
             self.style_stage_discard();
         }
+        if self.active_modal == Some(ScaleManager) {
+            self.scale_stage_discard();
+        }
         match self.active_modal {
             Some(Layers) => self.ribbon.deactivate_tool_if("LAYERS"),
             Some(Plot) => {
@@ -1650,6 +1653,10 @@ impl OpenCADStudio {
             Message::ScaleManagerOpen => {
                 let i = self.active_tab;
                 self.scale_popup_open = false;
+                // Snapshot so New / Delete / edits revert if closed without Apply.
+                self.scale_stage_begin();
+                // Open on the current scale, ready to edit (not a new draft).
+                self.scale_manager_new = false;
                 let cur = self.tabs[i]
                     .scene
                     .document
@@ -1661,6 +1668,7 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::ScaleManagerSelect(name) => {
+                self.scale_manager_new = false;
                 self.load_scale_editor(&name);
                 Task::none()
             }
@@ -1677,35 +1685,69 @@ impl OpenCADStudio {
                 Task::none()
             }
             Message::ScaleManagerNew => {
-                let i = self.active_tab;
-                if let (name, Some(paper), Some(drawing)) = self.scale_editor_values() {
-                    if !name.is_empty() && paper > 0.0 && drawing > 0.0 {
-                        self.push_undo_snapshot(i, "SCALELISTEDIT");
-                        if self.tabs[i].scene.add_scale(&name, paper, drawing) {
-                            self.scale_manager_selected = name;
-                            self.tabs[i].dirty = true;
-                        }
-                    }
-                }
+                // Start a blank draft — nothing is added to the drawing until
+                // Apply; closing the manager without Apply discards it.
+                self.scale_manager_new = true;
+                self.scale_manager_selected.clear();
+                self.scale_manager_name_buf.clear();
+                self.scale_manager_paper_buf = "1".to_string();
+                self.scale_manager_drawing_buf = "1".to_string();
                 Task::none()
             }
             Message::ScaleManagerApply => {
+                // Fold the editor's add / edit into the staged document, then
+                // commit the whole transaction (this change plus any staged
+                // deletes) as one undo entry. A new draft is added; otherwise
+                // the selected scale is renamed / re-ratioed.
                 let i = self.active_tab;
-                let old = self.scale_manager_selected.clone();
-                if !old.is_empty() {
-                    if let (name, Some(paper), Some(drawing)) = self.scale_editor_values() {
-                        if !name.is_empty() && paper > 0.0 && drawing > 0.0 {
-                            self.push_undo_snapshot(i, "SCALELISTEDIT");
-                            if self.tabs[i].scene.edit_scale(&old, &name, paper, drawing) {
-                                self.scale_manager_selected = name;
-                                self.tabs[i].dirty = true;
+                let name = self.scale_manager_name_buf.trim().to_string();
+                let paper = self.scale_manager_paper_buf.trim().parse::<f64>().ok();
+                let drawing = self.scale_manager_drawing_buf.trim().parse::<f64>().ok();
+                if let (false, Some(paper), Some(drawing)) = (name.is_empty(), paper, drawing) {
+                    if paper > 0.0 && drawing > 0.0 {
+                        let ok = if self.scale_manager_new {
+                            self.tabs[i].scene.add_scale(&name, paper, drawing)
+                        } else {
+                            let old = self.scale_manager_selected.clone();
+                            if !old.is_empty()
+                                && self.tabs[i].scene.edit_scale(&old, &name, paper, drawing)
+                            {
+                                // Follow a rename of the current annotation scale
+                                // so its pointer doesn't dangle.
+                                if self.tabs[i]
+                                    .scene
+                                    .document
+                                    .header
+                                    .current_annotation_scale
+                                    .eq_ignore_ascii_case(&old)
+                                {
+                                    self.tabs[i].scene.document.header.current_annotation_scale =
+                                        name.clone();
+                                }
+                                true
+                            } else if !old.is_empty()
+                                && self.tabs[i].scene.scale_paper_drawing(&old).is_none()
+                            {
+                                // Editing one of the built-in fallback scales the
+                                // picker shows when the drawing has no scale list
+                                // of its own — materialise it as a real scale.
+                                self.tabs[i].scene.add_scale(&name, paper, drawing)
+                            } else {
+                                false
                             }
+                        };
+                        if ok {
+                            self.scale_manager_new = false;
+                            self.scale_manager_selected = name;
+                            self.scale_stage_mark();
                         }
                     }
                 }
+                self.scale_stage_commit();
                 Task::none()
             }
             Message::ScaleManagerDelete => {
+                // Staged: reverted on close unless a later Apply commits it.
                 let i = self.active_tab;
                 let sel = self.scale_manager_selected.clone();
                 let cur = self.tabs[i]
@@ -1714,16 +1756,21 @@ impl OpenCADStudio {
                     .header
                     .current_annotation_scale
                     .clone();
-                if !sel.is_empty() && !sel.eq_ignore_ascii_case(&cur) {
-                    self.push_undo_snapshot(i, "SCALELISTEDIT");
+                if !self.scale_manager_new && !sel.is_empty() && !sel.eq_ignore_ascii_case(&cur) {
                     if self.tabs[i].scene.remove_scale(&sel) {
                         self.scale_manager_selected.clear();
-                        self.tabs[i].dirty = true;
+                        self.scale_manager_name_buf.clear();
+                        self.scale_manager_paper_buf.clear();
+                        self.scale_manager_drawing_buf.clear();
+                        self.scale_stage_mark();
                     }
                 }
                 Task::none()
             }
             Message::ScaleManagerSetCurrent => {
+                // Set Current takes effect immediately, exactly like the scale
+                // pill — it isn't part of the staged list transaction, so it is
+                // never rolled back when the manager closes.
                 let i = self.active_tab;
                 let sel = self.scale_manager_selected.clone();
                 if let Some((_, anno, _)) = self
@@ -1734,9 +1781,13 @@ impl OpenCADStudio {
                     .find(|(n, _, _)| n.eq_ignore_ascii_case(&sel))
                 {
                     self.tabs[i].scene.annotation_scale = anno;
-                    self.tabs[i].scene.document.header.current_annotation_scale = sel;
+                    self.tabs[i].scene.document.header.current_annotation_scale = sel.clone();
+                    if let Some((p, d)) = self.tabs[i].scene.scale_paper_drawing(&sel) {
+                        if d != 0.0 {
+                            self.tabs[i].scene.document.header.annotation_scale_value = p / d;
+                        }
+                    }
                     self.tabs[i].scene.bump_geometry();
-                    self.tabs[i].dirty = true;
                 }
                 Task::none()
             }
@@ -4040,12 +4091,4 @@ impl OpenCADStudio {
         }
     }
 
-    /// The scale-manager editor's (name, paper?, drawing?) parsed from buffers.
-    fn scale_editor_values(&self) -> (String, Option<f64>, Option<f64>) {
-        (
-            self.scale_manager_name_buf.trim().to_string(),
-            self.scale_manager_paper_buf.trim().parse::<f64>().ok(),
-            self.scale_manager_drawing_buf.trim().parse::<f64>().ok(),
-        )
-    }
 }

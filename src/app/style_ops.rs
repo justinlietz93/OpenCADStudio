@@ -608,3 +608,123 @@ fn object_handle(doc: &acadrust::CadDocument, name: &str, kind: StyleKind) -> Op
         matches.then_some(h)
     })
 }
+
+// ── Annotation-scale manager staging (mirrors the style-manager stage) ──────
+
+/// Snapshot of the drawing's annotation-scale *list* a scale manager can stage:
+/// the `Scale` objects and the `ACAD_SCALELIST` dictionary. The current scale is
+/// deliberately excluded — Set Current takes effect immediately, like the pill.
+pub(super) struct ScaleSnapshot {
+    scales: Vec<(Handle, ObjectType)>,
+    scalelist: Option<(Handle, ObjectType)>,
+}
+
+/// An in-progress scale-manager transaction (baseline restored on discard).
+/// `changed` guards against a no-op Apply dirtying the drawing / pushing undo.
+pub(super) struct ScaleStage {
+    dirty_at_open: bool,
+    baseline: ScaleSnapshot,
+    changed: bool,
+}
+
+impl OpenCADStudio {
+    fn capture_scale_state(&self) -> ScaleSnapshot {
+        let i = self.active_tab;
+        let doc = &self.tabs[i].scene.document;
+        let scales: Vec<(Handle, ObjectType)> = doc
+            .objects
+            .iter()
+            .filter(|(_, o)| matches!(o, ObjectType::Scale(_)))
+            .map(|(h, o)| (*h, o.clone()))
+            .collect();
+        let root_h = doc.header.named_objects_dict_handle;
+        let scalelist_h =
+            crate::scene::annotative::as_dict(doc, root_h).and_then(|d| d.get("ACAD_SCALELIST"));
+        let scalelist = scalelist_h.and_then(|h| doc.objects.get(&h).map(|o| (h, o.clone())));
+        ScaleSnapshot { scales, scalelist }
+    }
+
+    fn restore_scale_state(&mut self, snap: &ScaleSnapshot) {
+        let i = self.active_tab;
+        let root_h = self.tabs[i].scene.document.header.named_objects_dict_handle;
+        let cur_scalelist_h =
+            crate::scene::annotative::as_dict(&self.tabs[i].scene.document, root_h)
+                .and_then(|d| d.get("ACAD_SCALELIST"));
+        let doc = &mut self.tabs[i].scene.document;
+        doc.objects.retain(|_, o| !matches!(o, ObjectType::Scale(_)));
+        if let Some(h) = cur_scalelist_h {
+            doc.objects.remove(&h);
+        }
+        for (h, o) in &snap.scales {
+            doc.objects.insert(*h, o.clone());
+        }
+        if let Some((h, o)) = &snap.scalelist {
+            doc.objects.insert(*h, o.clone());
+        }
+        // Restore ONLY the ACAD_SCALELIST root entry — leave every other root
+        // entry alone (a modal blocks concurrent edits, but be surgical anyway).
+        let baseline_scalelist_h = snap.scalelist.as_ref().map(|(h, _)| *h);
+        if let Some(ObjectType::Dictionary(root)) = doc.objects.get_mut(&root_h) {
+            root.entries.retain(|(k, _)| k != "ACAD_SCALELIST");
+            if let Some(h) = baseline_scalelist_h {
+                root.entries.push(("ACAD_SCALELIST".to_string(), h));
+            }
+        }
+        self.tabs[i].scene.bump_geometry();
+    }
+
+    /// Begin a staging transaction for a freshly-opened scale manager.
+    pub(super) fn scale_stage_begin(&mut self) {
+        let dirty_at_open = self.tabs[self.active_tab].dirty;
+        let baseline = self.capture_scale_state();
+        self.scale_stage = Some(ScaleStage {
+            dirty_at_open,
+            baseline,
+            changed: false,
+        });
+    }
+
+    /// Flag that the staged scale list has actually been mutated, so a later
+    /// Apply commits (and a no-op Apply doesn't dirty the drawing).
+    pub(super) fn scale_stage_mark(&mut self) {
+        if let Some(s) = self.scale_stage.as_mut() {
+            s.changed = true;
+        }
+    }
+
+    /// Commit staged scale changes (Apply): one undo entry, mark dirty, and
+    /// re-baseline so the still-open window keeps staging afresh. A no-op Apply
+    /// (nothing staged) does nothing.
+    pub(super) fn scale_stage_commit(&mut self) {
+        let i = self.active_tab;
+        let Some(stage) = self.scale_stage.take() else {
+            return;
+        };
+        if !stage.changed {
+            self.scale_stage = Some(stage);
+            return;
+        }
+        let edited = self.capture_scale_state();
+        self.restore_scale_state(&stage.baseline);
+        self.push_undo_snapshot(i, "SCALELISTEDIT");
+        self.restore_scale_state(&edited);
+        self.tabs[i].dirty = true;
+        self.scale_stage = Some(ScaleStage {
+            dirty_at_open: true,
+            baseline: edited,
+            changed: false,
+        });
+    }
+
+    /// Discard staged scale changes (window closed without Apply): restore the
+    /// snapshot taken when the manager opened. No-op when nothing was staged.
+    pub(super) fn scale_stage_discard(&mut self) {
+        let Some(stage) = self.scale_stage.take() else {
+            return;
+        };
+        if stage.changed {
+            self.restore_scale_state(&stage.baseline);
+            self.tabs[self.active_tab].dirty = stage.dirty_at_open;
+        }
+    }
+}

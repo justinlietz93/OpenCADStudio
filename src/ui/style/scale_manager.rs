@@ -146,28 +146,29 @@ pub fn view_window<'a, 'b>(
     });
 
     // ── Right: editor (name + paper:drawing) ──────────────────────────────
-    let field = |label: &'static str, value: &str, on: fn(String) -> Message| {
-        row![
-            text(label).size(11).color(DIM).width(96),
-            text_input("", value)
-                .on_input(on)
-                .style(field_style)
-                .size(12)
-                .padding([5, 8])
-                .width(Fill),
-        ]
-        .align_y(iced::Center)
-        .spacing(6)
-    };
+    let field =
+        |label: &'static str, ph: &'static str, value: &str, on: fn(String) -> Message| {
+            row![
+                text(label).size(11).color(DIM).width(96),
+                text_input(ph, value)
+                    .on_input(on)
+                    .style(field_style)
+                    .size(12)
+                    .padding([5, 8])
+                    .width(Fill),
+            ]
+            .align_y(iced::Center)
+            .spacing(6)
+        };
 
     let editor = container(
         column![
             text("Scale").size(10).color(DIM),
-            field("Name", name_buf, Message::ScaleManagerNameBuf),
-            field("Paper units", paper_buf, Message::ScaleManagerPaperBuf),
-            field("Drawing units", drawing_buf, Message::ScaleManagerDrawingBuf),
+            field("Name", "e.g. 1:50", name_buf, Message::ScaleManagerNameBuf),
+            field("Paper units", "1", paper_buf, Message::ScaleManagerPaperBuf),
+            field("Drawing units", "50", drawing_buf, Message::ScaleManagerDrawingBuf),
             Space::new().height(6),
-            text("Type the ratio in the fields, then New to add or Apply to update the selected scale.")
+            text("New starts a blank scale; edit the fields and click Apply to save it. Changes are discarded if you close without Apply.")
                 .size(10)
                 .color(DIM),
         ]
