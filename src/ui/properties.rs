@@ -434,18 +434,28 @@ impl PropertiesPanel {
             );
             return prop_row_widget(label, selector);
         }
-        // Generic per-field colour picker (hatch gradient colours) — routes to
-        // the field, not the entity's main colour.
-        if field == "gradient_color_1" || field == "gradient_color_2" {
+        // Generic per-field colour picker — routes to the named field, not the
+        // entity's main colour. Used by hatch gradient colours and the dim-line
+        // colour override (Leader / Dimension). Dim colours legitimately take
+        // ByLayer / ByBlock; gradient colours do not.
+        if field == "gradient_color_1" || field == "gradient_color_2" || field == "dim_line_color" {
             let open = self.open_color_field.as_deref() == Some(field);
             let fsel = field.to_string();
-            let selector = crate::ui::color_select::color_selector(
-                color,
-                open,
+            let extras = if field == "dim_line_color" {
+                crate::ui::color_select::ColorExtras {
+                    by_layer: true,
+                    by_block: true,
+                }
+            } else {
                 crate::ui::color_select::ColorExtras {
                     by_layer: false,
                     by_block: false,
-                },
+                }
+            };
+            let selector = crate::ui::color_select::color_selector(
+                color,
+                open,
+                extras,
                 move |c| Message::PropColorFieldChanged {
                     field: fsel.clone(),
                     color: c,

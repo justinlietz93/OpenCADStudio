@@ -1290,11 +1290,18 @@ fn tessellate_dimension_inner(
     );
 
     // Per-spec colours: DIMCLRD (dim/arrows), DIMCLRE (ext), DIMCLRT (text).
-    // 0=ByBlock and 256=ByLayer fall through to entity_color.
+    // 0=ByBlock and 256=ByLayer fall through to entity_color. DIMCLRD also
+    // honours a per-object ACAD_DSTYLE override (code 176) so an edited
+    // dim-line colour renders even without touching the style.
     let dim_color = if selected {
         WireModel::SELECTED
     } else {
-        resolve_dim_color(style.map(|s| s.dimclrd).unwrap_or(0), entity_color)
+        let dim_clr = crate::entities::dim_override::int(
+            &dim.base().common.extended_data,
+            crate::entities::dim_override::DIMCLRD,
+        )
+        .unwrap_or_else(|| style.map(|s| s.dimclrd).unwrap_or(0));
+        resolve_dim_color(dim_clr, entity_color)
     };
     let ext_color = if selected {
         WireModel::SELECTED

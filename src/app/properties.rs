@@ -414,6 +414,20 @@ impl OpenCADStudio {
                             })
                         {
                             sections.extend(crate::entities::dimension::style_sections(style));
+
+                            // The style groups are a read-only mirror, but the
+                            // dim-line colour is an editable per-object override:
+                            // prefer the ACAD_DSTYLE code-176 (ACI) override, else
+                            // the style's DIMCLRD.
+                            use crate::entities::dim_override as dov;
+                            use crate::scene::model::object::PropValue;
+                            let dim_c = dov::color(&d.base().common.extended_data, dov::DIMCLRD)
+                                .unwrap_or_else(|| acadrust::types::Color::from_index(style.dimclrd));
+                            set_row_value(
+                                &mut sections,
+                                "dim_line_color",
+                                PropValue::ColorChoice(dim_c),
+                            );
                         }
                     }
 
@@ -561,14 +575,16 @@ impl OpenCADStudio {
                                     },
                                 );
 
-                                // Dim-line colour stays read-only: it lives in the
-                                // leader's override_color, which the file format
-                                // layer does not yet serialise, so making it
-                                // editable would silently lose the pick on save.
-                                set_row(
+                                // Dim-line colour: a per-object ACAD_DSTYLE
+                                // override (code 176, an ACI index) wins over the
+                                // style's DIMCLRD. Editable — the picked colour is
+                                // written back as that override so it round-trips.
+                                let dim_c = dov::color(xd, dov::DIMCLRD)
+                                    .unwrap_or_else(|| acadrust::types::Color::from_index(ds.dimclrd));
+                                set_row_value(
                                     &mut sections,
                                     "dim_line_color",
-                                    dim_color_label(ds.dimclrd, &ld.override_color),
+                                    PropValue::ColorChoice(dim_c),
                                 );
 
                                 let gap = dov::real(xd, dov::DIMGAP).unwrap_or(ds.dimgap);
@@ -1575,18 +1591,6 @@ fn dim_lineweight_label(dimlwd: i16) -> String {
         -3 => "Default".to_string(),
         v if v >= 0 => format!("{:.2} mm", v as f64 / 100.0),
         _ => "Default".to_string(),
-    }
-}
-
-/// DIMCLRD color (ACI) → label; ByBlock falls back to the leader's override.
-fn dim_color_label(dimclrd: i16, override_color: &acadrust::types::Color) -> String {
-    match dimclrd {
-        0 => match override_color.rgb() {
-            Some((r, g, b)) => format!("RGB({r},{g},{b})"),
-            None => "ByBlock".to_string(),
-        },
-        256 => "ByLayer".to_string(),
-        n => format!("Color {n}"),
     }
 }
 

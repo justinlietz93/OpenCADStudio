@@ -547,10 +547,29 @@ impl LeaderTess for Leader {
         use crate::entities::dim_override as dov;
         use crate::scene::model::wire_model::WireModel;
         let xd = &self.common.extended_data;
+        // Dim-line colour: a per-object ACAD_DSTYLE override (code 176, an ACI
+        // index) wins over the assigned dim style's DIMCLRD; ByLayer / ByBlock
+        // (0 / 256) and no setting fall through to the entity colour.
         let color = if selected {
             WireModel::SELECTED
         } else {
-            entity_color
+            let dim_clr = dov::int(xd, dov::DIMCLRD).or_else(|| {
+                document
+                    .dim_styles
+                    .iter()
+                    .find(|s| {
+                        s.name.eq_ignore_ascii_case(&self.dimension_style)
+                            || (self.dimension_style.trim().is_empty()
+                                && s.name.eq_ignore_ascii_case("Standard"))
+                    })
+                    .map(|s| s.dimclrd)
+            });
+            match dim_clr {
+                Some(idx) if idx != 0 && idx != 256 => crate::scene::convert::tess_util::aci_to_rgba(
+                    &acadrust::types::Color::from_index(idx),
+                ),
+                _ => entity_color,
+            }
         };
         // A concrete DIMLWD override sets the leader line's weight; ByLayer /
         // ByBlock / Default and no override keep the resolved weight passed in.

@@ -6,6 +6,7 @@
 //! renderer and the properties panel prefer an override over the style default,
 //! so editing one of these rows writes here and the change round-trips to file.
 
+use acadrust::types::Color;
 use acadrust::xdata::{ExtendedData, XDataValue};
 use acadrust::{CadDocument, Handle};
 
@@ -13,6 +14,7 @@ use acadrust::{CadDocument, Handle};
 pub const DIMSCALE: i16 = 40; // overall scale       (real)
 pub const DIMASZ: i16 = 41; // arrow size          (real)
 pub const DIMTAD: i16 = 77; // text vertical pos   (int16)
+pub const DIMCLRD: i16 = 176; // dim line colour     (int16 = ACI index)
 pub const DIMGAP: i16 = 147; // text offset / gap   (real)
 pub const DIMLWD: i16 = 371; // dim line lineweight (int16)
 pub const DIMLDRBLK: i16 = 341; // leader arrow block  (handle)
@@ -56,6 +58,13 @@ pub fn int(xd: &ExtendedData, code: i16) -> Option<i16> {
             XDataValue::Integer16(n) => Some(n),
             _ => None,
         })
+}
+
+/// The colour override for `code`, if present. Dim-colour overrides are stored
+/// as an ACI index (the same `int16` slot the dimension style uses), so this
+/// decodes it back into a `Color` (0 = ByBlock, 256 = ByLayer, else indexed).
+pub fn color(xd: &ExtendedData, code: i16) -> Option<Color> {
+    int(xd, code).map(Color::from_index)
 }
 
 /// The handle-valued override for `code`, if present.

@@ -2620,6 +2620,42 @@ impl OpenCADStudio {
             Message::PropColorFieldChanged { field, color } => {
                 let i = self.active_tab;
                 let handles = self.property_target_handles(i);
+                // Dim-line colour override (Leader / Dimension): write it as an
+                // ACAD_DSTYLE code-176 override (an ACI index) so it round-trips
+                // through DWG and DXF. RGB picks collapse to the nearest ACI, in
+                // line with the rest of the dim-colour stack (index-only through
+                // the file layer). Guarded to leaders / dimensions so a mixed
+                // selection can't stamp the override onto other entities.
+                if field == "dim_line_color" {
+                    let aci = color.approximate_index();
+                    let targets: Vec<acadrust::Handle> = handles
+                        .iter()
+                        .copied()
+                        .filter(|&h| {
+                            matches!(
+                                self.tabs[i].scene.document.get_entity(h),
+                                Some(acadrust::EntityType::Leader(_))
+                                    | Some(acadrust::EntityType::Dimension(_))
+                            )
+                        })
+                        .collect();
+                    if !targets.is_empty() {
+                        self.push_undo_snapshot(i, "CHPROP");
+                        for &handle in &targets {
+                            crate::entities::dim_override::set(
+                                &mut self.tabs[i].scene.document,
+                                handle,
+                                crate::entities::dim_override::DIMCLRD,
+                                Some(acadrust::xdata::XDataValue::Integer16(aci)),
+                            );
+                        }
+                        self.invalidate_property_targets(i, &targets);
+                        self.tabs[i].properties.open_color_field = None;
+                        self.tabs[i].dirty = true;
+                        self.refresh_properties();
+                    }
+                    return Task::none();
+                }
                 if !handles.is_empty() {
                     self.push_undo_snapshot(i, "CHPROP");
                     let idx = if field == "gradient_color_2" { 1 } else { 0 };
