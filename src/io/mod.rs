@@ -550,27 +550,11 @@ pub fn set_saved_active_layout(doc: &mut CadDocument, name: &str) {
         }
         return;
     }
-    // Attach a new CTAB entry to the root named-object dictionary. Prefer the
-    // header handle; fall back to scanning for the root dict (the one holding
-    // `ACAD_LAYOUT`) since a from-scratch document leaves the header handle null
-    // until it is built. No root dict at all → `$TILEMODE` still records
-    // model-vs-paper.
-    let named = doc.header.named_objects_dict_handle;
-    let root = if !named.is_null() && doc.objects.contains_key(&named) {
-        named
-    } else {
-        match doc.objects.iter().find_map(|(h, o)| match o {
-            ObjectType::Dictionary(d)
-                if d.entries.iter().any(|(k, _)| k.eq_ignore_ascii_case("ACAD_LAYOUT")) =>
-            {
-                Some(*h)
-            }
-            _ => None,
-        }) {
-            Some(h) => h,
-            None => return,
-        }
-    };
+    // Attach a new CTAB entry to the root named-object dictionary. Resolve it
+    // robustly (or synthesise one) so the current-tab record persists even on a
+    // from-scratch document, or a foreign DWG whose header root pointer is
+    // unresolvable. See `annotative::root_named_dict_handle`.
+    let root = crate::scene::annotative::root_named_dict_handle(doc);
     let handle = doc.allocate_handle();
     let mut var = DictionaryVariable::new("CTAB", name);
     var.handle = handle;

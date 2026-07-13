@@ -1967,7 +1967,11 @@ impl Scene {
         let scalelist_h = match self.scalelist_dict_handle() {
             Some(h) => h,
             None => {
-                let root_h = self.document.header.named_objects_dict_handle;
+                // Resolve (or synthesise) the root robustly — a drawing whose
+                // header root pointer is unresolvable would otherwise register
+                // the new dictionary against a missing root and silently orphan
+                // it. See `annotative::root_named_dict_handle`.
+                let root_h = crate::scene::annotative::root_named_dict_handle(&mut self.document);
                 let h = self.document.allocate_handle();
                 let mut d = Dictionary::new();
                 d.handle = h;

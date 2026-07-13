@@ -18,6 +18,53 @@ pub fn as_dict(doc: &CadDocument, handle: Handle) -> Option<&Dictionary> {
     }
 }
 
+/// Resolve the drawing's root named-objects dictionary, creating one if the
+/// file has none reachable.
+///
+/// The canonical pointer is `header.named_objects_dict_handle`, but DWGs
+/// written by some programs leave it dangling — pointing at a handle that never
+/// loaded, or at a non-dictionary — while the real named-object sub-dictionaries
+/// (`ACAD_LAYOUT`, `ACAD_SCALELIST`, …) are instead owned by an unrelated handle
+/// that is not a dictionary. When the pointer can't be resolved we adopt any
+/// top-level (`owner == NULL`) dictionary as the root; failing that we synthesise
+/// a fresh, empty root so that *registering* a new named-object entry (a page
+/// setup, an annotation scale, the `CTAB` variable) actually persists instead of
+/// silently no-opping against a missing dictionary.
+///
+/// Idempotent: the resolved or created handle is written back to the header, so
+/// later calls return the same dictionary rather than minting another root. On a
+/// well-formed drawing this returns the existing root untouched.
+pub fn root_named_dict_handle(doc: &mut CadDocument) -> Handle {
+    let h = doc.header.named_objects_dict_handle;
+    if matches!(doc.objects.get(&h), Some(ObjectType::Dictionary(_))) {
+        return h;
+    }
+    // A top-level dictionary is already present (the standard root shape) — adopt
+    // the richest one (matching the DWG writer's own root heuristic) and repair
+    // the stale header pointer.
+    if let Some(root) = doc
+        .objects
+        .iter()
+        .filter_map(|(k, o)| match o {
+            ObjectType::Dictionary(d) if d.owner.is_null() => Some((*k, d.entries.len())),
+            _ => None,
+        })
+        .max_by_key(|&(_, n)| n)
+        .map(|(k, _)| k)
+    {
+        doc.header.named_objects_dict_handle = root;
+        return root;
+    }
+    // Nothing reachable — build a fresh, empty root named-objects dictionary.
+    let nh = doc.allocate_handle();
+    let mut d = Dictionary::new();
+    d.handle = nh;
+    d.owner = Handle::NULL;
+    doc.objects.insert(nh, ObjectType::Dictionary(d));
+    doc.header.named_objects_dict_handle = nh;
+    nh
+}
+
 /// Set the per-object annotative flag on the entity types that carry one
 /// (MTEXT, MULTILEADER). Turning it off also strips the per-object annotation
 /// context and legacy markers via [`clear_annotation_context`] so the object

@@ -9,10 +9,34 @@ use acadrust::objects::{Dictionary, ObjectType, PlotSettings};
 use acadrust::Handle;
 
 impl Scene {
+    /// Handle of the `ACAD_PLOTSETTINGS` dictionary, located robustly.
+    ///
+    /// The canonical path is the header's `acad_plotsettings_dict_handle`, but
+    /// DWGs written by other programs don't always leave that pointer resolvable
+    /// (the header handle points at no loaded dictionary — see
+    /// [`crate::scene::annotative::root_named_dict_handle`]). In that case fall
+    /// back to the dictionary that owns the drawing's `PlotSettings` objects,
+    /// mirroring [`Scene::scalelist_dict_handle`]. Returns `None` when the
+    /// drawing genuinely has no named page setups.
+    fn plotsettings_dict_handle(&self) -> Option<Handle> {
+        let dh = self.document.header.acad_plotsettings_dict_handle;
+        if matches!(self.document.objects.get(&dh), Some(ObjectType::Dictionary(_))) {
+            return Some(dh);
+        }
+        let owner = self.document.objects.values().find_map(|o| match o {
+            ObjectType::PlotSettings(ps) => Some(ps.owner),
+            _ => None,
+        })?;
+        matches!(
+            self.document.objects.get(&owner),
+            Some(ObjectType::Dictionary(_))
+        )
+        .then_some(owner)
+    }
+
     /// Names of the document's named page setups, in dictionary order.
     pub fn page_setup_names(&self) -> Vec<String> {
-        let dh = self.document.header.acad_plotsettings_dict_handle;
-        match self.document.objects.get(&dh) {
+        match self.plotsettings_dict_handle().and_then(|h| self.document.objects.get(&h)) {
             Some(ObjectType::Dictionary(d)) => d.entries.iter().map(|(k, _)| k.clone()).collect(),
             _ => Vec::new(),
         }
@@ -20,7 +44,7 @@ impl Scene {
 
     /// Clone the named page setup's `PlotSettings`, or `None` if absent.
     pub fn page_setup_get(&self, name: &str) -> Option<PlotSettings> {
-        let dh = self.document.header.acad_plotsettings_dict_handle;
+        let dh = self.plotsettings_dict_handle()?;
         let ObjectType::Dictionary(d) = self.document.objects.get(&dh)? else {
             return None;
         };
@@ -32,13 +56,17 @@ impl Scene {
     }
 
     /// Handle of the `ACAD_PLOTSETTINGS` dictionary, creating it (and its entry
-    /// in the root named-objects dictionary) if the drawing has none yet.
+    /// in the root named-objects dictionary) if the drawing has none yet. The
+    /// root itself is resolved (or synthesised) robustly so registration
+    /// persists even on drawings whose header root pointer is unresolvable.
     fn ensure_plotsettings_dict(&mut self) -> Handle {
-        let dh = self.document.header.acad_plotsettings_dict_handle;
-        if matches!(self.document.objects.get(&dh), Some(ObjectType::Dictionary(_))) {
+        if let Some(dh) = self.plotsettings_dict_handle() {
+            // Keep the header pointer in sync with the located dictionary so the
+            // writer and later reads agree on it.
+            self.document.header.acad_plotsettings_dict_handle = dh;
             return dh;
         }
-        let root = self.document.header.named_objects_dict_handle;
+        let root = crate::scene::annotative::root_named_dict_handle(&mut self.document);
         let mut dict = Dictionary::new();
         dict.handle = self.document.allocate_handle();
         dict.owner = root;
@@ -56,7 +84,7 @@ impl Scene {
 
     /// Handle of the named page setup, if it exists.
     fn page_setup_handle(&self, name: &str) -> Option<Handle> {
-        let dh = self.document.header.acad_plotsettings_dict_handle;
+        let dh = self.plotsettings_dict_handle()?;
         let ObjectType::Dictionary(d) = self.document.objects.get(&dh)? else {
             return None;
         };
@@ -85,7 +113,9 @@ impl Scene {
 
     /// Remove the named page setup (object + dictionary entry). No-op if absent.
     pub fn page_setup_delete(&mut self, name: &str) {
-        let dict_handle = self.document.header.acad_plotsettings_dict_handle;
+        let Some(dict_handle) = self.plotsettings_dict_handle() else {
+            return;
+        };
         let handle = if let Some(ObjectType::Dictionary(d)) =
             self.document.objects.get_mut(&dict_handle)
         {
@@ -109,7 +139,9 @@ impl Scene {
         if self.page_setup_handle(new).is_some() {
             return; // name collision
         }
-        let dict_handle = self.document.header.acad_plotsettings_dict_handle;
+        let Some(dict_handle) = self.plotsettings_dict_handle() else {
+            return;
+        };
         let mut renamed = None;
         if let Some(ObjectType::Dictionary(d)) = self.document.objects.get_mut(&dict_handle) {
             if let Some(e) = d.entries.iter_mut().find(|(k, _)| k == old) {
