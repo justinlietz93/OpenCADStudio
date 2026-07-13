@@ -31,6 +31,11 @@ pub struct CameraState {
 /// own inner `Pipeline` instance drawn into its own rectangle.
 #[derive(Debug)]
 pub struct ViewportData {
+    /// Stable identity of the source viewport (its entity handle / tile index /
+    /// sheet role). The renderer addresses pipeline slots by list index but
+    /// drops off-canvas viewports, so this lets the slot detect when it has been
+    /// reused by a different viewport and reset its (index-addressed) caches.
+    pub(in crate::scene) instance_id: u64,
     pub(in crate::scene) wires: Arc<Vec<WireModel>>,
     /// Live command-preview / interim / grip-drag overlay wires. Kept out of
     /// the main `wires` buffer so a drag re-uploads only this small set each
@@ -224,6 +229,24 @@ impl shader::Primitive for Primitive {
 
         for (i, vp) in self.viewports.iter().enumerate() {
             let inner = &mut pipeline.inners[self.base_slot + i];
+            // Pipeline slots are addressed by list index, but off-canvas
+            // viewports are dropped from the list — so a slot can be reused by a
+            // DIFFERENT viewport across frames (e.g. the first viewport scrolls
+            // off the canvas and the second slides into its slot). When that
+            // happens every cache key below belongs to the previous occupant;
+            // reset them so wires, text, hatches, meshes and Face3D all
+            // re-upload for the new viewport instead of showing the previous
+            // one's (differently frustum-culled) content — which otherwise makes
+            // the surviving viewport's text/geometry vanish.
+            if inner.slot_id != vp.instance_id {
+                inner.slot_id = vp.instance_id;
+                inner.cached_epoch = (u64::MAX, u64::MAX, u64::MAX);
+                inner.cached_wire_id = u64::MAX;
+                inner.cached_selection = (u64::MAX, u64::MAX);
+                inner.cached_mesh_key = (u64::MAX, u64::MAX);
+                inner.cached_face3d_key = (u64::MAX, false);
+                inner.render_sig = u64::MAX;
+            }
             // The MSAA / depth / resolve textures are always sized to the
             // FULL viewport rectangle (not the on-canvas-visible portion)
             // so the camera matrices render at consistent aspect / scale.
@@ -1151,7 +1174,18 @@ impl Scene {
             pv.extend_from_slice(&self.preview_text);
             Arc::new(pv)
         };
+        // Stable per-viewport identity (tagged so tile / sheet / content /
+        // implicit-model instances never collide), so a reused pipeline slot
+        // can tell it changed occupant and reset its caches.
+        let instance_id: u64 = if let Some(t) = inst.tile_idx {
+            0x1000_0000_0000_0000 | (t as u64)
+        } else if inst.paper_sheet {
+            0x2000_0000_0000_0000
+        } else {
+            0x3000_0000_0000_0000 | inst.handle.value()
+        };
         Some(ViewportData {
+            instance_id,
             wires: all_wires,
             preview_wires,
             face3d_wires,

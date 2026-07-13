@@ -228,6 +228,12 @@ pub struct Pipeline {
     /// `render` skips the (per-pixel, GPU-dominating) hatch pass this frame. The
     /// scene-render cache holds the full-quality frame once the view settles.
     pub skip_hatch_frame: bool,
+    /// Stable identity of the viewport that last used this (index-addressed)
+    /// pipeline slot. The renderer's viewport list drops off-canvas viewports,
+    /// so a slot can be reused by a *different* viewport across frames; when the
+    /// occupant changes, all cache keys above belong to the previous one and are
+    /// reset so every buffer re-uploads. `u64::MAX` = never used.
+    pub slot_id: u64,
 }
 
 impl Pipeline {
@@ -1226,6 +1232,7 @@ impl Pipeline {
             render_sig: u64::MAX,
             skip_geometry: false,
             skip_hatch_frame: false,
+            slot_id: u64::MAX,
         }
     }
 
