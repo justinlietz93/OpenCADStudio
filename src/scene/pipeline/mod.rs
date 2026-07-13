@@ -1,5 +1,9 @@
 pub mod face3d_gpu;
 pub mod hatch_gpu;
+/// WebGL2 texture-backed hatch renderer (wasm only) — the storage-buffer
+/// `hatch_gpu` path is unavailable on WebGL2, so hatches render through this.
+#[cfg(target_arch = "wasm32")]
+pub mod hatch_web_gpu;
 pub mod wipeout_gpu;
 pub mod image_gpu;
 pub mod mesh_gpu;
@@ -47,6 +51,12 @@ pub struct Pipeline {
     /// hatch in the frame. `None` on WebGL2 (wasm), which lacks
     /// vertex-stage storage buffers.
     hatch_pipeline: Option<wgpu::RenderPipeline>,
+    /// WebGL2 (wasm) texture-backed hatch pipeline + its group-1 layout. Used
+    /// where `hatch_pipeline` is `None` because WebGL2 lacks storage buffers.
+    #[cfg(target_arch = "wasm32")]
+    hatch_web_bgl1: wgpu::BindGroupLayout,
+    #[cfg(target_arch = "wasm32")]
+    hatch_web_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     /// SDF text-quad pipeline (Phase 2b): draws per-glyph quads sampling the
     /// shared glyph atlas. Fed only when `OCS_TEXT_SDF` is set (else no verts).
@@ -74,7 +84,9 @@ pub struct Pipeline {
     uniform_bind_group: wgpu::BindGroup,
     wipeout_bgl1: wgpu::BindGroupLayout,
     /// Group-1 layout for the batched hatch pipeline (storage buffers
-    /// for instances / boundary / families / dashes). `None` on WebGL2.
+    /// for instances / boundary / families / dashes). `None` on WebGL2, where
+    /// hatches render through `hatch_web_gpu` and this is never read.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     hatch_bgl1: Option<wgpu::BindGroupLayout>,
     image_bgl1: wgpu::BindGroupLayout,
     /// Group-1 layout for the text pipeline (atlas texture + sampler).
@@ -137,6 +149,10 @@ pub struct Pipeline {
     /// call with per-instance visibility masking the rest. All pattern line
     /// families are uploaded (no cap). `None` on WebGL2.
     gpu_hatch: Option<hatch_gpu::HatchGpu>,
+    /// WebGL2 hatch fills — one texture-backed `HatchWebGpu` per hatch, drawn in
+    /// the hatch pass where the batched `gpu_hatch` is `None` (wasm).
+    #[cfg(target_arch = "wasm32")]
+    gpu_hatches_web: Vec<hatch_web_gpu::HatchWebGpu>,
     /// Wipeout masks — solid fills rendered after wires in a separate pass via
     /// the legacy per-primitive `WipeoutGpu` renderer.
     gpu_wipeouts: Vec<WipeoutGpu>,
@@ -577,6 +593,77 @@ impl Pipeline {
             cache: None,
         });
         (Some(hatch_bgl1), Some(hatch_pipeline))
+        };
+
+        // WebGL2 hatch pipeline: texture-backed, replaces the storage-buffer
+        // batched path (disabled above on wasm). Same frame layout / depth /
+        // MSAA state as the wipeout pass.
+        #[cfg(target_arch = "wasm32")]
+        let (hatch_web_bgl1, hatch_web_pipeline) = {
+            let bgl1 = hatch_web_gpu::HatchWebGpu::bind_group_layout(device);
+            let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("hatch_web.pipeline_layout"),
+                bind_group_layouts: &[&frame_bgl, &bgl1],
+                push_constant_ranges: &[],
+            });
+            let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+                label: Some("hatch_web.shader"),
+                source: wgpu::ShaderSource::Wgsl(std::borrow::Cow::Borrowed(include_str!(
+                    "../../shaders/hatch_web.wgsl"
+                ))),
+            });
+            let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("hatch_web.pipeline"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[wgpu::VertexBufferLayout {
+                        array_stride: 16,
+                        step_mode: wgpu::VertexStepMode::Vertex,
+                        attributes: &[wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        }],
+                    }],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                },
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    cull_mode: None,
+                    ..Default::default()
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: wgpu::TextureFormat::Depth32Float,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::LessEqual,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState {
+                        constant: 1,
+                        slope_scale: 1.0,
+                        clamp: 0.0,
+                    },
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: MSAA_SAMPLES,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some("fs_main"),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                }),
+                multiview: None,
+                cache: None,
+            });
+            (bgl1, pipeline)
         };
 
         // ── Mesh pipeline ──────────────────────────────────────────────────
@@ -1167,6 +1254,10 @@ impl Pipeline {
             wire_const_bgl: None,
             wipeout_pipeline,
             hatch_pipeline,
+            #[cfg(target_arch = "wasm32")]
+            hatch_web_bgl1,
+            #[cfg(target_arch = "wasm32")]
+            hatch_web_pipeline,
             image_pipeline,
             text_pipeline,
             text_atlas_bgl,
@@ -1208,6 +1299,8 @@ impl Pipeline {
             gpu_selected_wires: vec![],
             gpu_preview_wires: vec![],
             gpu_hatch: None,
+            #[cfg(target_arch = "wasm32")]
+            gpu_hatches_web: vec![],
             gpu_wipeouts: vec![],
             wipeout_skip_flags: vec![],
             wipeout_pixel_scissors: vec![],
@@ -1628,16 +1721,34 @@ impl Pipeline {
             .collect();
     }
 
-    pub fn upload_hatches(&mut self, device: &wgpu::Device, hatches: &[HatchModel]) {
-        // No batched pipeline (WebGL2) → nothing to upload.
-        let Some(bgl1) = &self.hatch_bgl1 else {
-            self.gpu_hatch = None;
-            return;
-        };
-        let renderable: Vec<HatchModel> =
-            hatches.iter().filter(|h| h.boundary.len() >= 3).cloned().collect();
-        self.gpu_hatch =
-            hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+    pub fn upload_hatches(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        hatches: &[HatchModel],
+    ) {
+        // WebGL2: no storage-buffer batched pipeline — render each hatch through
+        // the texture-backed per-hatch renderer instead (issue #204).
+        #[cfg(target_arch = "wasm32")]
+        {
+            let webs: Vec<hatch_web_gpu::HatchWebGpu> = hatches
+                .iter()
+                .filter(|h| h.boundary.len() >= 3)
+                .map(|h| hatch_web_gpu::HatchWebGpu::new(device, queue, h, &self.hatch_web_bgl1))
+                .collect();
+            self.gpu_hatches_web = webs;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let _ = queue;
+            let Some(bgl1) = &self.hatch_bgl1 else {
+                self.gpu_hatch = None;
+                return;
+            };
+            let renderable: Vec<HatchModel> =
+                hatches.iter().filter(|h| h.boundary.len() >= 3).cloned().collect();
+            self.gpu_hatch = hatch_gpu::HatchGpu::build(device, bgl1, &renderable);
+        }
     }
 
     pub fn upload_wipeouts(&mut self, device: &wgpu::Device, wipeouts: &[HatchModel]) {
@@ -1792,6 +1903,20 @@ impl Pipeline {
                     pass.set_bind_group(1, &batch.bind_group, &[]);
                     pass.set_vertex_buffer(0, batch.vertex_buffer.slice(..));
                     pass.draw(0..batch.vertex_count, 0..1);
+                }
+            }
+
+            // WebGL2: the batched `gpu_hatch` is always None (no storage
+            // buffers), so draw the texture-backed per-hatch renderer in this
+            // same pass (before wires, so wires stay on top). (#204)
+            #[cfg(target_arch = "wasm32")]
+            if !self.skip_hatch_frame {
+                pass.set_pipeline(&self.hatch_web_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                for hatch in &self.gpu_hatches_web {
+                    pass.set_bind_group(1, &hatch.bind_group, &[]);
+                    pass.set_vertex_buffer(0, hatch.vertex_buffer.slice(..));
+                    pass.draw(0..6, 0..1);
                 }
             }
         }

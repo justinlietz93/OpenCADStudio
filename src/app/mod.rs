@@ -2448,6 +2448,7 @@ impl OpenCADStudio {
     }
 
     /// Install `cmd` as the active interactive command for tab `tab`.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn set_active_command(
         &mut self,
         tab: usize,
@@ -2459,6 +2460,7 @@ impl OpenCADStudio {
     }
 
     /// Push an error message from the plugin runtime to the command line.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn push_plugin_error(&mut self, msg: &str) {
         self.command_line.push_error(msg);
     }

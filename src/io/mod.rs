@@ -346,6 +346,7 @@ pub fn dropped_on_save_count(
 /// Before overwriting `path`, copy the existing file to a sibling `<name>.bak`
 /// so a faulty or accidental save can be recovered (#205). Best-effort: a
 /// failed backup never blocks the save itself.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn write_backup(path: &std::path::Path) {
     if path.exists() {
         let _ = std::fs::copy(path, path.with_extension("bak"));

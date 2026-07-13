@@ -319,10 +319,10 @@ impl shader::Primitive for Primitive {
                 let sel_changed = vp.selected_sig != inner.cached_epoch.2;
                 if geo_changed || sel_changed {
                     if fill_mode {
-                        inner.upload_hatches(device, &vp.hatches[..]);
+                        inner.upload_hatches(device, queue, &vp.hatches[..]);
                         inner.upload_wipeouts(device, &vp.wipeout_hatches[..]);
                     } else {
-                        inner.upload_hatches(device, &[]);
+                        inner.upload_hatches(device, queue, &[]);
                         inner.upload_wipeouts(device, &[]);
                     }
                 }

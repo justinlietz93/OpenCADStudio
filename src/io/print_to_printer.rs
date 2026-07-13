@@ -18,6 +18,7 @@ use crate::scene::WireModel;
 /// "printto" shell verb); copies / quality / colour need the driver DEVMODE
 /// and are ignored there.
 #[derive(Debug, Clone, Default)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct PrintOptions {
     /// Target printer name, or `None` for the system default.
     pub printer: Option<String>,

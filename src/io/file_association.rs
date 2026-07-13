@@ -86,6 +86,7 @@ pub fn unregister_handler() -> Result<(), String> {
 /// freedesktop `.thumbnailer` (pointing at this binary's `--dwg-thumbnail` mode)
 /// plus the mimetype icons under `$XDG_DATA_HOME`; on Windows it registers the
 /// bundled thumbnail-provider DLL.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn install_thumbnailer() {
     #[cfg(target_os = "linux")]
     {

@@ -145,6 +145,7 @@ impl Scene {
     /// entity has that handle. This is the in-place counterpart to
     /// [`add_entity`](Self::add_entity) used to commit a plugin's edit of an
     /// existing entity.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub fn update_entity(&mut self, mut entity: EntityType) -> bool {
         let handle = entity.common().handle;
         let Some(existing) = self.document.get_entity(handle) else {

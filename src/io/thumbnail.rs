@@ -123,6 +123,7 @@ fn to_rgb(c: [f32; 4]) -> [u8; 3] {
 /// generic icon. Backs the hidden `--dwg-thumbnail` mode the installed
 /// freedesktop `.thumbnailer` invokes. Extraction lives in the shared
 /// [`dwg_thumbnailer`] core (also used by the Windows/macOS handlers).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub fn extract_to_png(input: &std::path::Path, output: &std::path::Path, size: u32) -> bool {
     match dwg_thumbnailer::extract(input, size) {
         Some(mut img) => {
