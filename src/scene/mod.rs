@@ -94,6 +94,33 @@ static GEOMETRY_EPOCH: AtomicU64 = AtomicU64::new(1);
 /// carry when an address is freed and reallocated.
 static WIRE_CONTENT_GEN: AtomicU64 = AtomicU64::new(1);
 
+/// How a single entity changed in a geometry bump. `Modified` covers both a
+/// coordinate edit and a property (colour / layer / linetype) change — anything
+/// that alters the entity's tessellated output. A property-only recolour that
+/// could touch just the GPU WireConst slot is folded into `Modified` for now.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ChangeKind {
+    Added,
+    Removed,
+    Modified,
+}
+
+/// One geometry mutation's delta record. `changes` names the exact handles that
+/// changed; `full` marks a mutation that can't enumerate its handles (undo/redo,
+/// file open, style/display change, any bulk op) and forces every consumer that
+/// spans it to fall back to a whole-drawing rebuild. Every `geometry_epoch` bump
+/// pushes exactly one of these so the journal is never missing a step.
+struct GeometryDelta {
+    epoch: u64,
+    changes: Vec<(Handle, ChangeKind)>,
+    full: bool,
+}
+
+/// Bound on the geometry-delta ring. A consumer that fell more than this many
+/// mutations behind (or predates the oldest retained delta) can't be replayed
+/// and does a one-time full rebuild — the safe fallback, not a correctness hole.
+const GEOMETRY_JOURNAL_CAP: usize = 256;
+
 /// Resolve a viewport's paper-to-model scale ratio from its two
 /// DXF-derived sources.
 ///
@@ -944,6 +971,14 @@ pub struct Scene {
     resident_tess_memo: RefCell<HashMap<Handle, Arc<Vec<WireModel>>>>,
     /// Guard hash for `resident_tess_memo` (anno-scale / bg only).
     resident_tess_guard: std::cell::Cell<u64>,
+    /// Per-mutation delta journal: which handles changed on each `geometry_epoch`
+    /// bump. Bounded ring ([`GEOMETRY_JOURNAL_CAP`]); a derived cache replays the
+    /// entries past its last-synced epoch and patches per-handle instead of
+    /// re-walking the whole document. See [`Scene::replay_since`].
+    geometry_deltas: RefCell<std::collections::VecDeque<GeometryDelta>>,
+    /// Highest epoch whose delta has been evicted from the ring. A consumer
+    /// synced older than this can't be caught up incrementally → full rebuild.
+    geometry_journal_floor: std::cell::Cell<u64>,
 }
 
 impl Scene {
@@ -1025,6 +1060,8 @@ impl Scene {
             tess_memo_guard: std::cell::Cell::new(0),
             resident_tess_memo: RefCell::new(HashMap::default()),
             resident_tess_guard: std::cell::Cell::new(0),
+            geometry_deltas: RefCell::new(std::collections::VecDeque::new()),
+            geometry_journal_floor: std::cell::Cell::new(0),
         }
     }
 
@@ -1145,14 +1182,125 @@ impl Scene {
         arc
     }
 
+    /// Push one delta onto the journal, evicting the oldest past the cap and
+    /// raising the floor so a consumer that fell behind falls back to a full
+    /// rebuild. Every `geometry_epoch` bump must call this exactly once so the
+    /// journal never has a gap (a gap would let a consumer serve stale geometry).
+    fn push_geometry_delta(&self, epoch: u64, changes: Vec<(Handle, ChangeKind)>, full: bool) {
+        let mut ring = self.geometry_deltas.borrow_mut();
+        ring.push_back(GeometryDelta { epoch, changes, full });
+        while ring.len() > GEOMETRY_JOURNAL_CAP {
+            if let Some(ev) = ring.pop_front() {
+                self.geometry_journal_floor.set(ev.epoch);
+            }
+        }
+    }
+
+    /// Coalesce the exact set of handles that changed between a consumer's
+    /// last-synced epoch and now, or `None` if the range can't be replayed
+    /// (a spanned `full` delta, or the consumer fell off the end of the ring) —
+    /// in which case the consumer must rebuild from scratch. Added+Removed of the
+    /// same handle cancel; otherwise the last change wins.
+    pub(crate) fn replay_since(&self, last_epoch: u64) -> Option<Vec<(Handle, ChangeKind)>> {
+        // Anything at or below the floor was evicted — can't catch up.
+        if last_epoch < self.geometry_journal_floor.get() {
+            return None;
+        }
+        let ring = self.geometry_deltas.borrow();
+        let mut state: HashMap<Handle, ChangeKind> = HashMap::default();
+        for d in ring.iter() {
+            if d.epoch <= last_epoch {
+                continue;
+            }
+            if d.full {
+                return None;
+            }
+            for &(h, k) in &d.changes {
+                use ChangeKind::*;
+                match (state.get(&h).copied(), k) {
+                    (None, k) => {
+                        state.insert(h, k);
+                    }
+                    // Added then removed within the window ⇒ never existed.
+                    (Some(Added), Removed) => {
+                        state.remove(&h);
+                    }
+                    // Added stays Added even after later coordinate edits.
+                    (Some(Added), _) => {}
+                    // Removed then re-added ⇒ treat as a modify (exists, re-tess).
+                    (Some(Removed), Added) => {
+                        state.insert(h, Modified);
+                    }
+                    // Removal dominates a prior modify.
+                    (Some(Modified), Removed) => {
+                        state.insert(h, Removed);
+                    }
+                    (Some(Removed), _) => {}
+                    (Some(Modified), _) => {}
+                }
+            }
+        }
+        Some(state.into_iter().collect())
+    }
+
+    /// True when a per-category derived cache (hatches / images / meshes /
+    /// wipeouts) synced at `cached_epoch` is still valid because nothing in its
+    /// category changed since. `in_category(h)` reports membership against the
+    /// live seed map. A removal is treated conservatively as possibly-relevant
+    /// (the handle is already gone from the seed map, so its category can't be
+    /// re-checked), and a `full`/overflow replay always invalidates. This lets a
+    /// plain edit — drawing or moving a line — keep every unrelated category
+    /// cache warm instead of rebuilding all hatch / image / mesh models.
+    fn category_cache_valid(
+        &self,
+        cached_epoch: u64,
+        in_category: impl Fn(Handle) -> bool,
+    ) -> bool {
+        if cached_epoch == self.geometry_epoch {
+            return true;
+        }
+        match self.replay_since(cached_epoch) {
+            None => false,
+            Some(deltas) => deltas
+                .iter()
+                .all(|&(h, k)| k != ChangeKind::Removed && !in_category(h)),
+        }
+    }
+
+    /// Report the exact handles a mutation changed. Folds the memo drop and the
+    /// epoch bump so a call site can't bump geometry without recording what
+    /// changed — the delta lets every derived cache patch per-handle instead of
+    /// re-walking the whole drawing. Blocks are untouched (`block_epoch` stays),
+    /// so this is for top-level entity add / edit / erase, not block-defn edits.
+    pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
+        let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        self.geometry_epoch = epoch;
+        {
+            let mut tm = self.tess_memo.borrow_mut();
+            let mut rm = self.resident_tess_memo.borrow_mut();
+            for &(h, k) in changes {
+                // A changed or removed entity must re-tessellate; a fresh Add has
+                // no memo entry yet, so there is nothing to drop.
+                if matches!(k, ChangeKind::Modified | ChangeKind::Removed) {
+                    tm.remove(&h);
+                    rm.remove(&h);
+                }
+            }
+        }
+        self.push_geometry_delta(epoch, changes.to_vec(), false);
+    }
+
     pub fn bump_geometry(&mut self) {
-        self.geometry_epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        self.geometry_epoch = epoch;
         // Default: also invalidate block definitions. Safe for every caller;
         // operations that know blocks are untouched use `bump_geometry_no_blocks`.
         self.block_epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         // Structural change — drop both per-entity tessellation memos.
         self.tess_memo.borrow_mut().clear();
         self.resident_tess_memo.borrow_mut().clear();
+        // Can't name the changed handles → force every journal consumer to rebuild.
+        self.push_geometry_delta(epoch, Vec::new(), true);
     }
 
     /// Drop a single entity from the tessellation memo so the next render
@@ -1167,8 +1315,15 @@ impl Scene {
     /// definitions. Use only when the edit provably can't change any block
     /// defn (top-level entity create/edit, grip-moving an entity or insert) —
     /// it skips the all-blocks re-tessellation that otherwise spikes edit time.
+    ///
+    /// Prefer [`bump_entities`] when the changed handles are known: this variant
+    /// can't name them, so it pushes a `full` journal delta and every derived
+    /// cache falls back to a whole-drawing rebuild. Kept for migration and for
+    /// callers whose changed set is genuinely unknowable.
     pub fn bump_geometry_no_blocks(&mut self) {
-        self.geometry_epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
+        self.geometry_epoch = epoch;
+        self.push_geometry_delta(epoch, Vec::new(), true);
     }
 
     /// Mark the selection / hover-highlight set dirty without invalidating the
@@ -2648,11 +2803,27 @@ impl Scene {
         // never changes `selected`) keeps the cache warm.
         let sel_sig = self.selected_set_sig();
         {
-            let cache = self.hatch_cache.borrow();
-            if let Some((cached_epoch, cached_sel, ref arc)) = *cache {
-                if cached_epoch == self.geometry_epoch && cached_sel == sel_sig {
-                    return Arc::clone(arc);
+            let reuse = {
+                let cache = self.hatch_cache.borrow();
+                match *cache {
+                    // Selection tint is baked in, so the selected set must also
+                    // match; category = a changed handle that is a hatch/solid fill.
+                    Some((cached_epoch, cached_sel, ref arc))
+                        if cached_sel == sel_sig
+                            && self.category_cache_valid(cached_epoch, |h| {
+                                self.hatches.contains_key(&h)
+                            }) =>
+                    {
+                        Some(Arc::clone(arc))
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(arc) = reuse {
+                if let Some((ref mut e, _, _)) = *self.hatch_cache.borrow_mut() {
+                    *e = self.geometry_epoch;
+                }
+                return arc;
             }
         }
         let arc = Arc::new(self.synced_hatch_models());
@@ -2673,11 +2844,29 @@ impl Scene {
 
     pub(super) fn wipeout_models_arc(&self) -> Arc<Vec<HatchModel>> {
         {
-            let cache = self.wipeout_cache.borrow();
-            if let Some((cached_epoch, ref arc)) = *cache {
-                if cached_epoch == self.geometry_epoch {
-                    return Arc::clone(arc);
+            let reuse = {
+                let cache = self.wipeout_cache.borrow();
+                match *cache {
+                    Some((cached_epoch, ref arc))
+                        // wipeout_models scans the whole document for Wipeout
+                        // entities; relevance = the changed handle is a Wipeout.
+                        if self.category_cache_valid(cached_epoch, |h| {
+                            matches!(
+                                self.document.get_entity(h),
+                                Some(EntityType::Wipeout(_))
+                            )
+                        }) =>
+                    {
+                        Some(Arc::clone(arc))
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(arc) = reuse {
+                if let Some((ref mut e, _)) = *self.wipeout_cache.borrow_mut() {
+                    *e = self.geometry_epoch;
+                }
+                return arc;
             }
         }
         let arc = Arc::new(self.wipeout_models());
@@ -2687,11 +2876,26 @@ impl Scene {
 
     pub(super) fn images_arc(&self) -> Arc<Vec<ImageModel>> {
         {
-            let cache = self.image_cache.borrow();
-            if let Some((cached_epoch, ref arc)) = *cache {
-                if cached_epoch == self.geometry_epoch {
-                    return Arc::clone(arc);
+            let reuse = {
+                let cache = self.image_cache.borrow();
+                match *cache {
+                    Some((cached_epoch, ref arc))
+                        if self.category_cache_valid(cached_epoch, |h| {
+                            self.images.contains_key(&h)
+                        }) =>
+                    {
+                        Some(Arc::clone(arc))
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(arc) = reuse {
+                // No image changed since — keep it warm, just advance the sync
+                // epoch so the next replay window stays short.
+                if let Some((ref mut e, _)) = *self.image_cache.borrow_mut() {
+                    *e = self.geometry_epoch;
+                }
+                return arc;
             }
         }
         let depth_map = self.draw_depth_map();
@@ -2736,11 +2940,32 @@ impl Scene {
 
     pub(super) fn meshes_arc(&self) -> Arc<Vec<MeshLodSet>> {
         {
-            let cache = self.mesh_cache.borrow();
-            if let Some((cached_epoch, ref arc)) = *cache {
-                if cached_epoch == self.geometry_epoch {
-                    return Arc::clone(arc);
+            let reuse = {
+                let cache = self.mesh_cache.borrow();
+                match *cache {
+                    // Top-level solids seed self.meshes; the instanced_block part
+                    // is driven by INSERTs, so an INSERT edit (e.g. a move) must
+                    // also invalidate. Block-definition edits route through
+                    // bump_geometry (a full delta) and invalidate regardless.
+                    Some((cached_epoch, ref arc))
+                        if self.category_cache_valid(cached_epoch, |h| {
+                            self.meshes.contains_key(&h)
+                                || matches!(
+                                    self.document.get_entity(h),
+                                    Some(EntityType::Insert(_))
+                                )
+                        }) =>
+                    {
+                        Some(Arc::clone(arc))
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(arc) = reuse {
+                if let Some((ref mut e, _)) = *self.mesh_cache.borrow_mut() {
+                    *e = self.geometry_epoch;
+                }
+                return arc;
             }
         }
         // Top-level solids: drop those whose layer is off/frozen or that are
@@ -4153,6 +4378,103 @@ impl Scene {
 impl Default for Scene {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod journal_tests {
+    use super::*;
+
+    fn h(v: u64) -> Handle {
+        Handle::new(v)
+    }
+
+    // Collect replay output into a handle->kind map for order-independent asserts.
+    fn as_map(v: Option<Vec<(Handle, ChangeKind)>>) -> Option<HashMap<Handle, ChangeKind>> {
+        v.map(|list| list.into_iter().collect())
+    }
+
+    #[test]
+    fn replay_reports_changes_since_a_synced_epoch() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        s.bump_entities(&[(h(10), ChangeKind::Added)]);
+        let e1 = s.geometry_epoch;
+        s.bump_entities(&[(h(11), ChangeKind::Modified)]);
+
+        // From e0 we see both; from e1 only the second.
+        let all = as_map(s.replay_since(e0)).unwrap();
+        assert_eq!(all.get(&h(10)), Some(&ChangeKind::Added));
+        assert_eq!(all.get(&h(11)), Some(&ChangeKind::Modified));
+        let since_e1 = as_map(s.replay_since(e1)).unwrap();
+        assert_eq!(since_e1.len(), 1);
+        assert_eq!(since_e1.get(&h(11)), Some(&ChangeKind::Modified));
+    }
+
+    #[test]
+    fn added_then_removed_cancels() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        s.bump_entities(&[(h(20), ChangeKind::Added)]);
+        s.bump_entities(&[(h(20), ChangeKind::Removed)]);
+        let m = as_map(s.replay_since(e0)).unwrap();
+        assert!(!m.contains_key(&h(20)), "add+remove in one window must cancel");
+    }
+
+    #[test]
+    fn modified_then_removed_is_removed() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        s.bump_entities(&[(h(21), ChangeKind::Modified)]);
+        s.bump_entities(&[(h(21), ChangeKind::Removed)]);
+        assert_eq!(
+            as_map(s.replay_since(e0)).unwrap().get(&h(21)),
+            Some(&ChangeKind::Removed)
+        );
+    }
+
+    #[test]
+    fn full_bump_forces_rebuild() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        s.bump_entities(&[(h(30), ChangeKind::Added)]);
+        s.bump_geometry(); // full delta
+        assert!(s.replay_since(e0).is_none(), "a spanned full delta ⇒ None");
+    }
+
+    #[test]
+    fn ring_overflow_forces_rebuild() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        for i in 0..(GEOMETRY_JOURNAL_CAP as u64 + 5) {
+            s.bump_entities(&[(h(1000 + i), ChangeKind::Added)]);
+        }
+        assert!(
+            s.replay_since(e0).is_none(),
+            "a consumer older than the ring floor ⇒ None"
+        );
+        // A recent consumer is still replayable.
+        let recent = s.geometry_epoch;
+        s.bump_entities(&[(h(9999), ChangeKind::Added)]);
+        assert!(s.replay_since(recent).is_some());
+    }
+
+    #[test]
+    fn category_gate_keeps_unrelated_caches_warm() {
+        let mut s = Scene::new();
+        let e0 = s.geometry_epoch;
+        // Editing handles NOT in the (empty) hatch category leaves it valid.
+        s.bump_entities(&[(h(40), ChangeKind::Modified)]);
+        assert!(
+            s.category_cache_valid(e0, |hh| s.hatches.contains_key(&hh)),
+            "an edit outside the category must keep it warm"
+        );
+        // A removal is conservatively treated as possibly-relevant.
+        s.bump_entities(&[(h(41), ChangeKind::Removed)]);
+        assert!(
+            !s.category_cache_valid(e0, |hh| s.hatches.contains_key(&hh)),
+            "a removal must invalidate (category unknowable post-erase)"
+        );
     }
 }
 

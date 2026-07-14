@@ -138,7 +138,9 @@ impl Scene {
             if affects_blocks {
                 self.bump_geometry();
             } else {
-                self.bump_geometry_no_blocks();
+                // Plain top-level add: name the new handle so every derived cache
+                // patches in just this one entity instead of rebuilding.
+                self.bump_entities(&[(handle, ChangeKind::Added)]);
             }
         }
         handle
@@ -259,11 +261,14 @@ impl Scene {
             self.meshes.insert(handle, model);
         }
 
-        self.mark_entity_dirty(handle);
         if affects_blocks {
+            self.mark_entity_dirty(handle);
             self.bump_geometry();
         } else {
-            self.bump_geometry_no_blocks();
+            // One entity changed in place: report just this handle so every
+            // derived cache patches it instead of rebuilding (bump_entities also
+            // drops it from the tessellation memos).
+            self.bump_entities(&[(handle, ChangeKind::Modified)]);
         }
         true
     }

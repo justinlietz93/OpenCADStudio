@@ -170,12 +170,12 @@ impl Scene {
             }
         }
         // Only the transformed entities changed (a top-level move/rotate/scale/
-        // mirror never edits a block definition) — re-tessellate just those and
-        // keep the block cache + every other entity's memoized wires.
-        for &h in handles {
-            self.mark_entity_dirty(h);
-        }
-        self.bump_geometry_no_blocks();
+        // mirror never edits a block definition) — report just those so the
+        // resident set re-tessellates only them and every derived cache patches
+        // per-handle, keeping the block cache + all other memoized wires.
+        let changes: Vec<(Handle, ChangeKind)> =
+            handles.iter().map(|&h| (h, ChangeKind::Modified)).collect();
+        self.bump_entities(&changes);
     }
 
     /// Give a freshly-cloned entity brand-new handles for every *inline*
@@ -346,7 +346,10 @@ impl Scene {
         }
         // The copies are new handles (natural memo misses, tessellated fresh)
         // and reference only already-cached blocks — no block defn changes.
-        self.bump_geometry_no_blocks();
+        // Report them as additions so derived caches patch in exactly the copies.
+        let changes: Vec<(Handle, ChangeKind)> =
+            new_handles.iter().map(|&h| (h, ChangeKind::Added)).collect();
+        self.bump_entities(&changes);
         new_handles
     }
 

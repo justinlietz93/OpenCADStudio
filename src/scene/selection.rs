@@ -329,6 +329,7 @@ impl Scene {
     // ── Erase ─────────────────────────────────────────────────────────────
 
     pub fn erase_entities(&mut self, handles: &[Handle]) {
+        let mut erased: Vec<(Handle, ChangeKind)> = Vec::new();
         for &h in handles {
             // Objects on a locked layer can't be erased.
             if self.is_layer_locked(h) {
@@ -339,7 +340,7 @@ impl Scene {
             self.hatches.remove(&h);
             self.meshes.remove(&h);
             self.solid_models.remove(&h);
-            self.mark_entity_dirty(h);
+            erased.push((h, ChangeKind::Removed));
         }
         // Remove erased handles from all groups; delete groups that become empty.
         let group_dict_handle = self.document.header.acad_group_dict_handle;
@@ -367,8 +368,10 @@ impl Scene {
             }
             self.document.objects.remove(gh);
         }
-        // Deleting top-level entities/inserts leaves block definitions intact;
-        // the erased handles were already dropped from the memo above.
-        self.bump_geometry_no_blocks();
+        // Deleting top-level entities/inserts leaves block definitions intact.
+        // Report the exact erased handles so derived caches drop just those and
+        // the resident set removes only their wires (bump_entities drops them
+        // from the tessellation memos too).
+        self.bump_entities(&erased);
     }
 }
