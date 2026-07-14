@@ -357,7 +357,35 @@ impl shader::Primitive for Primitive {
             // independent of the `cur_key` block so a preview/interim wire change
             // still uploads even when the camera didn't move.
             if vp.wire_content_id != inner.cached_wire_id {
-                inner.upload_wires(device, &vp.wires[..], &vp.draw_depths);
+                // Share one copy of the resident wire buffers across every slot
+                // (and every pane — one MultiPipeline backs them all) rendering
+                // this content id: build on a cache miss, then hand out Arc
+                // clones. Two paper viewports showing the same model, or four
+                // Model tiles, upload the wire vertices once between them.
+                // `.cloned()` releases the immutable cache borrow before the
+                // miss branch takes a mutable one.
+                let cached = pipeline.wire_buffer_cache.get(&vp.wire_content_id).cloned();
+                let built = match cached {
+                    Some(entry) => entry,
+                    None => {
+                        let entry =
+                            inner.build_wire_buffers(device, &vp.wires[..], &vp.draw_depths);
+                        pipeline
+                            .wire_buffer_cache
+                            .insert(vp.wire_content_id, entry.clone());
+                        // Evict entries no slot still holds (only the cache
+                        // references them). An entry drawn by any pane keeps a
+                        // strong count ≥ 2, so this never drops live geometry.
+                        if pipeline.wire_buffer_cache.len() > 16 {
+                            pipeline
+                                .wire_buffer_cache
+                                .retain(|_, (w, _)| std::sync::Arc::strong_count(w) > 1);
+                        }
+                        entry
+                    }
+                };
+                inner.gpu_wires = built.0;
+                inner.wire_handle_index = built.1;
                 inner.cached_wire_id = vp.wire_content_id;
             }
             // Selection xray overlay — rebuilt when the selection changes or the

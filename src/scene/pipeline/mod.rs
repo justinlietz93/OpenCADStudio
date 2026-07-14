@@ -136,7 +136,14 @@ pub struct Pipeline {
     blit_uniform_buffer: wgpu::Buffer,
     /// Cached texture format (needed to recreate MSAA / depth textures on resize).
     surface_format: wgpu::TextureFormat,
-    gpu_wires: Vec<WireGpu>,
+    /// The resident wire batches, shared by `std::sync::Arc` with every other
+    /// pipeline slot rendering the *same* `wire_content_id` (see
+    /// `MultiPipeline::wire_buffer_cache`). A `wgpu::Buffer` is internally
+    /// ref-counted, so N paper viewports (or Model tiles) drawing one identical
+    /// resident set hold one copy of the GPU vertex buffers between them —
+    /// their camera uniforms + scissor stay per-slot, only the geometry is
+    /// deduplicated. Never mutated in place, only reassigned on content change.
+    pub(crate) gpu_wires: std::sync::Arc<Vec<WireGpu>>,
     /// Pixel scissor rects [x, y, w, h] for viewport-clipped wires. Recomputed each frame.
     wire_pixel_scissors: Vec<Option<[u32; 4]>>,
     /// Ghost copies (25% alpha) of selected wires for the X-ray depth pass.
@@ -225,8 +232,10 @@ pub struct Pipeline {
     /// Handle → indices into the resident wire set, built once per wire upload
     /// (when `cached_wire_id` changes). Lets the selection/hover xray overlay
     /// gather just the highlighted entity's wires (`O(highlighted)`) instead of
-    /// scanning and string-parsing every wire on each hover change.
-    wire_handle_index: rustc_hash::FxHashMap<u64, Vec<u32>>,
+    /// scanning and string-parsing every wire on each hover change. Shared by
+    /// `std::sync::Arc` alongside `gpu_wires` — built once per `wire_content_id`
+    /// and cloned into every slot that renders it.
+    pub(crate) wire_handle_index: std::sync::Arc<rustc_hash::FxHashMap<u64, Vec<u32>>>,
     /// Signature of the last frame's rendered scene (camera uniforms, geometry
     /// / selection generations, wire content id, render-mode flags, clip size,
     /// live preview). When the next frame's signature matches, the image is
@@ -1294,7 +1303,7 @@ impl Pipeline {
             blit_bind_group,
             blit_uniform_buffer,
             surface_format: format,
-            gpu_wires: vec![],
+            gpu_wires: std::sync::Arc::new(vec![]),
             wire_pixel_scissors: vec![],
             gpu_selected_wires: vec![],
             gpu_preview_wires: vec![],
@@ -1321,7 +1330,7 @@ impl Pipeline {
             cached_selection: (u64::MAX, u64::MAX),
             cached_mesh_key: (u64::MAX, u64::MAX),
             cached_face3d_key: (u64::MAX, false),
-            wire_handle_index: rustc_hash::FxHashMap::default(),
+            wire_handle_index: std::sync::Arc::new(rustc_hash::FxHashMap::default()),
             render_sig: u64::MAX,
             skip_geometry: false,
             skip_hatch_frame: false,
@@ -1329,11 +1338,19 @@ impl Pipeline {
         }
     }
 
-    pub fn upload_wires(
-        &mut self,
+    /// Build the resident wire batches + handle index for `wires`, wrapped in
+    /// `Arc` so the caller can cache them by `wire_content_id` and share one
+    /// copy across every slot that renders that content (see
+    /// `MultiPipeline::wire_buffer_cache`). Takes `&self` (reads only the const
+    /// bind-group layout) so the shared cache — not the slot — owns the result.
+    pub fn build_wire_buffers(
+        &self,
         device: &wgpu::Device,
         wires: &[WireModel],
         depth_map: &rustc_hash::FxHashMap<u64, f32>,
+    ) -> (
+        std::sync::Arc<Vec<WireGpu>>,
+        std::sync::Arc<rustc_hash::FxHashMap<u64, Vec<u32>>>,
     ) {
         // Batch the wire pass: instead of one GPU buffer + one draw call per
         // WireModel (tens of thousands on a large drawing), merge maximal runs
@@ -1372,18 +1389,18 @@ impl Pipeline {
             batches.extend(WireGpu::from_run(device, &wires[i..j], depth_map, scissor, mesh_edge, self.wire_const_bgl.as_ref()));
             i = j;
         }
-        self.gpu_wires = batches;
 
         // Index handle → wire slots once, here, so the per-hover selection
         // overlay can gather just the highlighted wires instead of scanning +
         // string-parsing the whole set every time the hovered entity changes.
-        self.wire_handle_index.clear();
-        self.wire_handle_index.reserve(wires.len());
+        let mut index: rustc_hash::FxHashMap<u64, Vec<u32>> = rustc_hash::FxHashMap::default();
+        index.reserve(wires.len());
         for (idx, w) in wires.iter().enumerate() {
             if let Ok(h) = w.name.parse::<u64>() {
-                self.wire_handle_index.entry(h).or_default().push(idx as u32);
+                index.entry(h).or_default().push(idx as u32);
             }
         }
+        (std::sync::Arc::new(batches), std::sync::Arc::new(index))
     }
 
     /// Build the selection xray overlay: full-brightness copies of the wires
@@ -2820,6 +2837,21 @@ fn create_msaa_texture(
 pub struct MultiPipeline {
     pub(crate) inners: Vec<Pipeline>,
     format: wgpu::TextureFormat,
+    /// The resident wire batches, keyed by `wire_content_id` and shared across
+    /// every slot (and every pane — one `MultiPipeline` backs all of them) that
+    /// renders the same content. `prepare` builds an entry once on a cache miss
+    /// then hands `Arc` clones to each slot, so N paper viewports / Model tiles
+    /// showing one identical resident set upload the wire vertex buffers exactly
+    /// once between them instead of once per slot. Kept trim by dropping entries
+    /// no slot still references (`Arc::strong_count == 1`) once it grows past a
+    /// small bound.
+    pub(crate) wire_buffer_cache: rustc_hash::FxHashMap<
+        u64,
+        (
+            std::sync::Arc<Vec<WireGpu>>,
+            std::sync::Arc<rustc_hash::FxHashMap<u64, Vec<u32>>>,
+        ),
+    >,
 }
 
 impl MultiPipeline {
@@ -2846,6 +2878,7 @@ impl iced::widget::shader::Pipeline for MultiPipeline {
         Self {
             inners: vec![Pipeline::new(device, queue, format)],
             format,
+            wire_buffer_cache: rustc_hash::FxHashMap::default(),
         }
     }
 }
