@@ -2976,11 +2976,31 @@ impl Scene {
     /// entities of different types order correctly against each other.
     pub(super) fn draw_depth_map(&self) -> Arc<HashMap<u64, f32>> {
         {
-            let cache = self.draw_depth_cache.borrow();
-            if let Some((epoch, ref arc)) = *cache {
-                if epoch == self.geometry_epoch {
-                    return Arc::clone(arc);
+            // Draw order depends on each block's entity COUNT (the rank
+            // denominator) and the entities' handles / SortEntitiesTable — none of
+            // which a Modify (move / rotate / scale / colour / hide) touches. So an
+            // all-Modified edit keeps the map; only Add / Remove (count change) or
+            // a table change (which arrives as a `full` delta) rebuilds it.
+            let reuse = {
+                let cache = self.draw_depth_cache.borrow();
+                match *cache {
+                    Some((epoch, ref arc))
+                        if epoch == self.geometry_epoch
+                            || matches!(
+                                self.replay_since(epoch),
+                                Some(ref d) if d.iter().all(|&(_, k)| k == ChangeKind::Modified)
+                            ) =>
+                    {
+                        Some(Arc::clone(arc))
+                    }
+                    _ => None,
                 }
+            };
+            if let Some(arc) = reuse {
+                if let Some((ref mut e, _)) = *self.draw_depth_cache.borrow_mut() {
+                    *e = self.geometry_epoch;
+                }
+                return arc;
             }
         }
         use acadrust::objects::ObjectType;
