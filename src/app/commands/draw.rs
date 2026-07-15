@@ -696,7 +696,8 @@ impl OpenCADStudio {
                     self.tabs[i].active_cmd = Some(Box::new(cmd));
                 } else {
                     let n = handles.len();
-                    self.push_undo_snapshot(i, "ERASE");
+                    let delta_safe = self.delta_erase_safe(i, &handles);
+                    let pending = self.begin_undo(i, "ERASE", handles.len(), delta_safe);
                     // Stash the erased entities so OOPS can restore them.
                     self.oops_cache = handles
                         .iter()
@@ -707,6 +708,9 @@ impl OpenCADStudio {
                     self.refresh_properties();
                     self.command_line
                         .push_output(&format!("{n} object(s) erased."));
+                    if let Some(pd) = pending {
+                        self.commit_undo_delta(i, pd);
+                    }
                 }
             }
 

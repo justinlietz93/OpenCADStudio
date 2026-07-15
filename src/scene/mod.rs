@@ -105,6 +105,48 @@ pub enum ChangeKind {
     Modified,
 }
 
+/// While an entity-only undoable command runs, this captures the pre-mutation
+/// image of every entity the five mutation primitives (add / update / erase /
+/// transform / copy) touch, so the app can build a cheap **delta**-undo entry
+/// instead of cloning the whole ~800k-entity document (~46 ms). `poisoned` is
+/// set when a primitive also mutated non-entity state (a brand-new layer, a
+/// group, or a `*D` block record) that a pure-entity delta cannot restore — the
+/// app's per-command predicate keeps that from happening, and a debug assertion
+/// fires if it ever does.
+#[derive(Default)]
+pub struct UndoRecording {
+    /// First-touch before-image per handle (the first write for a handle wins,
+    /// so repeated touches within one command keep the true pre-command state).
+    /// A value of `None` marks an entity *added* by the command (no prior
+    /// state). `order` preserves first-touch order for a deterministic delta.
+    before: HashMap<Handle, Option<EntityType>>,
+    order: Vec<Handle>,
+    poisoned: bool,
+}
+
+impl UndoRecording {
+    /// The command touched non-entity state a pure-entity delta can't restore.
+    pub fn is_poisoned(&self) -> bool {
+        self.poisoned
+    }
+
+    /// No entity was recorded (nothing to undo).
+    pub fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    /// Consume the recording into `(handle, before-image)` pairs in first-touch
+    /// order. A `None` before-image means the entity was added by the command.
+    /// The app pairs each with the entity's current (after) state to build the
+    /// invertible delta entry.
+    pub fn into_before_images(mut self) -> Vec<(Handle, Option<EntityType>)> {
+        self.order
+            .drain(..)
+            .map(|h| (h, self.before.remove(&h).flatten()))
+            .collect()
+    }
+}
+
 /// One geometry mutation's delta record. `changes` names the exact handles that
 /// changed; `full` marks a mutation that can't enumerate its handles (undo/redo,
 /// file open, style/display change, any bulk op) and forces every consumer that
@@ -1019,6 +1061,12 @@ pub struct Scene {
     /// render layer matches `new_gen` against the viewport's content id and
     /// `prev_gen` against what the GPU currently holds; a mismatch just rebuilds.
     model_wire_gpu_patch: RefCell<Option<(u64, u64, Arc<Vec<(Handle, ChangeKind)>>)>>,
+    /// Active delta-undo recording, or `None` when no entity-only command is
+    /// capturing. Populated by the five mutation primitives via
+    /// [`Scene::record_undo_before`]; consumed by the app (`take_undo_recording`)
+    /// to build a cheap history delta instead of a full document clone. See
+    /// [`UndoRecording`].
+    undo_recording: Option<UndoRecording>,
 }
 
 impl Scene {
@@ -1105,6 +1153,7 @@ impl Scene {
             geometry_journal_floor: std::cell::Cell::new(0),
             resident_patch_hits: std::cell::Cell::new(0),
             model_wire_gpu_patch: RefCell::new(None),
+            undo_recording: None,
         }
     }
 
@@ -1342,6 +1391,136 @@ impl Scene {
     /// changed — the delta lets every derived cache patch per-handle instead of
     /// re-walking the whole drawing. Blocks are untouched (`block_epoch` stays),
     /// so this is for top-level entity add / edit / erase, not block-defn edits.
+    /// Begin capturing before-images for a delta-undo entry. Pair with
+    /// [`Scene::take_undo_recording`]. Only entity-only commands — whose
+    /// mutations flow through the five primitives (add / update / erase /
+    /// transform / copy) and that touch no layers / objects / block records —
+    /// may use this; anything else must fall back to a full history snapshot.
+    pub fn begin_undo_recording(&mut self) {
+        self.undo_recording = Some(UndoRecording::default());
+    }
+
+    /// Whether a delta-undo recording is currently open.
+    pub fn is_recording_undo(&self) -> bool {
+        self.undo_recording.is_some()
+    }
+
+    /// Finish and return the open recording (if any) for the app to build a
+    /// history delta from.
+    pub fn take_undo_recording(&mut self) -> Option<UndoRecording> {
+        self.undo_recording.take()
+    }
+
+    /// Record the pre-mutation image of `handle` (first touch wins). `before`
+    /// is `None` for a freshly added entity. No-op when not recording — the
+    /// callers guard with [`Scene::is_recording_undo`] so the clone is skipped
+    /// entirely on the common (no-recording) path.
+    pub(crate) fn record_undo_before(&mut self, handle: Handle, before: Option<EntityType>) {
+        if let Some(rec) = self.undo_recording.as_mut() {
+            if !rec.before.contains_key(&handle) {
+                rec.order.push(handle);
+                rec.before.insert(handle, before);
+            }
+        }
+    }
+
+    /// Flag the open recording as touching non-entity state (a new layer, a
+    /// group edit, a `*D` block record) that a pure-entity delta cannot
+    /// restore. The app's per-command predicate keeps this from firing.
+    pub(crate) fn poison_undo_recording(&mut self) {
+        if let Some(rec) = self.undo_recording.as_mut() {
+            rec.poisoned = true;
+        }
+    }
+
+    /// Re-apply one side of an entity delta to the document. For each
+    /// `(handle, before, after)`, install the chosen `target` — `before` when
+    /// `undo`, `after` on redo: overwrite the entity in place, re-insert it with
+    /// its original handle, or remove it — reseeding the per-handle derived
+    /// caches so fills/meshes follow. Returns the exact per-handle change list
+    /// for the caller to report via [`Scene::bump_entities`]; it does not bump,
+    /// touch the selection, or rebuild any whole-document cache.
+    ///
+    /// `remove_entity` leaves a handle dangling in its owner block record's
+    /// `entity_handles` (harmless — a render/save lookup miss is skipped), so a
+    /// re-insert's `add_entity` push would make it appear twice and emit the
+    /// entity twice on save. Every to-be-re-inserted handle is therefore
+    /// stripped from the block records in one pass first, leaving exactly one
+    /// entry after the re-insert.
+    pub(crate) fn apply_entity_delta(
+        &mut self,
+        entities: &[(Handle, Option<EntityType>, Option<EntityType>)],
+        undo: bool,
+    ) -> Vec<(Handle, ChangeKind)> {
+        let reinsert: HashSet<Handle> = entities
+            .iter()
+            .filter_map(|(h, before, after)| {
+                let target = if undo { before } else { after };
+                (target.is_some() && self.document.get_entity(*h).is_none()).then_some(*h)
+            })
+            .collect();
+        if !reinsert.is_empty() {
+            for br in self.document.block_records.iter_mut() {
+                br.entity_handles.retain(|h| !reinsert.contains(h));
+            }
+        }
+
+        let mut changes: Vec<(Handle, ChangeKind)> = Vec::with_capacity(entities.len());
+        for (h, before, after) in entities {
+            let target = if undo { before } else { after };
+            let existed = self.document.get_entity(*h).is_some();
+            match target {
+                Some(ent) => {
+                    if existed {
+                        if let Some(slot) = self.document.get_entity_mut(*h) {
+                            *slot = ent.clone();
+                        }
+                        changes.push((*h, ChangeKind::Modified));
+                    } else {
+                        // Re-insert with the original handle: the stored image
+                        // keeps it, and document.add_entity honours a preset,
+                        // non-null handle (routing to its owner block record).
+                        let _ = self.document.add_entity(ent.clone());
+                        changes.push((*h, ChangeKind::Added));
+                    }
+                    self.reseed_derived_caches(*h);
+                }
+                None => {
+                    if existed {
+                        self.document.remove_entity(*h);
+                        // Drops the now-absent entity's hatch/image/mesh caches.
+                        self.reseed_derived_caches(*h);
+                        changes.push((*h, ChangeKind::Removed));
+                    }
+                }
+            }
+        }
+
+        // Integrity net: no re-inserted handle may appear more than once across
+        // the block records (a duplicate would emit the entity twice on save).
+        // Debug-only, and skipped entirely when nothing was re-inserted (the
+        // common transform/property-edit case).
+        #[cfg(debug_assertions)]
+        if !reinsert.is_empty() {
+            let mut counts: HashMap<Handle, u32> = HashMap::default();
+            for br in self.document.block_records.iter() {
+                for h in &br.entity_handles {
+                    if reinsert.contains(h) {
+                        *counts.entry(*h).or_default() += 1;
+                    }
+                }
+            }
+            for (h, c) in counts {
+                debug_assert!(
+                    c <= 1,
+                    "delta re-insert duplicated handle {h:?} in block records ({c}×)"
+                );
+            }
+        }
+
+        changes
+    }
+
     pub fn bump_entities(&mut self, changes: &[(Handle, ChangeKind)]) {
         let epoch = GEOMETRY_EPOCH.fetch_add(1, Ordering::Relaxed);
         self.geometry_epoch = epoch;
@@ -4985,6 +5164,156 @@ mod journal_tests {
             !s.category_cache_valid(e0, |hh| s.hatches.contains_key(&hh)),
             "a removal must invalidate (category unknowable post-erase)"
         );
+    }
+}
+
+/// Delta-undo round-trips: a recorded entity-only edit must be exactly
+/// invertible (undo restores the pre-edit images) and re-appliable (redo
+/// restores the post-edit images), including handle preservation and no
+/// duplication of a re-inserted handle in its owning block record.
+#[cfg(test)]
+mod delta_undo_tests {
+    use super::*;
+    use crate::command::EntityTransform;
+    use acadrust::entities::Line;
+    use acadrust::types::Vector3;
+    use glam::DVec3;
+
+    fn line(x1: f64, y1: f64, x2: f64, y2: f64) -> EntityType {
+        EntityType::Line(Line::from_points(
+            Vector3::new(x1, y1, 0.0),
+            Vector3::new(x2, y2, 0.0),
+        ))
+    }
+
+    /// Build the delta the way `commit_undo_delta` does: pair each recorded
+    /// before-image with the entity's current (after) state.
+    fn build_delta(
+        scene: &Scene,
+        rec: UndoRecording,
+    ) -> Vec<(Handle, Option<EntityType>, Option<EntityType>)> {
+        rec.into_before_images()
+            .into_iter()
+            .map(|(h, before)| {
+                let after = scene.document.get_entity(h).cloned();
+                (h, before, after)
+            })
+            .collect()
+    }
+
+    /// Occurrences of a handle in the *Model_Space block record's entity list.
+    fn ms_occurrences(scene: &Scene, handle: Handle) -> usize {
+        scene
+            .document
+            .block_records
+            .get("*Model_Space")
+            .map(|br| br.entity_handles.iter().filter(|&&x| x == handle).count())
+            .unwrap_or(0)
+    }
+
+    #[test]
+    fn transform_delta_round_trips() {
+        let mut scene = Scene::new();
+        let h = scene.add_entity(line(0.0, 0.0, 10.0, 0.0));
+        let orig = scene.document.get_entity(h).cloned().unwrap();
+
+        scene.begin_undo_recording();
+        scene.transform_entities(&[h], &EntityTransform::Translate(DVec3::new(5.0, 3.0, 0.0)));
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned(), "a plain move must not poison");
+        let delta = build_delta(&scene, rec);
+        let moved = scene.document.get_entity(h).cloned().unwrap();
+        assert_ne!(orig, moved, "the move must actually change the entity");
+
+        // Undo restores the pre-move image exactly, in place (same handle).
+        scene.apply_entity_delta(&delta, true);
+        assert_eq!(scene.document.get_entity(h).cloned().unwrap(), orig);
+        assert_eq!(ms_occurrences(&scene, h), 1);
+
+        // Redo re-applies the post-move image.
+        scene.apply_entity_delta(&delta, false);
+        assert_eq!(scene.document.get_entity(h).cloned().unwrap(), moved);
+        assert_eq!(ms_occurrences(&scene, h), 1);
+    }
+
+    #[test]
+    fn erase_delta_round_trips_with_handle_and_no_dup() {
+        let mut scene = Scene::new();
+        let h1 = scene.add_entity(line(0.0, 0.0, 1.0, 0.0));
+        let h2 = scene.add_entity(line(2.0, 2.0, 3.0, 3.0));
+        let orig1 = scene.document.get_entity(h1).cloned().unwrap();
+        let orig2 = scene.document.get_entity(h2).cloned().unwrap();
+        let count = scene.document.entities().count();
+
+        scene.begin_undo_recording();
+        scene.erase_entities(&[h2]);
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned(), "erasing an ungrouped entity must not poison");
+        let delta = build_delta(&scene, rec);
+        assert!(scene.document.get_entity(h2).is_none(), "h2 must be erased");
+
+        // Undo re-inserts h2 with its ORIGINAL handle and image, exactly once in
+        // the block record (the strip prevents a duplicated dangling entry),
+        // leaving h1 untouched.
+        scene.apply_entity_delta(&delta, true);
+        assert_eq!(scene.document.get_entity(h2).cloned().unwrap(), orig2);
+        assert_eq!(scene.document.get_entity(h1).cloned().unwrap(), orig1);
+        assert_eq!(scene.document.entities().count(), count);
+        assert_eq!(ms_occurrences(&scene, h2), 1, "h2 must appear once, not duplicated");
+
+        // Redo erases h2 again. (remove_entity leaves the handle dangling in
+        // the block record — harmless, a lookup miss is skipped on render/save
+        // — so we assert absence from the document, not from entity_handles.)
+        scene.apply_entity_delta(&delta, false);
+        assert!(scene.document.get_entity(h2).is_none());
+    }
+
+    #[test]
+    fn add_delta_round_trips() {
+        let mut scene = Scene::new();
+        scene.begin_undo_recording();
+        let h = scene.add_entity(line(0.0, 0.0, 4.0, 4.0));
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned(), "a plain add on an existing layer must not poison");
+        let added = scene.document.get_entity(h).cloned().unwrap();
+        let delta = build_delta(&scene, rec);
+
+        // Undo removes the freshly added entity from the document (a dangling
+        // block-record entry may remain — see erase test — that's fine).
+        scene.apply_entity_delta(&delta, true);
+        assert!(scene.document.get_entity(h).is_none());
+
+        // Redo re-adds it with the same handle, exactly once (the strip clears
+        // any dangling entry so add_entity doesn't duplicate it).
+        scene.apply_entity_delta(&delta, false);
+        assert_eq!(scene.document.get_entity(h).cloned().unwrap(), added);
+        assert_eq!(ms_occurrences(&scene, h), 1);
+    }
+
+    #[test]
+    fn copy_delta_round_trips() {
+        let mut scene = Scene::new();
+        let src = scene.add_entity(line(0.0, 0.0, 1.0, 0.0));
+
+        scene.begin_undo_recording();
+        let new_handles =
+            scene.copy_entities(&[src], &EntityTransform::Translate(DVec3::new(10.0, 0.0, 0.0)));
+        let rec = scene.take_undo_recording().unwrap();
+        assert!(!rec.is_poisoned(), "copying a plain entity must not poison");
+        assert_eq!(new_handles.len(), 1);
+        let copy_h = new_handles[0];
+        let copy_img = scene.document.get_entity(copy_h).cloned().unwrap();
+        let delta = build_delta(&scene, rec);
+
+        // Undo erases the copy from the document, leaving the source intact.
+        scene.apply_entity_delta(&delta, true);
+        assert!(scene.document.get_entity(copy_h).is_none());
+        assert!(scene.document.get_entity(src).is_some());
+
+        // Redo restores the copy with its handle, once.
+        scene.apply_entity_delta(&delta, false);
+        assert_eq!(scene.document.get_entity(copy_h).cloned().unwrap(), copy_img);
+        assert_eq!(ms_occurrences(&scene, copy_h), 1);
     }
 }
 

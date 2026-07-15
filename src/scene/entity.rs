@@ -106,6 +106,12 @@ impl Scene {
         // (e.g. a plugin-supplied layer) so it survives a DWG save instead of
         // collapsing to layer 0 in the reopened file (#252).
         let layer = entity.common().layer.clone();
+        // Delta-undo poison inputs (captured before the mutations below): an
+        // add that also creates a new layer, adds a block, or inserts an image
+        // definition mutates non-entity state a pure-entity delta can't undo.
+        let creates_layer =
+            self.is_recording_undo() && !layer.trim().is_empty() && !self.document.layers.contains(&layer);
+        let is_image = matches!(&entity, EntityType::RasterImage(_));
         self.ensure_layer(&layer);
 
         // Route to the correct block based on current editing mode:
@@ -134,6 +140,16 @@ impl Scene {
             }
             if let Some(model) = mesh_seed {
                 self.meshes.insert(handle, model);
+            }
+            // Delta-undo: the new handle's before-image is "nothing" (it did not
+            // exist). Poison the recording if this add also mutated non-entity
+            // state (a new layer / block / image definition) so the app knows a
+            // pure-entity delta would be incomplete.
+            if self.is_recording_undo() {
+                self.record_undo_before(handle, None);
+                if creates_layer || affects_blocks || is_image {
+                    self.poison_undo_recording();
+                }
             }
             if affects_blocks {
                 self.bump_geometry();
@@ -210,6 +226,9 @@ impl Scene {
         // so the edited entity keeps that layer on save instead of collapsing
         // to layer 0 in the reopened file (#252).
         let new_layer = entity.common().layer.clone();
+        let creates_layer = self.is_recording_undo()
+            && !new_layer.trim().is_empty()
+            && !self.document.layers.contains(&new_layer);
         self.ensure_layer(&new_layer);
 
         // Rebuild the derived-model seeds from the new entity (as add_entity).
@@ -238,6 +257,17 @@ impl Scene {
         } else {
             None
         };
+
+        // Delta-undo: capture the entity's pre-edit image (before the slot is
+        // overwritten) so an undo can restore it, and poison if this replace
+        // also created a layer or crossed a block boundary.
+        if self.is_recording_undo() {
+            let before = self.document.get_entity(handle).cloned();
+            self.record_undo_before(handle, before);
+            if creates_layer || affects_blocks {
+                self.poison_undo_recording();
+            }
+        }
 
         // Write the new entity into the live slot.
         let Some(slot) = self.document.get_entity_mut(handle) else {
@@ -271,6 +301,61 @@ impl Scene {
             self.bump_entities(&[(handle, ChangeKind::Modified)]);
         }
         true
+    }
+
+    /// Rebuild the per-entity derived caches (hatch fill / raster image / solid
+    /// mesh) for a single handle from whatever entity currently lives at it —
+    /// or drop them all if the handle is now absent. Mirrors the reseed block in
+    /// [`Scene::update_entity`]; used by delta-undo when it re-applies an
+    /// entity's before / after image so the fills and meshes follow.
+    pub(crate) fn reseed_derived_caches(&mut self, handle: Handle) {
+        let (hatch_seed, image_seed, mesh_seed) = match self.document.get_entity(handle) {
+            None => (None, None, None),
+            Some(entity) => {
+                let hatch_seed = if let EntityType::Hatch(dxf) = entity {
+                    let color = self.render_style(entity).0;
+                    Self::hatch_model_from_dxf(dxf, color)
+                } else if let EntityType::Solid(solid) = entity {
+                    let color = self.render_style(entity).0;
+                    Some(Self::solid_hatch_model(solid, color))
+                } else {
+                    None
+                };
+                let image_seed = if let EntityType::RasterImage(img) = entity {
+                    ImageModel::from_raster_image(img)
+                } else {
+                    None
+                };
+                let facet_res = self.document.header.facet_resolution;
+                let mesh_seed = if matches!(
+                    entity,
+                    EntityType::Solid3D(_)
+                        | EntityType::Region(_)
+                        | EntityType::Body(_)
+                        | EntityType::Surface(_)
+                ) {
+                    let color = self.render_style(entity).0;
+                    crate::entities::solid3d::tessellate_volume(entity, color, facet_res)
+                        .map(offset_mesh_lod_set)
+                } else {
+                    None
+                };
+                (hatch_seed, image_seed, mesh_seed)
+            }
+        };
+        self.hatches.remove(&handle);
+        self.images.remove(&handle);
+        self.meshes.remove(&handle);
+        self.solid_models.remove(&handle);
+        if let Some(model) = hatch_seed {
+            self.hatches.insert(handle, model);
+        }
+        if let Some(model) = image_seed {
+            self.images.insert(handle, model);
+        }
+        if let Some(model) = mesh_seed {
+            self.meshes.insert(handle, model);
+        }
     }
 
     /// Returns the RGBA color for the given layer name.

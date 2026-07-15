@@ -132,6 +132,11 @@ impl Scene {
             .flatten()
             .collect();
         for &h in handles {
+            // Delta-undo: capture the pre-transform image before mutating.
+            if self.is_recording_undo() {
+                let before = self.document.get_entity(h).cloned();
+                self.record_undo_before(h, before);
+            }
             if let Some(entity) = self.document.get_entity_mut(h) {
                 view::dispatch::apply_transform(entity, t);
                 if mirror_true {
@@ -164,7 +169,13 @@ impl Scene {
             }
         }
         // Move the baked dimension-block sub-entities too (collected above).
+        // These are entities not named in the reported change set, so a delta
+        // must capture their before-images here or a dimension move won't undo.
         for h in &dim_block_subs {
+            if self.is_recording_undo() {
+                let before = self.document.get_entity(*h).cloned();
+                self.record_undo_before(*h, before);
+            }
             if let Some(entity) = self.document.get_entity_mut(*h) {
                 view::dispatch::apply_transform(entity, t);
             }
@@ -317,6 +328,10 @@ impl Scene {
                 let bn = d.base().block_name.clone();
                 if !bn.trim().is_empty() {
                     if let Some(new_bn) = self.clone_transformed_block(&bn, t) {
+                        // Delta-undo: a copied dimension adds a fresh anonymous
+                        // *D block record — non-entity state a pure-entity delta
+                        // can't restore. Poison so the app keeps a full snapshot.
+                        self.poison_undo_recording();
                         if let EntityType::Dimension(d) = &mut entity {
                             d.base_mut().block_name = new_bn;
                         }
@@ -327,6 +342,10 @@ impl Scene {
             entity.common_mut().handle = Handle::NULL;
             let h = self.document.add_entity(entity).unwrap_or(Handle::NULL);
             if !h.is_null() {
+                // Delta-undo: a copy's before-image is "nothing" (undo erases it).
+                if self.is_recording_undo() {
+                    self.record_undo_before(h, None);
+                }
                 let new_model = match self.document.get_entity(h) {
                     Some(EntityType::Hatch(dxf)) => {
                         let color = convert::tess_util::aci_to_rgba(&dxf.common.color);
