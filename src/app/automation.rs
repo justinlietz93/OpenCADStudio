@@ -542,6 +542,69 @@ mod tests {
     }
 
     #[test]
+    fn matchprop_matches_text_style_and_height() {
+        // MATCHPROP between text objects must carry the text-specific
+        // properties (style, height) to TEXT and MTEXT destinations, not just
+        // the generic layer/color/linetype set. Regression for #361.
+        use crate::command::StepInput;
+        use acadrust::{EntityType, MText, Text};
+
+        let mut app = OpenCADStudio::new_for_test();
+        app.automation_op(r#"{"op":"new"}"#);
+        let i = app.active_tab;
+
+        let mut src = Text::new();
+        src.value = "SRC".into();
+        src.height = 5.0;
+        src.style = "BIG".into();
+        let src_h = app.tabs[i].scene.add_entity(EntityType::Text(src));
+
+        let mut dst_text = Text::new();
+        dst_text.value = "DST".into();
+        dst_text.height = 1.0;
+        let dst_text_h = app.tabs[i].scene.add_entity(EntityType::Text(dst_text));
+
+        let mut dst_mtext = MText::new();
+        dst_mtext.value = "DSTM".into();
+        dst_mtext.height = 2.0;
+        let dst_mtext_h = app.tabs[i].scene.add_entity(EntityType::MText(dst_mtext));
+
+        // Drive the interactive command exactly as the viewport does:
+        // phase 1 source pick, phase 2 destination selection.
+        let _ = app.run_command_line("MATCHPROP");
+        assert!(app.tabs[i].active_cmd.is_some(), "MATCHPROP must start");
+        let _ = app.feed_command(StepInput::EntityPick(src_h, glam::DVec3::ZERO));
+        let _ = app.feed_command(StepInput::SelectionComplete(vec![
+            dst_text_h,
+            dst_mtext_h,
+        ]));
+
+        let doc = &app.tabs[i].scene.document;
+        match doc.get_entity(dst_text_h) {
+            Some(EntityType::Text(t)) => {
+                assert_eq!(t.style, "BIG", "TEXT destination must take source style");
+                assert!(
+                    (t.height - 5.0).abs() < 1e-9,
+                    "TEXT destination must take source height, got {}",
+                    t.height
+                );
+            }
+            other => panic!("dest TEXT missing: {other:?}"),
+        }
+        match doc.get_entity(dst_mtext_h) {
+            Some(EntityType::MText(m)) => {
+                assert_eq!(m.style, "BIG", "MTEXT destination must take source style");
+                assert!(
+                    (m.height - 5.0).abs() < 1e-9,
+                    "MTEXT destination must take source height, got {}",
+                    m.height
+                );
+            }
+            other => panic!("dest MTEXT missing: {other:?}"),
+        }
+    }
+
+    #[test]
     fn save_then_open_round_trips() {
         let mut app = OpenCADStudio::new_for_test();
         let path = std::env::temp_dir().join("ocs_automation_test.dxf");

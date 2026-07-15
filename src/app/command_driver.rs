@@ -759,6 +759,19 @@ impl OpenCADStudio {
                         c.line_weight,
                     )
                 });
+                // Text-specific properties travel between text-like objects
+                // (TEXT ↔ MTEXT, both directions), like AutoCAD's "Text"
+                // special property (#361).
+                let text_props =
+                    self.tabs[i]
+                        .scene
+                        .document
+                        .get_entity(src)
+                        .and_then(|e| match e {
+                            acadrust::EntityType::Text(t) => Some((t.style.clone(), t.height)),
+                            acadrust::EntityType::MText(m) => Some((m.style.clone(), m.height)),
+                            _ => None,
+                        });
 
                 if let Some((layer, color, linetype, lt_scale, lw)) = props {
                     self.push_undo_snapshot(i, "MATCHPROP");
@@ -769,6 +782,19 @@ impl OpenCADStudio {
                             crate::scene::view::dispatch::apply_line_weight(e, lw);
                             e.common_mut().linetype = linetype.clone();
                             e.common_mut().linetype_scale = lt_scale;
+                            if let Some((style, height)) = &text_props {
+                                match e {
+                                    acadrust::EntityType::Text(t) => {
+                                        t.style = style.clone();
+                                        t.height = *height;
+                                    }
+                                    acadrust::EntityType::MText(m) => {
+                                        m.style = style.clone();
+                                        m.height = *height;
+                                    }
+                                    _ => {}
+                                }
+                            }
                         }
                     }
                     self.tabs[i].dirty = true;
