@@ -1421,7 +1421,10 @@ impl Scene {
             self.meshes.insert(handle, set);
         }
         self.solid_models.insert(handle, solid);
-        self.bump_geometry();
+        // Only this solid's mesh changed — report just its handle so the mesh /
+        // wire caches patch it in rather than rebuilding the whole drawing (and
+        // so a bulk register loop stays O(n), not O(n²)).
+        self.bump_entities(&[(handle, ChangeKind::Modified)]);
     }
 
     /// `BACKGROUND` change picks up the new `adapt_to_bg` result without
@@ -2366,7 +2369,11 @@ impl Scene {
         }
         self.set_invisible(&sel, true);
         self.selected.clear();
-        self.bump_geometry();
+        // Only the hidden entities changed visibility — report just those so the
+        // resident set drops them instead of re-tessellating the whole drawing.
+        let changes: Vec<(Handle, ChangeKind)> =
+            sel.iter().map(|&h| (h, ChangeKind::Modified)).collect();
+        self.bump_entities(&changes);
     }
 
     /// Clear isolation — bring every hidden entity back (End Isolation),
@@ -2378,7 +2385,10 @@ impl Scene {
         let restore: Vec<Handle> = self.hidden.iter().copied().collect();
         self.set_invisible(&restore, false);
         self.hidden.clear();
-        self.bump_geometry();
+        // Re-reveal just the previously hidden entities (bounded to that set).
+        let changes: Vec<(Handle, ChangeKind)> =
+            restore.iter().map(|&h| (h, ChangeKind::Modified)).collect();
+        self.bump_entities(&changes);
     }
 
     /// Set the persisted visibility flag (DXF code 60) on each handle.
