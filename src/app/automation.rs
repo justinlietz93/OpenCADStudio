@@ -542,6 +542,116 @@ mod tests {
     }
 
     #[test]
+    fn start_page_runs_tools_that_need_no_drawing_but_still_refuses_the_rest() {
+        // The welcome page's own buttons (Donate / Send Feedback / OCS Web) and
+        // Manage > About route through RibbonToolClick, so a blanket is_start
+        // refusal killed them outright — by definition they are only ever
+        // clickable while is_start holds. `dispatch_command` owns the list of
+        // commands that stand alone; this door must not shadow it. (#388, #389)
+        use crate::app::Message;
+        use crate::modules::ModuleEvent;
+
+        // Fresh app = welcome tab, no drawing.
+        let mut app = OpenCADStudio::new_for_test();
+        assert!(
+            app.tabs[app.active_tab].is_start,
+            "test needs the welcome tab"
+        );
+
+        // ABOUT is safe to drive: it opens a modal. DONATE / WEBVERSION / REPORT
+        // take the same path but shell out to a browser, so they are covered by
+        // the allowlist assertion below rather than by dispatching them here.
+        let start = app.command_line.history.len();
+        let _ = app.update(Message::RibbonToolClick {
+            tool_id: "ABOUT".to_string(),
+            event: ModuleEvent::Command("ABOUT".to_string()),
+        });
+        let out: String = app.command_line.history[start..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !out.contains("No drawing open"),
+            "ABOUT needs no drawing and must not be refused on the welcome page: {out:?}"
+        );
+
+        // …but a tool that does need a drawing is still turned away (#299).
+        let start = app.command_line.history.len();
+        let _ = app.update(Message::RibbonToolClick {
+            tool_id: "LINE".to_string(),
+            event: ModuleEvent::Command("LINE".to_string()),
+        });
+        let out: String = app.command_line.history[start..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            out.contains("No drawing open"),
+            "LINE must still be refused on the welcome page: {out:?}"
+        );
+        assert!(
+            app.tabs[app.active_tab].active_cmd.is_none(),
+            "LINE must not have started"
+        );
+
+        // A non-command tool event touches the scene, so it stays inert too.
+        let start = app.command_line.history.len();
+        let _ = app.update(Message::RibbonToolClick {
+            tool_id: "LAYERS".to_string(),
+            event: ModuleEvent::ToggleLayers,
+        });
+        let out: String = app.command_line.history[start..]
+            .iter()
+            .map(|e| e.text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            out.contains("No drawing open"),
+            "a scene-touching event must stay inert on the welcome page: {out:?}"
+        );
+
+        // Every welcome-page button must also clear dispatch's own gate, or the
+        // fix above just moves the refusal one door down. Asserted on the source
+        // rather than by dispatching: DONATE / REPORT / WEBVERSION shell out to
+        // a real browser, which a test must not do.
+        let dispatch_src = include_str!("commands/mod.rs");
+        let gate = dispatch_src
+            .split("is_start")
+            .nth(1)
+            .and_then(|s| s.split('{').next())
+            .expect("the is_start gate moved — re-point this test");
+        // DONATE/REPORT/WEBVERSION are the welcome page's own buttons; the rest
+        // are ribbon tools that configure the application, not a drawing.
+        let standalone = [
+            "DONATE",
+            "REPORT",
+            "WEBVERSION",
+            "ABOUT",
+            "CHANGELOG",
+            "CUI",
+            "ALIASEDIT",
+        ];
+        for cmd in standalone {
+            assert!(
+                gate.contains(&format!("\"{cmd}\"")),
+                "{cmd} needs no drawing but is missing from dispatch's standalone \
+                 list, so it is refused on the welcome page"
+            );
+        }
+        // …and each must actually have somewhere to land.
+        let view_src = include_str!("commands/view.rs");
+        for cmd in standalone {
+            assert!(
+                view_src.contains(&format!("\"{cmd}\" =>"))
+                    || view_src.contains(&format!("\"{cmd}\" |")),
+                "{cmd} has no dispatch arm"
+            );
+        }
+    }
+
+    #[test]
     fn handing_over_an_already_open_drawing_switches_to_its_tab() {
         // Double-clicking a drawing that is already open should land on the tab
         // showing it, not load a second copy of the same file.
