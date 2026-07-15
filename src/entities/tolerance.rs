@@ -82,7 +82,7 @@ fn parse_gdt_rows(raw: &str) -> Vec<Vec<Cell>> {
 /// than translated into some other character first.
 fn parse_cell(s: &str) -> Cell {
     let mut runs: Cell = Vec::new();
-    let mut push = |ch: char, font: &'static str, runs: &mut Cell| match runs.last_mut() {
+    let push = |ch: char, font: &'static str, runs: &mut Cell| match runs.last_mut() {
         Some(r) if r.font == font => r.text.push(ch),
         _ => runs.push(Run {
             text: ch.to_string(),
