@@ -191,10 +191,22 @@ impl OpenCADStudio {
             // LAYERSTATE — save / restore named snapshots of all layer states
             // (on/off, freeze, lock, colour, linetype, lineweight).
             // LAYERSTATE SAVE <name> | RESTORE <name> | DELETE <name> | ? (list)
-            cmd if cmd == "LAYERSTATE"
-                || cmd == "LAS"
-                || cmd == "LMAN"
-                || cmd.starts_with("LAYERSTATE ")
+            "LAYERSTATE" | "LAS" | "LMAN" => {
+                use crate::command::KeywordCommand;
+                let c = KeywordCommand::new(
+                    "LAYERSTATE",
+                    "LAYERSTATE  [List / Save / Restore / Delete]:",
+                    vec![
+                        ("List", "LIST", None),
+                        ("Save", "SAVE", Some("LAYERSTATE SAVE  new state name:")),
+                        ("Restore", "RESTORE", Some("LAYERSTATE RESTORE  state name:")),
+                        ("Delete", "DELETE", Some("LAYERSTATE DELETE  state name:")),
+                    ],
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("LAYERSTATE ")
                 || cmd.starts_with("LAS ")
                 || cmd.starts_with("LMAN ") =>
             {

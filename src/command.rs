@@ -313,6 +313,102 @@ impl CadCommand for UserRegCommand {
     }
 }
 
+/// Generic interactive front-end for a keyword sub-verb command (ATTDISP,
+/// LAYERSTATE, SCALELISTEDIT, VIEW…). Bare `<name>` enters this command, which
+/// shows the sub-verbs as clickable buttons; picking one either dispatches
+/// `<name> <keyword>` straight away (an action verb) or, when the verb needs an
+/// argument, prompts for it and then dispatches `<name> <keyword> <value>`.
+/// Delegates to the existing inline `<name> …` handler so the logic stays in
+/// one place, the way [`ValuePromptCommand`] does for single values.
+pub struct KeywordCommand {
+    name: &'static str,
+    prompt: &'static str,
+    /// `(button label, keyword, value prompt)`. A `Some` value prompt means the
+    /// verb takes one argument collected in a second step; `None` acts alone.
+    options: Vec<(&'static str, &'static str, Option<&'static str>)>,
+    /// Set once a value-taking verb is chosen: `(keyword, value prompt)`.
+    pending: Option<(&'static str, &'static str)>,
+}
+
+impl KeywordCommand {
+    pub fn new(
+        name: &'static str,
+        prompt: &'static str,
+        options: Vec<(&'static str, &'static str, Option<&'static str>)>,
+    ) -> Self {
+        Self {
+            name,
+            prompt,
+            options,
+            pending: None,
+        }
+    }
+}
+
+impl CadCommand for KeywordCommand {
+    fn name(&self) -> &'static str {
+        self.name
+    }
+
+    fn prompt(&self) -> String {
+        match self.pending {
+            Some((_, value_prompt)) => value_prompt.to_string(),
+            None => self.prompt.to_string(),
+        }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        match self.pending {
+            Some(_) => Vec::new(),
+            None => self
+                .options
+                .iter()
+                .map(|(label, keyword, _)| CmdOption::new(label, keyword))
+                .collect(),
+        }
+    }
+
+    fn wants_text_input(&self) -> bool {
+        true
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        let t = text.trim();
+        if t.is_empty() {
+            return None;
+        }
+        match self.pending {
+            // Second step: the argument for the already-chosen verb.
+            Some((keyword, _)) => Some(CmdResult::Dispatch(format!("{} {keyword} {t}", self.name))),
+            // First step: match the typed / clicked token to a sub-verb.
+            None => {
+                let up = t.to_uppercase();
+                let Some((_, keyword, value_prompt)) =
+                    self.options.iter().find(|(_, k, _)| k.eq_ignore_ascii_case(&up))
+                else {
+                    // Unknown verb — keep prompting rather than dispatch garbage.
+                    return None;
+                };
+                match value_prompt {
+                    Some(vp) => {
+                        self.pending = Some((keyword, vp));
+                        None
+                    }
+                    None => Some(CmdResult::Dispatch(format!("{} {keyword}", self.name))),
+                }
+            }
+        }
+    }
+
+    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
+        CmdResult::NeedPoint
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        CmdResult::Cancel
+    }
+}
+
 // ── Result token ──────────────────────────────────────────────────────────
 
 /// Returned by every `CadCommand` method to tell main.rs what to do.

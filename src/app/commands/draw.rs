@@ -149,7 +149,21 @@ impl OpenCADStudio {
             // ATTDISP ON   — make all AttributeDefinitions visible
             // ATTDISP OFF  — make all AttributeDefinitions invisible
             // ATTDISP NORMAL — restore: show only those without the invisible flag
-            cmd if cmd == "ATTDISP" || cmd.starts_with("ATTDISP ") => {
+            "ATTDISP" => {
+                use crate::command::KeywordCommand;
+                let c = KeywordCommand::new(
+                    "ATTDISP",
+                    "ATTDISP  attribute display  [On / Off / Normal]:",
+                    vec![
+                        ("On", "ON", None),
+                        ("Off", "OFF", None),
+                        ("Normal", "NORMAL", None),
+                    ],
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("ATTDISP ") => {
                 let sub = cmd.split_whitespace().nth(1).unwrap_or("").to_uppercase();
                 match sub.as_str() {
                     "ON" | "OFF" | "NORMAL" => {
