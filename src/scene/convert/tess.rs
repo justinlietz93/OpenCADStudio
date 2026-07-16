@@ -710,6 +710,72 @@ pub(crate) fn tessellate_entity(
     if !dgn_syms.is_empty() {
         let verts = convert::dgn_linestyle::polyline_points(e);
         if verts.len() >= 2 {
+            // The pipe body is drawn as two parallel walls, not a single centre
+            // line: offset the host polyline by ±(symbol radius) so each wall
+            // sits tangent to the end circles, and replace the centre line with
+            // them. The radius is the rendered symbol extent (block / scale).
+            let radius = dgn_syms
+                .iter()
+                .map(|s| convert::dgn_linestyle::symbol_radius(document, s.block, s.scale))
+                .fold(0.0_f64, f64::max);
+            if radius > 1e-6 {
+                // The walls carry the line style's dash pattern. Its native
+                // lengths scale to drawing units by f = radius / symbol-scale
+                // (the same factor that turns the compound's native offset into
+                // the measured wall offset). Sign-alternate: dash, gap, dash…
+                let scale = dgn_syms
+                    .iter()
+                    .map(|s| s.scale)
+                    .find(|s| *s > 1e-9)
+                    .unwrap_or(1.0);
+                let f = radius / scale;
+                let native = convert::dgn_linestyle::wall_dashes(document, lt_name);
+                let (wall_pat, wall_pat_len) = if f > 1e-9 && native.len() >= 2 {
+                    let mut pat = [0.0_f32; 8];
+                    let mut plen = 0.0_f32;
+                    for (i, &d) in native.iter().take(8).enumerate() {
+                        let v = (d * f) as f32;
+                        pat[i] = if i % 2 == 0 { v } else { -v };
+                        plen += v;
+                    }
+                    (pat, plen)
+                } else {
+                    ([0.0_f32; 8], 0.0)
+                };
+                let mut rails = Vec::new();
+                for sgn in [1.0_f64, -1.0] {
+                    if let Some(off) =
+                        convert::dgn_linestyle::offset_host_entity(e, sgn * radius)
+                    {
+                        let mut w = convert::tessellate::tessellate(
+                            document,
+                            h,
+                            &off,
+                            sel,
+                            entity_color,
+                            pattern_length,
+                            pattern,
+                            line_weight_px,
+                            anno_scale,
+                            world_per_pixel,
+                            bg_color,
+                            false,
+                        );
+                        for x in &mut w {
+                            x.aci = aci;
+                            x.aabb = aabb;
+                            if wall_pat_len > 1e-6 {
+                                x.pattern = wall_pat;
+                                x.pattern_length = wall_pat_len;
+                            }
+                        }
+                        rails.append(&mut w);
+                    }
+                }
+                if !rails.is_empty() {
+                    bases = rails;
+                }
+            }
             let last = *verts.last().unwrap();
             for (i, sym) in dgn_syms.iter().enumerate() {
                 let at = if i == 0 { verts[0] } else { last };
