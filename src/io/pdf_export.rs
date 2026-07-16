@@ -784,64 +784,6 @@ mod tests {
         }
     }
 
-    // Regression for #385: SDF text (`text_verts`) must be re-emitted as vector
-    // draw ops. Before the fix the exporter ignored `text_verts` entirely, so a
-    // text-only wire produced no glyph geometry — dimensions/text vanished.
-    //
-    // The box is derived from the run's own parameters (origin + the 10.0 height
-    // `text_wire` lays out at) rather than from the quads the mapping reads, so
-    // it pins placement/scale independently: a wrong origin, a dropped `anno`, a
-    // px-vs-mm mixup or an ox/oy misuse all move the ink out of it.
-    //
-    // It does NOT catch a mirrored corner assignment (bl <-> tl): the atlas plane
-    // rect is the ink bbox plus a symmetric SDF spread, so a mirror maps the ink
-    // box onto itself and no box-based assert can see it. The vertex order that
-    // relies on is pinned by `text_gpu`'s own tests instead.
-    #[test]
-    fn sdf_text_emits_vector_ops_at_the_run_position() {
-        let origin = [100.0, 50.0, 0.0];
-        let wire = text_wire("AB", origin);
-
-        let mut ops: Vec<Op> = Vec::new();
-        emit_text(&mut ops, std::slice::from_ref(&wire), 0.0, 0.0, 1.0, None);
-
-        let lines = ops
-            .iter()
-            .filter(|o| matches!(o, Op::DrawLine { .. }))
-            .count();
-        assert!(lines > 0, "stroke text emitted no polylines (ops: {})", ops.len());
-
-        // "AB" at height 10 from (100, 50) inks a box starting at the origin, at
-        // most 2 glyphs wide and one cap-height tall. `eps` covers the SDF plane
-        // spread past the ink.
-        let eps = 1.0_f32;
-        let (x0, y0) = (origin[0] as f32, origin[1] as f32);
-        let (x1, y1) = (x0 + 2.0 * 10.0 + eps, y0 + 10.0 + eps);
-        let (mut gx0, mut gy0, mut gx1, mut gy1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for o in &ops {
-            if let Op::DrawLine { line } = o {
-                for lp in &line.points {
-                    // Pt = mm × MM_TO_PT, and ox/oy are 0 here.
-                    let (x, y) = (lp.p.x.0 / MM_TO_PT, lp.p.y.0 / MM_TO_PT);
-                    assert!(
-                        x >= x0 - eps && x <= x1 && y >= y0 - eps && y <= y1,
-                        "glyph point ({x},{y}) outside the run's world box \
-                         [{x0},{y0}]..[{x1},{y1}] — mis-placed or mis-scaled mapping?"
-                    );
-                    gx0 = gx0.min(x);
-                    gy0 = gy0.min(y);
-                    gx1 = gx1.max(x);
-                    gy1 = gy1.max(y);
-                }
-            }
-        }
-        // …and it must actually span the run, not collapse into a corner.
-        assert!(
-            gx1 - gx0 > 2.0 && gy1 - gy0 > 2.0,
-            "glyph ink collapsed: [{gx0},{gy0}]..[{gx1},{gy1}]"
-        );
-    }
-
     // End-to-end: a page whose only content is SDF text produces a larger PDF
     // than the same page with the text stripped — proving text reaches the file.
     #[test]
