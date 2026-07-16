@@ -838,11 +838,17 @@ impl OpenCADStudio {
             }
 
             // PYRAMID <radius> <height> [sides] — create an n-sided pyramid mesh.
-            cmd if cmd == "PYRAMID"
-                || cmd.starts_with("PYRAMID ")
-                || cmd == "PYR"
-                || cmd.starts_with("PYR ") =>
-            {
+            "PYRAMID" | "PYR" => {
+                use crate::command::TwoValuePromptCommand;
+                let c = TwoValuePromptCommand::new(
+                    "PYRAMID",
+                    "PYRAMID  base radius:",
+                    "PYRAMID  height (add sides by typing a 3rd number):",
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("PYRAMID ") || cmd.starts_with("PYR ") => {
                 let nums: Vec<f64> = cmd
                     .split_whitespace()
                     .skip(1)
@@ -857,7 +863,23 @@ impl OpenCADStudio {
             }
 
             // SECTION [X|Y|Z] <value> — draw the cross-section outline of the solid.
-            cmd if cmd == "SECTION" || cmd.starts_with("SECTION ") => {
+            "SECTION" => {
+                use crate::command::SelectThenKeywordCommand;
+                let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
+                let c = SelectThenKeywordCommand::new(
+                    "SECTION",
+                    "SECTION  cutting-plane axis  [X / Y / Z]:",
+                    vec![
+                        ("X", "X", Some("SECTION  offset along X:")),
+                        ("Y", "Y", Some("SECTION  offset along Y:")),
+                        ("Z", "Z", Some("SECTION  offset along Z:")),
+                    ],
+                    has_sel,
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("SECTION ") => {
                 let parts: Vec<String> = cmd
                     .split_whitespace()
                     .skip(1)
@@ -903,11 +925,19 @@ impl OpenCADStudio {
             }
 
             // 3DMIRROR [X|Y|Z] — add a mirror of the selected solid across a plane.
-            cmd if cmd == "3DMIRROR"
-                || cmd == "MIRROR3D"
-                || cmd.starts_with("3DMIRROR ")
-                || cmd.starts_with("MIRROR3D ") =>
-            {
+            "3DMIRROR" | "MIRROR3D" => {
+                use crate::command::SelectThenKeywordCommand;
+                let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
+                let c = SelectThenKeywordCommand::new(
+                    "3DMIRROR",
+                    "3DMIRROR  mirror plane  [X / Y / Z]:",
+                    vec![("X", "X", None), ("Y", "Y", None), ("Z", "Z", None)],
+                    has_sel,
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("3DMIRROR ") || cmd.starts_with("MIRROR3D ") => {
                 let parts: Vec<String> = cmd
                     .split_whitespace()
                     .skip(1)
@@ -928,11 +958,23 @@ impl OpenCADStudio {
             }
 
             // 3DROTATE [X|Y|Z] <angle> — rotate the selected solid about an axis.
-            cmd if cmd == "3DROTATE"
-                || cmd == "ROTATE3D"
-                || cmd.starts_with("3DROTATE ")
-                || cmd.starts_with("ROTATE3D ") =>
-            {
+            "3DROTATE" | "ROTATE3D" => {
+                use crate::command::SelectThenKeywordCommand;
+                let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
+                let c = SelectThenKeywordCommand::new(
+                    "3DROTATE",
+                    "3DROTATE  rotation axis  [X / Y / Z]:",
+                    vec![
+                        ("X", "X", Some("3DROTATE  angle in degrees:")),
+                        ("Y", "Y", Some("3DROTATE  angle in degrees:")),
+                        ("Z", "Z", Some("3DROTATE  angle in degrees:")),
+                    ],
+                    has_sel,
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("3DROTATE ") || cmd.starts_with("ROTATE3D ") => {
                 let parts: Vec<String> = cmd
                     .split_whitespace()
                     .skip(1)
@@ -954,11 +996,23 @@ impl OpenCADStudio {
 
             // SLICE [X|Y|Z] <value> [TOP|BOTTOM] — cut the selected solid with an
             // axis-aligned plane, keeping the lower half by default.
-            cmd if cmd == "SLICE"
-                || cmd == "SL"
-                || cmd.starts_with("SLICE ")
-                || cmd.starts_with("SL ") =>
-            {
+            "SLICE" | "SL" => {
+                use crate::command::SelectThenKeywordCommand;
+                let has_sel = !self.tabs[i].scene.selected_entities().is_empty();
+                let c = SelectThenKeywordCommand::new(
+                    "SLICE",
+                    "SLICE  cutting-plane axis  [X / Y / Z]  (add TOP/BOTTOM by typing):",
+                    vec![
+                        ("X", "X", Some("SLICE  offset along X:")),
+                        ("Y", "Y", Some("SLICE  offset along Y:")),
+                        ("Z", "Z", Some("SLICE  offset along Z:")),
+                    ],
+                    has_sel,
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("SLICE ") || cmd.starts_with("SL ") => {
                 let parts: Vec<String> = cmd
                     .split_whitespace()
                     .skip(1)
