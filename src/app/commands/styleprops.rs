@@ -1372,7 +1372,16 @@ impl OpenCADStudio {
             }
 
             // ── RENAME table entries ──────────────────────────────────────
-            cmd if cmd == "RENAME" || cmd.starts_with("RENAME ") => {
+            // Bare RENAME prompts step by step (type → old → new); the argument
+            // form below both handles a fully-typed line and is the target the
+            // stepped front-end dispatches to.
+            "RENAME" => {
+                use crate::command::RenameCommand;
+                let c = RenameCommand::new();
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("RENAME ") => {
                 // Usage: RENAME <type> <old_name> <new_name>
                 // Types: LAYER BLOCK STYLE DIMSTYLE LINETYPE UCS VIEW
                 let parts: Vec<&str> = cmd.split_whitespace().collect();

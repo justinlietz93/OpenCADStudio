@@ -130,6 +130,118 @@ impl CadCommand for ValuePromptCommand {
     }
 }
 
+/// Interactive front-end for RENAME. Prompts for the object type (as clickable
+/// buttons), then the current name, then the new name, and delegates to the
+/// inline `RENAME <type> <old> <new>` handler via [`CmdResult::Dispatch`] — the
+/// rename logic stays in one place while the command prompts step by step like
+/// every other command instead of only working with all three arguments typed
+/// on one line.
+pub struct RenameCommand {
+    step: RenameStep,
+}
+
+enum RenameStep {
+    Type,
+    Old { ty: String },
+    New { ty: String, old: String },
+}
+
+impl RenameCommand {
+    /// `(button label, keyword)` for the object types the inline handler can
+    /// actually rename. BLOCK is intentionally omitted — the inline handler
+    /// does not implement it, so offering the button would do nothing.
+    const TYPES: [(&'static str, &'static str); 6] = [
+        ("Layer", "LAYER"),
+        ("Text style", "STYLE"),
+        ("Dim style", "DIMSTYLE"),
+        ("Linetype", "LINETYPE"),
+        ("UCS", "UCS"),
+        ("View", "VIEW"),
+    ];
+
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        Self {
+            step: RenameStep::Type,
+        }
+    }
+}
+
+impl CadCommand for RenameCommand {
+    fn name(&self) -> &'static str {
+        "RENAME"
+    }
+
+    fn prompt(&self) -> String {
+        match &self.step {
+            RenameStep::Type => "RENAME  Select the object type to rename:".to_string(),
+            RenameStep::Old { ty } => format!("RENAME {ty}  Enter the current name:"),
+            RenameStep::New { ty, old } => format!("RENAME {ty}  Rename \"{old}\" to:"),
+        }
+    }
+
+    fn options(&self) -> Vec<CmdOption> {
+        match self.step {
+            RenameStep::Type => Self::TYPES
+                .iter()
+                .map(|(label, keyword)| CmdOption::new(label, keyword))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn wants_text_input(&self) -> bool {
+        true
+    }
+
+    fn on_text_input(&mut self, text: &str) -> Option<CmdResult> {
+        let t = text.trim();
+        if t.is_empty() {
+            // Keep prompting for the current step.
+            return None;
+        }
+        match &self.step {
+            RenameStep::Type => {
+                // Accept a known type (or a common alias); re-prompt otherwise so
+                // a typo doesn't advance to a rename that can't happen.
+                let canonical = match t.to_uppercase().as_str() {
+                    "LAYER" | "LA" => "LAYER",
+                    "STYLE" | "TEXTSTYLE" | "ST" => "STYLE",
+                    "DIMSTYLE" | "D" => "DIMSTYLE",
+                    "LINETYPE" | "LT" => "LINETYPE",
+                    "UCS" => "UCS",
+                    "VIEW" | "V" => "VIEW",
+                    _ => return None,
+                };
+                self.step = RenameStep::Old {
+                    ty: canonical.to_string(),
+                };
+                None
+            }
+            RenameStep::Old { ty } => {
+                self.step = RenameStep::New {
+                    ty: ty.clone(),
+                    old: t.to_string(),
+                };
+                None
+            }
+            RenameStep::New { ty, old } => {
+                Some(CmdResult::Dispatch(format!("RENAME {ty} {old} {t}")))
+            }
+        }
+    }
+
+    fn on_point(&mut self, _pt: DVec3) -> CmdResult {
+        // A rename takes no point; ignore stray clicks and keep prompting.
+        CmdResult::NeedPoint
+    }
+
+    fn on_enter(&mut self) -> CmdResult {
+        // Bare Enter with nothing typed cancels, like the other prompt commands.
+        CmdResult::Cancel
+    }
+}
+
 // ── Result token ──────────────────────────────────────────────────────────
 
 /// Returned by every `CadCommand` method to tell main.rs what to do.
