@@ -267,31 +267,193 @@ fn cone_face_geom(sat: &SatDocument, face: &SatFace) -> Option<ConeFaceGeom> {
     })
 }
 
+/// Pick `count` parameter values across `[t_min, t_min + span]`. A closed
+/// revolution (`full`) is divided into `count` values around the full turn (the
+/// line at `t` and `t + span` coincide); a bounded arc gets `count` interior
+/// values, its two ends already drawn as rim edges.
+fn iso_params(t_min: f64, span: f64, full: bool, count: usize) -> Vec<f64> {
+    (0..count)
+        .map(|k| {
+            if full {
+                t_min + span * (k as f64 / count as f64)
+            } else {
+                t_min + span * ((k as f64 + 1.0) / (count as f64 + 1.0))
+            }
+        })
+        .collect()
+}
+
 fn collect_isolines(sat: &SatDocument, count: usize) -> Vec<[f64; 3]> {
     if count == 0 {
         return Vec::new();
     }
     let mut out: Vec<[f64; 3]> = Vec::new();
     for face in sat.faces() {
-        let Some(g) = cone_face_geom(sat, &face) else {
+        let Some(surf) = sat.resolve(face.surface()) else {
             continue;
         };
-        let [cx, cy, cz] = g.center;
-        let (r0, r1) = (g.radius + g.h_min * g.tan_a, g.radius + g.h_max * g.tan_a);
-        // A closed rim's line at theta and theta+TAU coincide, so step across
-        // [0, TAU) with `count` divisions; a bounded arc gets interior lines
-        // spanning its own arc (its two ends are already drawn as rim edges).
-        for k in 0..count {
-            let a = if g.full {
-                g.theta_min + g.theta_span * (k as f64 / count as f64)
-            } else {
-                g.theta_min + g.theta_span * ((k as f64 + 1.0) / (count as f64 + 1.0))
-            };
-            out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r0, a, g.h_min));
-            out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r1, a, g.h_max));
+        match surf.entity_type.as_str() {
+            "cone-surface" => cone_isolines(sat, &face, count, &mut out),
+            "sphere-surface" => sphere_isolines(sat, &face, count, &mut out),
+            "torus-surface" => torus_isolines(sat, &face, count, &mut out),
+            _ => {}
         }
     }
     out
+}
+
+/// Longitudinal lines up a cone/cylinder face, bottom rim to top rim.
+fn cone_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Vec<[f64; 3]>) {
+    let Some(g) = cone_face_geom(sat, face) else {
+        return;
+    };
+    let [cx, cy, cz] = g.center;
+    let (r0, r1) = (g.radius + g.h_min * g.tan_a, g.radius + g.h_max * g.tan_a);
+    for a in iso_params(g.theta_min, g.theta_span, g.full, count) {
+        out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r0, a, g.h_min));
+        out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r1, a, g.h_max));
+    }
+}
+
+/// Meridian lines on a sphere face — the standard "how a sphere reads" isolines,
+/// each running pole-ward across the face's colatitude span at `count` evenly
+/// spaced longitudes within the face's own longitude span.
+fn sphere_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Vec<[f64; 3]>) {
+    let Some(surf) = sat.resolve(face.surface()) else {
+        return;
+    };
+    let Some(sphere) = SatSphereSurface::from_record(surf) else {
+        return;
+    };
+    let (cx, cy, cz) = sphere.center();
+    let r = sphere.radius();
+    let pole = norm3([sphere.pole().0, sphere.pole().1, sphere.pole().2]);
+    let u = norm3([
+        sphere.u_direction().0,
+        sphere.u_direction().1,
+        sphere.u_direction().2,
+    ]);
+    let v = cross3(pole, u);
+    let poly = collect_face_polygon(sat, face, 48);
+    let (theta_min, theta_span, full, phi_min, phi_max) =
+        sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
+    const M: usize = 24;
+    let sphere_pt = |theta: f64, phi: f64| {
+        let d = sphere_dir(pole, u, v, theta, phi);
+        [cx + r * d[0], cy + r * d[1], cz + r * d[2]]
+    };
+    for theta in iso_params(theta_min, theta_span, full, count) {
+        for m in 0..M {
+            let p0 = phi_min + (phi_max - phi_min) * (m as f64 / M as f64);
+            let p1 = phi_min + (phi_max - phi_min) * ((m + 1) as f64 / M as f64);
+            out.push(sphere_pt(theta, p0));
+            out.push(sphere_pt(theta, p1));
+        }
+    }
+}
+
+/// Minor (cross-section) circles on a torus face at `count` revolution angles
+/// spanning the face — how a torus tube reads.
+fn torus_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Vec<[f64; 3]>) {
+    let Some(surf) = sat.resolve(face.surface()) else {
+        return;
+    };
+    let Some(torus) = SatTorusSurface::from_record(surf) else {
+        return;
+    };
+    let (cx, cy, cz) = torus.center();
+    let axis = norm3([torus.normal().0, torus.normal().1, torus.normal().2]);
+    let u = norm3([
+        torus.u_direction().0,
+        torus.u_direction().1,
+        torus.u_direction().2,
+    ]);
+    let v = cross3(axis, u);
+    let major = torus.major_radius();
+    let minor = torus.minor_radius();
+    let poly = collect_face_polygon(sat, face, 48);
+    let (phi_min, phi_span, full) = torus_phi_range(&poly, [cx, cy, cz], u, v);
+    const M: usize = 20;
+    for phi in iso_params(phi_min, phi_span, full, count) {
+        for t in 0..M {
+            let t0 = TAU * (t as f64 / M as f64);
+            let t1 = TAU * ((t + 1) as f64 / M as f64);
+            out.push(torus_pt(cx, cy, cz, axis, u, v, major, minor, t0, phi));
+            out.push(torus_pt(cx, cy, cz, axis, u, v, major, minor, t1, phi));
+        }
+    }
+}
+
+/// Longitude/colatitude span of a sphere face from its boundary polygon.
+/// Returns `(theta_min, theta_span, full, phi_min, phi_max)`; an empty boundary
+/// (a lone full sphere) spans the whole surface.
+fn sphere_param_range(
+    poly: &[[f64; 3]],
+    center: [f64; 3],
+    pole: [f64; 3],
+    u: [f64; 3],
+    v: [f64; 3],
+) -> (f64, f64, bool, f64, f64) {
+    use std::f64::consts::PI;
+    if poly.len() < 2 {
+        return (0.0, TAU, true, 0.0, PI);
+    }
+    let mut thetas: Vec<f64> = Vec::new();
+    let (mut phi_min, mut phi_max) = (f64::MAX, f64::MIN);
+    for &p in poly {
+        let d = norm3([p[0] - center[0], p[1] - center[1], p[2] - center[2]]);
+        let cphi = dot3(d, pole).clamp(-1.0, 1.0);
+        let phi = cphi.acos();
+        phi_min = phi_min.min(phi);
+        phi_max = phi_max.max(phi);
+        thetas.push(dot3(d, v).atan2(dot3(d, u)));
+    }
+    let (theta_min, theta_span, full) = angular_span(&thetas);
+    // Meridians converge at the poles, so pad the colatitude a touch toward each
+    // pole the face reaches so the lines meet the rim rather than stopping short.
+    (theta_min, theta_span, full, (phi_min - 0.05).max(0.0), (phi_max + 0.05).min(PI))
+}
+
+/// Revolution-angle span of a torus face from its boundary polygon.
+fn torus_phi_range(poly: &[[f64; 3]], center: [f64; 3], u: [f64; 3], v: [f64; 3]) -> (f64, f64, bool) {
+    if poly.len() < 2 {
+        return (0.0, TAU, true);
+    }
+    let phis: Vec<f64> = poly
+        .iter()
+        .map(|&p| {
+            let rel = [p[0] - center[0], p[1] - center[1], p[2] - center[2]];
+            dot3(rel, v).atan2(dot3(rel, u))
+        })
+        .collect();
+    angular_span(&phis)
+}
+
+/// Reduce a set of angles to a `(min, span, full)` arc. Mirrors `angular_range`'s
+/// gap detection: the largest gap between sorted angles is the arc's *outside*,
+/// so the arc runs from the gap's end round to its start; a small largest gap
+/// means the angles wrap the whole circle.
+fn angular_span(angles: &[f64]) -> (f64, f64, bool) {
+    if angles.is_empty() {
+        return (0.0, TAU, true);
+    }
+    let mut a: Vec<f64> = angles.iter().map(|x| x.rem_euclid(TAU)).collect();
+    a.sort_by(|x, y| x.partial_cmp(y).unwrap());
+    let mut gap_max = 0.0;
+    let mut gap_at = 0usize;
+    for i in 0..a.len() {
+        let next = if i + 1 < a.len() { a[i + 1] } else { a[0] + TAU };
+        let gap = next - a[i];
+        if gap > gap_max {
+            gap_max = gap;
+            gap_at = i;
+        }
+    }
+    if gap_max < TAU / 12.0 {
+        return (0.0, TAU, true); // wraps the full circle
+    }
+    let start = a[(gap_at + 1) % a.len()];
+    (start, TAU - gap_max, false)
 }
 
 /// World-space silhouette generators for each cone/cylinder face — the params a
@@ -314,42 +476,107 @@ fn collect_curved_gens(
         };
         [w[0] as f32, w[1] as f32, w[2] as f32]
     };
+    let scale = xform.map(|(_, _, s)| s).unwrap_or(1.0);
+    // Place a world point and split it into the double-single (high, low) pair.
+    let place = |p: [f64; 3]| -> ([f32; 3], [f32; 3]) {
+        let (wx, wy, wz) = match xform {
+            Some((m, tr, s)) => (
+                s * (p[0] * m[0] + p[1] * m[3] + p[2] * m[6]) + tr[0],
+                s * (p[0] * m[1] + p[1] * m[4] + p[2] * m[7]) + tr[1],
+                s * (p[0] * m[2] + p[1] * m[5] + p[2] * m[8]) + tr[2],
+            ),
+            None => (p[0], p[1], p[2]),
+        };
+        let (hx, hy, hz) = (wx as f32, wy as f32, wz as f32);
+        (
+            [hx, hy, hz],
+            [(wx - hx as f64) as f32, (wy - hy as f64) as f32, (wz - hz as f64) as f32],
+        )
+    };
     let mut out = Vec::new();
     for face in sat.faces() {
-        let Some(g) = cone_face_geom(sat, &face) else {
+        let Some(surf) = sat.resolve(face.surface()) else {
             continue;
         };
-        // Base circle centre in world space (double-single) — heights are along
-        // the unit axis, so the base sits at h_min.
-        let base_local = [
-            g.center[0] + g.h_min * g.axis[0],
-            g.center[1] + g.h_min * g.axis[1],
-            g.center[2] + g.h_min * g.axis[2],
-        ];
-        let (bx, by, bz, scale) = match xform {
-            Some((m, tr, s)) => (
-                s * (base_local[0] * m[0] + base_local[1] * m[3] + base_local[2] * m[6]) + tr[0],
-                s * (base_local[0] * m[1] + base_local[1] * m[4] + base_local[2] * m[7]) + tr[1],
-                s * (base_local[0] * m[2] + base_local[1] * m[5] + base_local[2] * m[8]) + tr[2],
-                s,
-            ),
-            None => (base_local[0], base_local[1], base_local[2], 1.0),
-        };
-        let (hx, hy, hz) = (bx as f32, by as f32, bz as f32);
-        out.push(CurvedGen {
-            base: [hx, hy, hz],
-            base_low: [(bx - hx as f64) as f32, (by - hy as f64) as f32, (bz - hz as f64) as f32],
-            axis: rot_dir(g.axis),
-            u_dir: rot_dir(g.u_dir),
-            v_dir: rot_dir(g.v_dir),
-            radius: (g.radius * scale) as f32,
-            tan_a: g.tan_a as f32,
-            h_min: 0.0,
-            h_max: ((g.h_max - g.h_min) * scale) as f32,
-            theta_min: g.theta_min as f32,
-            theta_span: g.theta_span as f32,
-            full: g.full,
-        });
+        match surf.entity_type.as_str() {
+            "cone-surface" => {
+                let Some(g) = cone_face_geom(sat, &face) else { continue };
+                let base_local = [
+                    g.center[0] + g.h_min * g.axis[0],
+                    g.center[1] + g.h_min * g.axis[1],
+                    g.center[2] + g.h_min * g.axis[2],
+                ];
+                let (base, base_low) = place(base_local);
+                out.push(CurvedGen::Cone {
+                    base,
+                    base_low,
+                    axis: rot_dir(g.axis),
+                    u_dir: rot_dir(g.u_dir),
+                    v_dir: rot_dir(g.v_dir),
+                    radius: (g.radius * scale) as f32,
+                    tan_a: g.tan_a as f32,
+                    h_max: ((g.h_max - g.h_min) * scale) as f32,
+                    theta_min: g.theta_min as f32,
+                    theta_span: g.theta_span as f32,
+                    full: g.full,
+                });
+            }
+            "sphere-surface" => {
+                let Some(sphere) = SatSphereSurface::from_record(surf) else { continue };
+                let (cx, cy, cz) = sphere.center();
+                let pole = norm3([sphere.pole().0, sphere.pole().1, sphere.pole().2]);
+                let u = norm3([
+                    sphere.u_direction().0,
+                    sphere.u_direction().1,
+                    sphere.u_direction().2,
+                ]);
+                let v = cross3(pole, u);
+                let poly = collect_face_polygon(sat, &face, 48);
+                let (tmin, tspan, full, pmin, pmax) =
+                    sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
+                let (center, center_low) = place([cx, cy, cz]);
+                out.push(CurvedGen::Sphere {
+                    center,
+                    center_low,
+                    pole: rot_dir(pole),
+                    u_dir: rot_dir(u),
+                    v_dir: rot_dir(v),
+                    radius: (sphere.radius() * scale) as f32,
+                    theta_min: tmin as f32,
+                    theta_span: tspan as f32,
+                    full,
+                    phi_min: pmin as f32,
+                    phi_max: pmax as f32,
+                });
+            }
+            "torus-surface" => {
+                let Some(torus) = SatTorusSurface::from_record(surf) else { continue };
+                let (cx, cy, cz) = torus.center();
+                let axis = norm3([torus.normal().0, torus.normal().1, torus.normal().2]);
+                let u = norm3([
+                    torus.u_direction().0,
+                    torus.u_direction().1,
+                    torus.u_direction().2,
+                ]);
+                let v = cross3(axis, u);
+                let poly = collect_face_polygon(sat, &face, 48);
+                let (pmin, pspan, full) = torus_phi_range(&poly, [cx, cy, cz], u, v);
+                let (center, center_low) = place([cx, cy, cz]);
+                out.push(CurvedGen::Torus {
+                    center,
+                    center_low,
+                    axis: rot_dir(axis),
+                    u_dir: rot_dir(u),
+                    v_dir: rot_dir(v),
+                    major: (torus.major_radius() * scale) as f32,
+                    minor: (torus.minor_radius() * scale) as f32,
+                    phi_min: pmin as f32,
+                    phi_span: pspan as f32,
+                    full,
+                });
+            }
+            _ => {}
+        }
     }
     out
 }

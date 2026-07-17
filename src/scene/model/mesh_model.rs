@@ -39,31 +39,59 @@ pub struct MeshModel {
 /// A curved face's generator, kept so a view-dependent silhouette (DISPSILH)
 /// can be computed per frame — the silhouette is where the surface turns away
 /// from the eye, which no baked edge can capture. World-space, post body
-/// transform; the base point carries a double-single low half so it stays
-/// precise at UTM scale like the mesh verts.
+/// transform; base/centre points carry a double-single low half so they stay
+/// precise at UTM scale like the mesh verts. Each variant also carries the
+/// face's parametric extent so the silhouette is clipped to the actual face
+/// rather than drawn across the whole (possibly partial) surface.
 #[derive(Clone, Copy, Debug)]
-pub struct CurvedGen {
-    /// Base-circle centre (world), high half of the double-single.
-    pub base: [f32; 3],
-    /// Low residual paired with `base`.
-    pub base_low: [f32; 3],
-    /// Unit axis direction (world).
-    pub axis: [f32; 3],
-    /// Radial frame: `u` is the θ=0 direction, `v = axis × u`.
-    pub u_dir: [f32; 3],
-    pub v_dir: [f32; 3],
-    /// Radius at the base (`h = 0`).
-    pub radius: f32,
-    /// `tan(half-angle)`: radius at height `h` is `radius + h * tan_a`
-    /// (0 for a cylinder, non-zero for a cone).
-    pub tan_a: f32,
-    /// Height span along the axis the face covers.
-    pub h_min: f32,
-    pub h_max: f32,
-    /// Angular span the face covers; `full` = a closed revolution.
-    pub theta_min: f32,
-    pub theta_span: f32,
-    pub full: bool,
+pub enum CurvedGen {
+    /// Cone / cylinder: two edge-on lines up the surface.
+    Cone {
+        base: [f32; 3],
+        base_low: [f32; 3],
+        axis: [f32; 3],
+        /// Radial frame: `u` is the θ=0 direction, `v = axis × u`.
+        u_dir: [f32; 3],
+        v_dir: [f32; 3],
+        /// Radius at the base (`h = 0`).
+        radius: f32,
+        /// `tan(half-angle)`: radius at height `h` is `radius + h * tan_a`.
+        tan_a: f32,
+        /// Height span along the axis the face covers (base is `h = 0`).
+        h_max: f32,
+        theta_min: f32,
+        theta_span: f32,
+        full: bool,
+    },
+    /// Sphere: the great circle perpendicular to the view, clipped to the
+    /// face's longitude/colatitude window.
+    Sphere {
+        center: [f32; 3],
+        center_low: [f32; 3],
+        pole: [f32; 3],
+        u_dir: [f32; 3],
+        v_dir: [f32; 3],
+        radius: f32,
+        theta_min: f32,
+        theta_span: f32,
+        full: bool,
+        phi_min: f32,
+        phi_max: f32,
+    },
+    /// Torus: the two extreme circles of the tube (outer/inner), clipped to the
+    /// revolution window the face covers.
+    Torus {
+        center: [f32; 3],
+        center_low: [f32; 3],
+        axis: [f32; 3],
+        u_dir: [f32; 3],
+        v_dir: [f32; 3],
+        major: f32,
+        minor: f32,
+        phi_min: f32,
+        phi_span: f32,
+        full: bool,
+    },
 }
 
 #[derive(Clone, Debug)]

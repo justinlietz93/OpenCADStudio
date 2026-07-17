@@ -62,6 +62,10 @@ pub struct ViewportData {
     pub(in crate::scene) images: Arc<Vec<ImageModel>>,
     pub(in crate::scene) meshes: Arc<Vec<MeshLodSet>>,
     pub(in crate::scene) uniforms: Uniforms,
+    /// World-space camera forward — the parallel view direction. DISPSILH
+    /// silhouettes use this alone (not the eye position), so the outline follows
+    /// the view angle and doesn't shift with pan / perspective foreshortening.
+    pub(in crate::scene) view_dir: glam::Vec3,
     /// Camera rotation matrix derived from the quaternion.
     /// Used by the ViewCube pipeline — no gimbal lock.
     pub(in crate::scene) cam_rotation: Mat4,
@@ -562,9 +566,9 @@ impl shader::Primitive for Primitive {
             // default, so this is a no-op unless the drawing enables it). Only
             // in modes that draw edges — pure shaded hides them.
             if vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges) {
-                inner.upload_silhouettes(device, &vp.meshes[..], eye);
+                inner.upload_silhouettes(device, &vp.meshes[..], vp.view_dir);
             } else {
-                inner.upload_silhouettes(device, &[], eye);
+                inner.upload_silhouettes(device, &[], vp.view_dir);
             }
             inner.compute_wire_scissors(view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_wipeout_scissors(view_rot, eye, clip_size.width, clip_size.height);
@@ -1361,6 +1365,7 @@ impl Scene {
             images,
             meshes,
             uniforms,
+            view_dir: (inst.camera.rotation * glam::Vec3::NEG_Z).normalize_or(glam::Vec3::NEG_Z),
             cam_rotation: inst.camera.view_rotation_mat() * self.viewcube_ucs_mat(),
             compass_rotation: inst.camera.view_rotation_mat(),
             // Only the active viewport gets the hovered-region highlight.

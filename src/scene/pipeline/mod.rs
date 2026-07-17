@@ -1587,72 +1587,142 @@ impl Pipeline {
         &mut self,
         device: &wgpu::Device,
         sets: &[crate::scene::model::mesh_model::MeshLodSet],
-        eye: glam::DVec3,
+        view_dir: glam::Vec3,
     ) {
+        // Silhouettes follow the view *angle* only — a single parallel direction
+        // for the whole scene, not the eye-to-surface vector — so the outline
+        // stays put under pan and doesn't foreshorten. This is the orthographic
+        // silhouette a CAD wireframe expects.
+        let view = glam::DVec3::new(view_dir.x as f64, view_dir.y as f64, view_dir.z as f64)
+            .normalize_or(glam::DVec3::NEG_Z);
+        use crate::scene::model::mesh_model::CurvedGen;
         use crate::scene::pipeline::mesh_gpu::MeshVertex;
         let mut verts: Vec<MeshVertex> = Vec::new();
-        let dot = |a: [f32; 3], b: glam::DVec3| {
-            a[0] as f64 * b.x + a[1] as f64 * b.y + a[2] as f64 * b.z
+        let d3 = |a: [f32; 3]| glam::DVec3::new(a[0] as f64, a[1] as f64, a[2] as f64);
+        let lo = |c: [f32; 3], l: [f32; 3]| {
+            glam::DVec3::new(
+                c[0] as f64 + l[0] as f64,
+                c[1] as f64 + l[1] as f64,
+                c[2] as f64 + l[2] as f64,
+            )
         };
         for set in sets {
+            let color = set.lods.first().map(|m| m.color).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let mut mk = |w: glam::DVec3| -> MeshVertex {
+                let (hx, hy, hz) = (w.x as f32, w.y as f32, w.z as f32);
+                MeshVertex {
+                    position: [hx, hy, hz],
+                    normal: [0.0, 1.0, 0.0],
+                    color,
+                    position_low: [
+                        (w.x - hx as f64) as f32,
+                        (w.y - hy as f64) as f32,
+                        (w.z - hz as f64) as f32,
+                    ],
+                }
+            };
             for g in &set.curved_gens {
-                let base = glam::DVec3::new(
-                    g.base[0] as f64 + g.base_low[0] as f64,
-                    g.base[1] as f64 + g.base_low[1] as f64,
-                    g.base[2] as f64 + g.base_low[2] as f64,
-                );
-                // View direction from eye toward the face (accurate for both
-                // orthographic and perspective).
-                let view = (base - eye).normalize();
-                let Some((t0, t1)) = silhouette_thetas(
-                    dot(g.u_dir, view),
-                    dot(g.v_dir, view),
-                    dot(g.axis, view),
-                    g.tan_a as f64,
-                ) else {
-                    continue;
-                };
-                let r0 = g.radius as f64;
-                let r1 = g.radius as f64 + g.h_max as f64 * g.tan_a as f64;
-                for theta in [t0, t1] {
-                    if !g.full {
-                        // Only within the face's own arc; normalise the offset
-                        // from theta_min into [0, TAU).
-                        let mut off = theta - g.theta_min as f64;
-                        let tau = std::f64::consts::TAU;
-                        off = off.rem_euclid(tau);
-                        if off > g.theta_span as f64 {
+                match g {
+                    CurvedGen::Cone {
+                        base, base_low, axis, u_dir, v_dir, radius, tan_a,
+                        h_max, theta_min, theta_span, full,
+                    } => {
+                        let base = lo(*base, *base_low);
+                        let (axis, u, v) = (d3(*axis), d3(*u_dir), d3(*v_dir));
+                        let Some((t0, t1)) =
+                            silhouette_thetas(view.dot(u), view.dot(v), view.dot(axis), *tan_a as f64)
+                        else {
                             continue;
+                        };
+                        let r0 = *radius as f64;
+                        let r1 = *radius as f64 + *h_max as f64 * *tan_a as f64;
+                        for theta in [t0, t1] {
+                            if !full {
+                                let off = (theta - *theta_min as f64).rem_euclid(std::f64::consts::TAU);
+                                if off > *theta_span as f64 {
+                                    continue;
+                                }
+                            }
+                            let (c, s) = (theta.cos(), theta.sin());
+                            let radial = u * c + v * s;
+                            verts.push(mk(base + radial * r0));
+                            verts.push(mk(base + radial * r1 + axis * *h_max as f64));
                         }
                     }
-                    let (c, s) = (theta.cos(), theta.sin());
-                    let radial = |r: f64| {
-                        [
-                            g.u_dir[0] as f64 * r * c + g.v_dir[0] as f64 * r * s,
-                            g.u_dir[1] as f64 * r * c + g.v_dir[1] as f64 * r * s,
-                            g.u_dir[2] as f64 * r * c + g.v_dir[2] as f64 * r * s,
-                        ]
-                    };
-                    let rb = radial(r0);
-                    let rt = radial(r1);
-                    let mk = |off: [f64; 3], h: f64| -> MeshVertex {
-                        let wx = base.x + off[0] + h * g.axis[0] as f64;
-                        let wy = base.y + off[1] + h * g.axis[1] as f64;
-                        let wz = base.z + off[2] + h * g.axis[2] as f64;
-                        let (hx, hy, hz) = (wx as f32, wy as f32, wz as f32);
-                        MeshVertex {
-                            position: [hx, hy, hz],
-                            normal: [0.0, 1.0, 0.0],
-                            color: set.lods.first().map(|m| m.color).unwrap_or([0.0, 0.0, 0.0, 1.0]),
-                            position_low: [
-                                (wx - hx as f64) as f32,
-                                (wy - hy as f64) as f32,
-                                (wz - hz as f64) as f32,
-                            ],
+                    CurvedGen::Sphere {
+                        center, center_low, pole, u_dir, v_dir, radius,
+                        theta_min, theta_span, full, phi_min, phi_max,
+                    } => {
+                        let c = lo(*center, *center_low);
+                        let (pole, u, v) = (d3(*pole), d3(*u_dir), d3(*v_dir));
+                        let r = *radius as f64;
+                        // Great circle in the plane perpendicular to the view.
+                        let mut e1 = view.cross(pole);
+                        if e1.length_squared() < 1e-12 {
+                            e1 = view.cross(u);
                         }
-                    };
-                    verts.push(mk(rb, 0.0));
-                    verts.push(mk(rt, g.h_max as f64));
+                        let e1 = e1.normalize();
+                        let e2 = view.cross(e1).normalize();
+                        const N: usize = 64;
+                        let mut prev: Option<glam::DVec3> = None;
+                        for i in 0..=N {
+                            let a = std::f64::consts::TAU * (i as f64 / N as f64);
+                            let dir = e1 * a.cos() + e2 * a.sin();
+                            // Keep only the arc that lies on the actual face.
+                            let on_face = *full || {
+                                let phi = dir.dot(pole).clamp(-1.0, 1.0).acos();
+                                let th = dir.dot(v).atan2(dir.dot(u));
+                                let toff = (th - *theta_min as f64).rem_euclid(std::f64::consts::TAU);
+                                phi >= *phi_min as f64
+                                    && phi <= *phi_max as f64
+                                    && (toff <= *theta_span as f64)
+                            };
+                            let p = if on_face { Some(c + dir * r) } else { None };
+                            if let (Some(a), Some(b)) = (prev, p) {
+                                verts.push(mk(a));
+                                verts.push(mk(b));
+                            }
+                            prev = p;
+                        }
+                    }
+                    CurvedGen::Torus {
+                        center, center_low, axis, u_dir, v_dir, major, minor,
+                        phi_min, phi_span, full,
+                    } => {
+                        let ctr = lo(*center, *center_low);
+                        let (axis, u, v) = (d3(*axis), d3(*u_dir), d3(*v_dir));
+                        let (major, minor) = (*major as f64, *minor as f64);
+                        // True silhouette: at each revolution angle the tube is a
+                        // circle; the two points where its normal turns edge-on
+                        // trace two curves around the ring. Sample the revolution
+                        // and connect consecutive edge-on points.
+                        const N: usize = 72;
+                        let span = if *full { std::f64::consts::TAU } else { *phi_span as f64 };
+                        let mut prev: [Option<glam::DVec3>; 2] = [None, None];
+                        for i in 0..=N {
+                            let phi = *phi_min as f64 + span * (i as f64 / N as f64);
+                            let radial = u * phi.cos() + v * phi.sin();
+                            let ring = ctr + radial * major;
+                            let (rv, av) = (radial.dot(view), axis.dot(view));
+                            if rv.abs() < 1e-9 && av.abs() < 1e-9 {
+                                prev = [None, None];
+                                continue;
+                            }
+                            // tube normal(θ) = radial·cosθ + axis·sinθ; ⟂ view at
+                            // θ = atan2(-rv, av) and +π.
+                            let th = (-rv).atan2(av);
+                            let cur = [th, th + std::f64::consts::PI];
+                            for k in 0..2 {
+                                let t = cur[k];
+                                let p = ring + (radial * t.cos() + axis * t.sin()) * minor;
+                                if let Some(pp) = prev[k] {
+                                    verts.push(mk(pp));
+                                    verts.push(mk(p));
+                                }
+                                prev[k] = Some(p);
+                            }
+                        }
+                    }
                 }
             }
         }
