@@ -69,6 +69,8 @@ impl CadCommand for AreaCommand {
         pts.push(f(pt));
         pts.push(f(self.points[0]));
         Some(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

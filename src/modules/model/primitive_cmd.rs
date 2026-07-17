@@ -305,6 +305,8 @@ inventory::submit!(crate::command::CommandRegistration {
 
 fn wire(name: &str, points: Vec<[f32; 3]>) -> WireModel {
     WireModel {
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

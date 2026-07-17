@@ -40,6 +40,7 @@ fn point_truck(pt: &Point, pdmode: i16, s: f64) -> TruckEntity {
         // Default: a single vertex (driver handles the dot pixel).
         let p = Point3::new(wx, wy, wz);
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Point(builder::vertex(p)),
             snap_pts: vec![(snap, SnapHint::Node)],
             tangent_geoms: vec![],
@@ -51,6 +52,7 @@ fn point_truck(pt: &Point, pdmode: i16, s: f64) -> TruckEntity {
     if pts.is_empty() {
         // PDMODE 1 = nothing — emit an empty Lines wire so picking still works.
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(vec![]),
             snap_pts: vec![(snap, SnapHint::Node)],
             tangent_geoms: vec![],
@@ -59,6 +61,7 @@ fn point_truck(pt: &Point, pdmode: i16, s: f64) -> TruckEntity {
         };
     }
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(pts),
         snap_pts: vec![(snap, SnapHint::Node)],
         tangent_geoms: vec![],

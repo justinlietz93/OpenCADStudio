@@ -115,6 +115,7 @@ impl TruckConvertible for RasterImage {
         };
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -348,6 +349,7 @@ impl TruckConvertible for Wipeout {
         };
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: vec![],

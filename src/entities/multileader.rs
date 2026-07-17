@@ -298,6 +298,7 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
     }
 
     Some(TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(points),
         snap_pts,
         tangent_geoms: tangents,
@@ -1399,6 +1400,8 @@ impl MultiLeaderTess for MultiLeader {
         // WireModels so the renderer respects per-piece coloring.
         let mut wires: Vec<WireModel> = Vec::new();
         wires.push(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1684,6 +1687,8 @@ impl MultiLeaderTess for MultiLeader {
                         xy = xy.max(y);
                     }
                     wires.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
                         dash_from_start: false,
                         dash_align_end: None,
                         text_verts: sdf_verts,
@@ -1749,6 +1754,8 @@ impl MultiLeaderTess for MultiLeader {
                         wcs_corners[3],
                     ];
                     wires.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1782,6 +1789,8 @@ impl MultiLeaderTess for MultiLeader {
                         wcs_corners[0],
                     ];
                     wires.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

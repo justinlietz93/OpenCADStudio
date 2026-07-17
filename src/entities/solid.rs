@@ -54,6 +54,7 @@ impl TruckConvertible for Solid {
         ];
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: snap,
             tangent_geoms: vec![],

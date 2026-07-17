@@ -23,6 +23,7 @@ fn to_truck(spl: &Spline) -> TruckEntity {
             let key_vertices: Vec<[f64; 3]> =
                 spl.fit_points.iter().map(|p| [p.x, p.y, p.z]).collect();
             return TruckEntity {
+                pick_tris: Vec::new(),
                 object: TruckObject::Lines(pts),
                 snap_pts: vec![],
                 tangent_geoms: vec![],
@@ -31,6 +32,7 @@ fn to_truck(spl: &Spline) -> TruckEntity {
             };
         }
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Point(builder::vertex(Point3::new(0.0, 0.0, 0.0))),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -106,6 +108,7 @@ fn to_truck(spl: &Spline) -> TruckEntity {
     };
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object,
         snap_pts: vec![],
         tangent_geoms: vec![],

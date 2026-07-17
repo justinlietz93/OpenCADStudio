@@ -17,6 +17,7 @@ fn to_truck(ole: &Ole2Frame) -> TruckEntity {
     if (x1 - x0).abs() < 1e-6 && (y1 - y0).abs() < 1e-6 {
         let s = 0.5_f64;
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(vec![[-s, 0.0, z], [s, 0.0, z]]),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -46,6 +47,7 @@ fn to_truck(ole: &Ole2Frame) -> TruckEntity {
     ];
     let center = glam::DVec3::new(cx, cy, z);
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(pts),
         snap_pts: vec![(center, SnapHint::Center)],
         tangent_geoms: vec![],

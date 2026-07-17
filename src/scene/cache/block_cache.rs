@@ -48,6 +48,11 @@ pub struct LocalWire {
     pub tangent_geoms: Vec<TangentGeom>,
     pub fill_tris: Vec<[f32; 3]>,
     pub fill_tris_low: Vec<[f32; 3]>,
+    /// Thickness-wall pick geometry, transformed by the insert like `points`
+    /// so a block child's extruded wall stays selectable at the instance's
+    /// place and scale. Never reaches the GPU.
+    pub pick_tris: Vec<[f32; 3]>,
+    pub pick_tris_low: Vec<[f32; 3]>,
     /// Per-wire colour from the tessellator output. For most entities this
     /// equals the sub-entity's resolved colour. For colour-split MTEXT
     /// (`\C`/`\c` inline overrides) each wire carries its own override colour.
@@ -464,6 +469,8 @@ fn tessellate_sub_local(
             tangent_geoms: wire.tangent_geoms,
             fill_tris: wire.fill_tris,
             fill_tris_low: wire.fill_tris_low,
+            pick_tris: wire.pick_tris,
+            pick_tris_low: wire.pick_tris_low,
             color: wire.color,
             aci,
             pattern_length: pat_len,
@@ -748,6 +755,10 @@ struct BatchEntry {
     /// reconstructs `high + low`). Without it absolute f32 fills quantize to
     /// ~0.5 m and the greek-text rectangles shear.
     fill_tris_low: Vec<[f32; 3]>,
+    /// Accumulated thickness-wall pick geometry, paired high/low like
+    /// `fill_tris`. Pick-only — no GPU batch reads this.
+    pick_tris: Vec<[f32; 3]>,
+    pick_tris_low: Vec<[f32; 3]>,
     /// Accumulated SDF glyph quads (world space) for block-instance text.
     text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>,
     min_x: f32,
@@ -826,6 +837,8 @@ impl Batches {
                 // the cached defn.
                 let color = crate::scene::view::render::adapt_to_bg(b.color, bg_color);
                 WireModel {
+                    pick_tris: b.pick_tris,
+                    pick_tris_low: b.pick_tris_low,
                     dash_from_start: false,
                     dash_align_end: None,
                     text_verts: b.text_verts,
@@ -1086,7 +1099,11 @@ fn emit_wire(
     ctx: &ExpandCtx,
     out: &mut Batches,
 ) {
-    if lw.points.is_empty() && lw.fill_tris.is_empty() && lw.text_verts.is_empty() {
+    if lw.points.is_empty()
+        && lw.fill_tris.is_empty()
+        && lw.text_verts.is_empty()
+        && lw.pick_tris.is_empty()
+    {
         return;
     }
 
@@ -1245,6 +1262,27 @@ fn emit_wire(
         let (hz, lz) = WireModel::split_ds(v.z);
         entry.fill_tris.push([hx, hy, hz]);
         entry.fill_tris_low.push([lx, ly, lz]);
+    }
+    // Thickness walls: same reconstruct → transform → re-split as the fills
+    // above, so a block child's wall tracks the insert's placement and scale.
+    debug_assert!(
+        lw.pick_tris_low.is_empty() || lw.pick_tris.len() == lw.pick_tris_low.len(),
+        "pick_tris_low must be empty or the same length as pick_tris (got {} vs {})",
+        lw.pick_tris.len(),
+        lw.pick_tris_low.len(),
+    );
+    for (idx, p) in lw.pick_tris.iter().enumerate() {
+        let pl = lw.pick_tris_low.get(idx).copied().unwrap_or([0.0; 3]);
+        let v = accum_xform.apply(Vector3::new(
+            p[0] as f64 + pl[0] as f64,
+            p[1] as f64 + pl[1] as f64,
+            p[2] as f64 + pl[2] as f64,
+        ));
+        let (hx, lx) = WireModel::split_ds(v.x);
+        let (hy, ly) = WireModel::split_ds(v.y);
+        let (hz, lz) = WireModel::split_ds(v.z);
+        entry.pick_tris.push([hx, hy, hz]);
+        entry.pick_tris_low.push([lx, ly, lz]);
     }
     // SDF glyph quads: reconstruct each block-local f64 position, apply the
     // insert transform, re-split — same path as points/fills so block-instance

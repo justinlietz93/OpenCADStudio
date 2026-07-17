@@ -195,6 +195,7 @@ impl TruckConvertible for Face3D {
         }
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: vec![
                 (Vec3::from(p0f).as_dvec3(), SnapHint::Node),
@@ -369,6 +370,7 @@ impl TruckConvertible for PolygonMesh {
         }
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -524,6 +526,7 @@ impl TruckConvertible for PolyfaceMesh {
         }
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -690,6 +693,7 @@ impl TruckConvertible for Mesh {
         let key_vertices: Vec<[f64; 3]> = self.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
 
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts),
             snap_pts,
             tangent_geoms: vec![],

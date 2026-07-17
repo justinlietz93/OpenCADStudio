@@ -370,6 +370,8 @@ pub fn tessellate(
                     None
                 };
                 elem_wires.push(WireModel {
+                    pick_tris: Vec::new(),
+                    pick_tris_low: Vec::new(),
                     // MLINE dashes: A-type aligned, but the end-dash length is
                     // shared across all parallel elements (`dash_align_end`) so
                     // their interiors stay in phase (perpendicular dashes line up)
@@ -650,6 +652,8 @@ pub fn tessellate(
                                         ftl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        pick_tris: Vec::new(),
+                                        pick_tris_low: Vec::new(),
                                         dash_from_start: false,
                                         dash_align_end: None,
                                         text_verts: Vec::new(),
@@ -685,6 +689,8 @@ pub fn tessellate(
                                         fpl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        pick_tris: Vec::new(),
+                                        pick_tris_low: Vec::new(),
                                         dash_from_start: false,
                                         dash_align_end: None,
                                         text_verts: Vec::new(),
@@ -727,6 +733,8 @@ pub fn tessellate(
                             low.push(ll);
                         }
                         wires.push(WireModel {
+                            pick_tris: Vec::new(),
+                            pick_tris_low: Vec::new(),
                             dash_from_start: false,
                             dash_align_end: None,
                             text_verts: Vec::new(),
@@ -750,6 +758,8 @@ pub fn tessellate(
                         });
                     }
                     wires.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
                         dash_from_start: false,
                         dash_align_end: None,
                         text_verts: sdf_verts,
@@ -803,6 +813,8 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            pick_tris: Vec::new(),
+                            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -838,6 +850,8 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            pick_tris: Vec::new(),
+                            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -870,6 +884,8 @@ pub fn tessellate(
                 // are empty → the early-return path above).
                 if !sdf_verts.is_empty() {
                     out.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
                         dash_from_start: false,
                         dash_align_end: None,
                         text_verts: sdf_verts,
@@ -895,6 +911,8 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -942,6 +960,8 @@ pub fn tessellate(
                             .map(|[kx, ky, kz]| [kx, ky, kz])
                             .collect();
                         return vec![WireModel {
+                            pick_tris: Vec::new(),
+                            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -988,6 +1008,8 @@ pub fn tessellate(
                         .map(|[x, y, z]| [x, y, z])
                         .collect();
                     return vec![WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1023,6 +1045,8 @@ pub fn tessellate(
                         .map(|[x, y, z]| [x, y, z])
                         .collect();
                     return vec![WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1062,6 +1086,11 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
                 let (fill_tris, fill_tris_low) = points_to_ds(te.fill_tris);
+                // Thickness walls ride on the wire that carries their edges, not
+                // on a wire of their own: they are pick geometry for that entity,
+                // and `fill_tris` below deliberately splits off into a fill-only
+                // wire (`is_fill_only`) which has no `points` to hang them from.
+                let (pick_tris, pick_tris_low) = points_to_ds(te.pick_tris);
                 let mut out = Vec::new();
                 let mut is_first = true;
 
@@ -1077,6 +1106,8 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+                        pick_tris,
+                        pick_tris_low,
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1111,6 +1142,8 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1136,6 +1169,8 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1171,6 +1206,8 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
                 return vec![WireModel {
+                    pick_tris: Vec::new(),
+                    pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -1237,6 +1274,8 @@ pub fn tessellate(
     let snap_pts: Vec<(glam::DVec3, SnapHint)> =
         snap_pts.into_iter().map(|(p, h)| (p.as_dvec3(), h)).collect();
     vec![WireModel {
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

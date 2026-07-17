@@ -216,6 +216,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
         let _ = input.line_count;
         let _ = input.is_multiline;
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Text(layout.strokes),
             snap_pts: vec![(snap_pt, SnapHint::Insertion)],
             tangent_geoms: vec![],
@@ -313,6 +314,7 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
     let _ = input.line_count; // round-trip only — recomputed above
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Text(strokes_all),
         snap_pts: vec![(snap_pt, SnapHint::Insertion)],
         tangent_geoms: vec![],

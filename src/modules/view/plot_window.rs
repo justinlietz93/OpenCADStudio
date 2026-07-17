@@ -48,6 +48,8 @@ impl CadCommand for PlotWindowCommand {
         let p1 = self.p1?.as_vec3();
         // Draw the selection rectangle.
         Some(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

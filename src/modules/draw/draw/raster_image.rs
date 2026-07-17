@@ -108,6 +108,8 @@ impl CadCommand for ImageCommand {
         let p3 = [origin.x, origin.y + world_height, origin.z];
 
         Some(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

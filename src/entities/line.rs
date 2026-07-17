@@ -6,7 +6,7 @@ use crate::entities::common::{
     center_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
 };
 use crate::entities::traits::TruckConvertible;
-use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
 use crate::scene::model::wire_model::TangentGeom;
 
@@ -45,6 +45,7 @@ fn to_truck(line: &Line) -> TruckEntity {
             p1t,
         ];
         return TruckEntity {
+            pick_tris: extrusion_wall_tris(&kv, [t * nx, t * ny, t * nz]),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: vec![tangent],
@@ -57,6 +58,7 @@ fn to_truck(line: &Line) -> TruckEntity {
     let v1 = builder::vertex(p1);
     let edge = builder::line(&v0, &v1);
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Curve(edge),
         snap_pts: vec![],
         tangent_geoms: vec![tangent],

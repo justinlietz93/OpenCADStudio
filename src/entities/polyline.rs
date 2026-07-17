@@ -6,7 +6,7 @@ use crate::entities::common::{
     edit_prop as edit, parse_f64, ro_prop as ro, square_grip, stepper_prop as stepper,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
-use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::TangentGeom;
 
@@ -26,6 +26,7 @@ fn tessellate_polyline(pl: &Polyline) -> TruckEntity {
 
     let key_verts = pts.clone();
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(points),
         snap_pts: vec![],
         tangent_geoms: vec![],
@@ -169,6 +170,7 @@ fn tessellate_polyline2d(pl: &Polyline2D) -> TruckEntity {
     let verts = &pl.vertices;
     if verts.is_empty() {
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(vec![]),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -253,6 +255,7 @@ fn tessellate_polyline2d(pl: &Polyline2D) -> TruckEntity {
             }
         }
         return TruckEntity {
+            pick_tris: extrusion_wall_tris(&path, [t * nx, t * ny, t * nz]),
             object: TruckObject::Lines(pts),
             snap_pts: vec![],
             tangent_geoms: tgs,
@@ -301,6 +304,7 @@ fn tessellate_polyline2d(pl: &Polyline2D) -> TruckEntity {
     }
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Contour(edges.into_iter().collect::<Wire>()),
         snap_pts: vec![],
         tangent_geoms: tangents,
@@ -578,6 +582,7 @@ fn tessellate_polyline3d(pl: &Polyline3D) -> TruckEntity {
     }
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(points),
         snap_pts: vec![],
         tangent_geoms: vec![],

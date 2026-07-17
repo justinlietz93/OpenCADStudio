@@ -53,6 +53,7 @@ impl TruckConvertible for Underlay {
             // Insertion grip.
             let key: Vec<[f64; 3]> = pts.clone();
             Some(TruckEntity {
+                pick_tris: Vec::new(),
                 object: TruckObject::Lines(pts),
                 snap_pts: vec![(glam::DVec3::new(self.insertion_point.x, self.insertion_point.y, self.insertion_point.z), SnapHint::Node)],
                 tangent_geoms: vec![],
@@ -63,6 +64,7 @@ impl TruckConvertible for Underlay {
             // No clip boundary: draw a cross at insertion point.
             let pts = cross_wire(origin, 1.0);
             Some(TruckEntity {
+                pick_tris: Vec::new(),
                 object: TruckObject::Lines(pts),
                 snap_pts: vec![(glam::DVec3::new(self.insertion_point.x, self.insertion_point.y, self.insertion_point.z), SnapHint::Node)],
                 tangent_geoms: vec![],

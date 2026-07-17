@@ -3059,6 +3059,8 @@ fn collect_runs(pts: &[[f64; 2]], take: &dyn Fn([f64; 2]) -> bool, out: &mut Vec
 /// Build a preview wire from a NaN-break point list.
 fn preview_wire(points: Vec<[f32; 3]>, color: [f32; 4], name: &str) -> WireModel {
     WireModel {
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
         dash_from_start: false,
         dash_align_end: None,
         text_verts: Vec::new(),

@@ -313,6 +313,14 @@ impl Scene {
                 // re-expressed in paper coords — drop it (no tangent snap on
                 // projected viewport content) rather than snap to UTM.
                 out.tangent_geoms = Vec::new();
+                // Same for thickness walls: `points` above were projected and
+                // clipped into paper coords, and the clone's wall triangles are
+                // still model-space. Left in place they would hit-test at a
+                // model-scale offset — a stray catch somewhere out on the sheet.
+                // Drop them: an extruded entity inside a floating viewport stays
+                // selectable by its edges, which do get projected.
+                out.pick_tris = Vec::new();
+                out.pick_tris_low = Vec::new();
                 out.aabb = if pmnx.is_finite() {
                     [pmnx, pmny, pmxx, pmxy]
                 } else {

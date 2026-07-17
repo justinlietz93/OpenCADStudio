@@ -7,7 +7,7 @@ use crate::entities::common::{
     stepper_prop as stepper,
 };
 use crate::entities::traits::TruckConvertible;
-use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
+use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::TangentGeom;
 
@@ -91,6 +91,7 @@ fn thick_segments(
         }
     }
     TruckEntity {
+        pick_tris: extrusion_wall_tris(path_pts, [t * nx, t * ny, t * nz]),
         object: TruckObject::Lines(pts),
         snap_pts: vec![],
         tangent_geoms: tangents,
@@ -103,6 +104,7 @@ fn to_truck(pline: &LwPolyline) -> TruckEntity {
     let verts = &pline.vertices;
     if verts.is_empty() {
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Point(builder::vertex(Point3::new(0.0, 0.0, 0.0))),
             snap_pts: vec![],
             tangent_geoms: vec![],
@@ -221,6 +223,7 @@ fn to_truck(pline: &LwPolyline) -> TruckEntity {
             }
         }
         return TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::SegmentedLines(pts),
             snap_pts: vec![],
             tangent_geoms: tgs,
@@ -269,6 +272,7 @@ fn to_truck(pline: &LwPolyline) -> TruckEntity {
     }
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Contour(edges.into_iter().collect::<Wire>()),
         snap_pts: vec![],
         tangent_geoms: tangents,

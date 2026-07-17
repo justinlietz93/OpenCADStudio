@@ -95,6 +95,19 @@ pub struct WireModel {
     /// Low residual paired with [`fill_tris`] (double-single). Empty = all-zero;
     /// tessellation from CAD f64 fills it so fills stay precise at UTM scale.
     pub fill_tris_low: Vec<[f32; 3]>,
+    /// Pre-triangulated pick-only geometry: flat vertex list, 3 per triangle.
+    /// Hit-testing treats these as solid, the renderer never uploads them.
+    ///
+    /// Non-empty only for entities extruded by a DXF thickness (code 39): the
+    /// swept wall between each base segment and its extruded copy. The wall is
+    /// drawn as its four wireframe edges (which live in [`points`]), so it has
+    /// no fill geometry to pick — without this the interior is a hole the
+    /// cursor falls through. Separate from [`fill_tris`] because that channel
+    /// reaches the GPU, and a wall that renders shaded would change how every
+    /// thickness drawing looks.
+    pub pick_tris: Vec<[f32; 3]>,
+    /// Low residual paired with [`pick_tris`] (double-single). Empty = all-zero.
+    pub pick_tris_low: Vec<[f32; 3]>,
     /// SDF glyph quads for this entity's text (TEXT / MTEXT / dimension text /
     /// block-internal text). Non-empty only when SDF text is enabled and this
     /// wire carries a text run. Rides with the wire so it is cached by the
@@ -149,6 +162,8 @@ impl WireModel {
     /// Create a solid wire (no dash pattern, 1px weight).
     pub fn solid(name: String, points: Vec<[f32; 3]>, color: [f32; 4], selected: bool) -> Self {
         Self {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             text_verts: Vec::new(),
             name,
             points,
@@ -379,6 +394,8 @@ impl Default for WireModel {
             vp_scissor: None,
             fill_tris: Vec::new(),
             fill_tris_low: Vec::new(),
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
         }
     }
 }

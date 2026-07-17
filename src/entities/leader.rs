@@ -96,6 +96,7 @@ fn to_truck(leader: &Leader) -> TruckEntity {
     }
 
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Lines(points),
         snap_pts: vec![],
         tangent_geoms: tangents,
@@ -589,6 +590,8 @@ impl LeaderTess for Leader {
 
         if verts.len() < 2 {
             return WireModel {
+                pick_tris: Vec::new(),
+                pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -693,6 +696,8 @@ impl LeaderTess for Leader {
         }
 
         WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

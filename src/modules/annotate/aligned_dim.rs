@@ -186,6 +186,8 @@ impl CadCommand for AlignedDimensionCommand {
         let p1 = p1.as_vec3();
         let p2 = p2.as_vec3();
         Some(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
@@ -235,6 +237,8 @@ fn preview_aligned(p1: DVec3, p2: DVec3, dim_pt: DVec3) -> WireModel {
     let d1 = d1.as_vec3();
     let d2 = d2.as_vec3();
     WireModel {
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

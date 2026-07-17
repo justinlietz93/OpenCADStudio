@@ -345,6 +345,7 @@ impl TruckConvertible for Table {
             })
             .collect();
         Some(TruckEntity {
+            pick_tris: Vec::new(),
             object: TruckObject::Lines(pts_f64),
             snap_pts: vec![(glam::DVec3::new(self.insertion_point.x, self.insertion_point.y, self.insertion_point.z), SnapHint::Insertion)],
             tangent_geoms: vec![],
@@ -748,6 +749,8 @@ pub fn tessellate_table(
     let mk =
         |color: [f32; 4], points: Vec<[f32; 3]>, fill_tris: Vec<[f32; 3]>, lw: f32| -> WireModel {
             WireModel {
+                pick_tris: Vec::new(),
+                pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

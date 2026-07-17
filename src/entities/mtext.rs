@@ -150,6 +150,7 @@ fn to_truck(t: &MText, document: &acadrust::CadDocument) -> TruckEntity {
         t.insertion_point.z,
     );
     TruckEntity {
+        pick_tris: Vec::new(),
         object: TruckObject::Text(layout.strokes),
         snap_pts: vec![(insertion, SnapHint::Insertion)],
         tangent_geoms: vec![],

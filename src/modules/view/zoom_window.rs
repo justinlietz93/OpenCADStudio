@@ -65,6 +65,8 @@ impl CadCommand for ZoomWindowCommand {
         let max = p1.max(pt);
         // Draw a rectangle preview
         Some(WireModel {
+            pick_tris: Vec::new(),
+            pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),

@@ -180,6 +180,8 @@ fn v3(p: DVec3) -> Vector3 {
 
 fn preview_line(a: Vec3, b: Vec3) -> WireModel {
     WireModel {
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
             dash_from_start: false,
             dash_align_end: None,
             text_verts: Vec::new(),
