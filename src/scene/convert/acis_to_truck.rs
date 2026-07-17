@@ -30,22 +30,16 @@ use acadrust::entities::acis::{
 
 use crate::scene::convert::solid3d_tess::{
     apply_body_transform, body_transform, collect_face_loops, cone_axis_span, tess_cone_face,
-    tess_plane_face, tess_sphere_face, tess_torus_face, LodConfig,
+    tess_plane_face, tess_sphere_face, tess_torus_face, LodConfig, BOUNDARY_CHORD_FRAC,
+    TRUCK_CHORD_FRAC,
 };
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
 /// Slightly over 2π so revolution builders close the loop.
 const FULL: f64 = std::f64::consts::TAU + 0.2;
-/// Boundary sampling density for planar faces with curved (circular) edges.
-const BOUNDARY_SEGS: usize = 64;
 /// Triangle mesh chord tolerance (world units) for planar faces, where the
 /// surface itself adds no curvature.
 const MESH_TOL: f64 = 0.01;
-/// Chord tolerance for curved faces, as a fraction of the surface radius, so
-/// the facet count is radius-independent instead of exploding on large radii.
-/// `0.1` = 10% chord error (~7 facets per full circle) — a deliberately coarse
-/// setting that keeps the solid triangle budget low.
-const CURVE_REL_TOL: f64 = 0.1;
 
 /// Analytic outward-normal rule for a face, used to orient triangles and
 /// supply smooth per-vertex normals (truck's face orientation is unreliable
@@ -154,7 +148,7 @@ fn bespoke_face(
     match surf_rec.entity_type.as_str() {
         "plane-surface" => {
             if let Some(p) = SatPlaneSurface::from_record(surf_rec) {
-                tess_plane_face(sat, face, &p, LodConfig::HIGH.circ_segs, v, n, i);
+                tess_plane_face(sat, face, &p, LodConfig::HIGH.chord_frac, v, n, i);
             }
         }
         "cone-surface" => {
@@ -185,7 +179,7 @@ fn build_face_group(
     // Chord tolerance scaled to a curved surface's radius, so the facet count
     // is radius-independent (matching the circle/arc wire tessellation) rather
     // than exploding on large radii.
-    let curve_tol = |radius: f64| (radius.abs() * CURVE_REL_TOL).max(1e-6);
+    let curve_tol = |radius: f64| (radius.abs() * TRUCK_CHORD_FRAC).max(1e-6);
     match surf_rec.entity_type.as_str() {
         "plane-surface" => {
             let plane = SatPlaneSurface::from_record(surf_rec)?;
@@ -230,7 +224,7 @@ fn plane_face(sat: &SatDocument, face: &SatFace) -> Option<Face> {
     // the first wire and cuts the rest as holes, letting truck's mesher trim
     // them. ACIS records no outer-vs-hole flag — the kernel classifies loops at
     // runtime from geometry — so we derive the outer boundary here. (#123)
-    let loops = collect_face_loops(sat, face, BOUNDARY_SEGS);
+    let loops = collect_face_loops(sat, face, BOUNDARY_CHORD_FRAC);
     if loops.is_empty() {
         return None;
     }
@@ -343,7 +337,8 @@ fn cone_faces(
     };
 
     // Angular extent of this face from its boundary loop (seam-robust).
-    let poly = crate::scene::convert::solid3d_tess::collect_face_polygon(sat, face, BOUNDARY_SEGS);
+    let poly =
+        crate::scene::convert::solid3d_tess::collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
     let (theta0, sweep) = cone_boundary_arc(&poly, [cx, cy, cz], axis, udir, vdir);
     // Radial direction at the arc's start angle (u rotated by theta0 about axis).
     let rad0 = udir * theta0.cos() + vdir * theta0.sin();

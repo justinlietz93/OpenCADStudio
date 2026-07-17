@@ -23,41 +23,91 @@ use acadrust::entities::{Body, Region, Solid3D};
 
 use crate::scene::model::mesh_model::{MeshLodSet, MeshModel};
 
-/// Per-LOD sampling density. Higher values = finer mesh = more triangles.
+// ── Curved-surface sampling — SINGLE TUNING POINT ────────────────────────────
+//
+// Every curved 3-D face (sphere / cone / torus / spline), curved feature edge
+// and isoline samples at a density derived from a chord-height tolerance — the
+// same model the 2-D circle/arc/ellipse wires use (see `tess_util::arc_segments`):
+// the segment count tracks the arc's own radius and span at a bounded relative
+// chord error, so a partial arc samples proportionally and facet error is
+// size-independent. Every knob lives in this block — edit here to trade mesh
+// density against the triangle budget across the whole solid tessellator.
+
+/// Feature edges & isolines are built once at highest detail; this chord-height
+/// fraction of the curve radius sets their sampling density (~0.002 ⇒ ~50
+/// segments per full circle).
+pub(crate) const EDGE_CHORD_FRAC: f64 = 0.002;
+/// Truck's own triangulation chord tolerance for the cone faces still routed
+/// through its kernel, as a fraction of the surface radius.
+pub(crate) const TRUCK_CHORD_FRAC: f64 = 0.1;
+/// Boundary-loop sampling for parameter-range classification (which arc of a
+/// sphere/torus a face covers): a fine fraction so the classification is
+/// accurate; the points are not rendered.
+pub(crate) const BOUNDARY_CHORD_FRAC: f64 = 0.002;
+
+/// Per-LOD curved-surface sampling tolerance. A LOD is now just a chord-height
+/// tolerance (fraction of the local radius); segment counts derive from it plus
+/// the arc's own radius and span, so density is adaptive rather than a fixed
+/// grid. Smaller fraction = finer mesh = more triangles.
 #[derive(Copy, Clone, Debug)]
 pub struct LodConfig {
-    /// Arc segments per full circle for curved-surface sampling.
-    pub circ_segs: usize,
-    /// Longitudinal grid count for sphere / torus surfaces.
-    pub grid_u: usize,
-    /// Latitudinal grid count for sphere / torus surfaces.
-    pub grid_v: usize,
+    /// Chord-height tolerance as a fraction of the local radius.
+    pub chord_frac: f64,
 }
 
 impl LodConfig {
-    /// LOD 0 — full resolution. The pre-Phase-3.4 baseline.
-    pub const HIGH: LodConfig = LodConfig {
-        circ_segs: 48,
-        grid_u: 32,
-        grid_v: 16,
-    };
+    /// LOD 0 — full resolution (~0.5 % radius ⇒ ~32 segments per full circle,
+    /// matching the pre-tolerance grid baseline).
+    pub const HIGH: LodConfig = LodConfig { chord_frac: 0.005 };
     /// LOD 1 — half-resolution. Use between ~50–200 px projected diagonal.
-    pub const MID: LodConfig = LodConfig {
-        circ_segs: 24,
-        grid_u: 16,
-        grid_v: 8,
-    };
+    pub const MID: LodConfig = LodConfig { chord_frac: 0.02 };
     /// LOD 2 — quarter-resolution. Use below ~50 px.
-    pub const LOW: LodConfig = LodConfig {
-        circ_segs: 12,
-        grid_u: 8,
-        grid_v: 4,
-    };
+    pub const LOW: LodConfig = LodConfig { chord_frac: 0.08 };
     /// Returns the three LOD configs in `[high, mid, low]` order — matches
     /// the `MeshLodSet::lods` slot ordering.
     pub const fn all() -> [LodConfig; 3] {
         [Self::HIGH, Self::MID, Self::LOW]
     }
+
+    /// Segment count spanning `span_abs` radians of an arc of `radius` at this
+    /// LOD's chord tolerance. Floor 2 — an open grid patch needs only a step.
+    pub fn arc_segs(&self, radius: f64, span_abs: f64) -> usize {
+        crate::scene::convert::tess_util::arc_segments_floored(
+            radius.abs(),
+            span_abs,
+            radius.abs() * self.chord_frac,
+            2,
+        ) as usize
+    }
+
+    /// Segment count around a full circle of `radius` at this LOD. Floor 8 so a
+    /// closed cross-section (a tube / minor circle) still reads as round.
+    pub fn circle_segs(&self, radius: f64) -> usize {
+        crate::scene::convert::tess_util::arc_segments_floored(
+            radius.abs(),
+            TAU,
+            radius.abs() * self.chord_frac,
+            8,
+        ) as usize
+    }
+}
+
+/// Segment count for a feature edge / isoline arc of `radius` spanning
+/// `span_abs`, at the shared [`EDGE_CHORD_FRAC`] tolerance. Floor 4.
+pub(crate) fn edge_arc_segs(radius: f64, span_abs: f64) -> usize {
+    crate::scene::convert::tess_util::arc_segments_floored(
+        radius.abs(),
+        span_abs,
+        radius.abs() * EDGE_CHORD_FRAC,
+        4,
+    ) as usize
+}
+
+/// Sample count for a curve with no analytic radius (a spline edge / surface):
+/// the unit-circle segment count at chord fraction `frac`, used as a nominal
+/// density that still tracks the LOD.
+pub(crate) fn nominal_segs(frac: f64) -> usize {
+    crate::scene::convert::tess_util::arc_segments_floored(1.0, TAU, frac, 8) as usize
 }
 
 // ── Public entry point ────────────────────────────────────────────────────────
@@ -85,7 +135,7 @@ fn tessellate_sat(
                         sat,
                         &face,
                         &plane,
-                        lod.circ_segs,
+                        lod.chord_frac,
                         &mut verts,
                         &mut normals,
                         &mut indices,
@@ -266,7 +316,7 @@ fn cone_face_geom(sat: &SatDocument, face: &SatFace) -> Option<ConeFaceGeom> {
     let u_dir = norm3([ux, uy, uz]);
     let v_dir = cross3(axis, u_dir);
 
-    let poly = collect_face_polygon(sat, face, 48);
+    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
     let (mut h_min, mut h_max, mut theta_min, mut theta_max, full) =
         angular_range(cx, cy, cz, axis, u_dir, v_dir, &poly);
     if (h_max - h_min).abs() < 1e-9 {
@@ -374,18 +424,20 @@ fn sphere_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Ve
         sphere.u_direction().2,
     ]);
     let v = cross3(pole, u);
-    let poly = collect_face_polygon(sat, face, 48);
+    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
     let (theta_min, theta_span, full, phi_min, phi_max) =
         sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
-    const M: usize = 24;
+    // Meridian subdivisions from the sphere radius and colatitude span (a great
+    // circle of radius `r`) at the shared edge chord tolerance.
+    let m = edge_arc_segs(r, phi_max - phi_min);
     let sphere_pt = |theta: f64, phi: f64| {
         let d = sphere_dir(pole, u, v, theta, phi);
         [cx + r * d[0], cy + r * d[1], cz + r * d[2]]
     };
     for theta in iso_params(theta_min, theta_span, full, count) {
-        for m in 0..M {
-            let p0 = phi_min + (phi_max - phi_min) * (m as f64 / M as f64);
-            let p1 = phi_min + (phi_max - phi_min) * ((m + 1) as f64 / M as f64);
+        for k in 0..m {
+            let p0 = phi_min + (phi_max - phi_min) * (k as f64 / m as f64);
+            let p1 = phi_min + (phi_max - phi_min) * ((k + 1) as f64 / m as f64);
             out.push(sphere_pt(theta, p0));
             out.push(sphere_pt(theta, p1));
         }
@@ -415,11 +467,12 @@ fn torus_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Vec
     let phi_total = if full { TAU } else { phi_span };
 
     // Minor (cross-section) circles — constant revolution angle, full tube.
-    const M: usize = 20;
+    // Segment count from the tube (minor) radius at the shared edge tolerance.
+    let m = edge_arc_segs(minor, TAU);
     for phi in iso_params(phi_min, phi_span, full, count) {
-        for t in 0..M {
-            let t0 = TAU * (t as f64 / M as f64);
-            let t1 = TAU * ((t + 1) as f64 / M as f64);
+        for t in 0..m {
+            let t0 = TAU * (t as f64 / m as f64);
+            let t1 = TAU * ((t + 1) as f64 / m as f64);
             out.push(torus_pt(cx, cy, cz, axis, u, v, major, minor, t0, phi));
             out.push(torus_pt(cx, cy, cz, axis, u, v, major, minor, t1, phi));
         }
@@ -429,7 +482,7 @@ fn torus_isolines(sat: &SatDocument, face: &SatFace, count: usize, out: &mut Vec
     // revolution arc. The outer (θ=0) and inner (θ=π) circles are the torus's
     // defining profile — the ring outline; without them it reads as disconnected
     // cross-sections. `count.max(2)` guarantees outer + inner even at ISOLINES=1.
-    let ring_segs = (((phi_total / TAU) * 64.0).ceil() as usize).max(6);
+    let ring_segs = edge_arc_segs(major, phi_total).max(2);
     let n_ring = count.max(2);
     for k in 0..n_ring {
         let theta = TAU * (k as f64 / n_ring as f64);
@@ -535,7 +588,7 @@ pub(crate) fn torus_phi_range(
         let Some(sl) = SatLoop::from_record(lr) else {
             break;
         };
-        let poly = collect_loop_polygon(sat, &sl, 48);
+        let poly = collect_loop_polygon(sat, &sl, BOUNDARY_CHORD_FRAC);
         lp = sl.next_loop();
         if poly.is_empty() {
             continue;
@@ -691,7 +744,7 @@ fn collect_curved_gens(
                     sphere.u_direction().2,
                 ]);
                 let v = cross3(pole, u);
-                let poly = collect_face_polygon(sat, &face, 48);
+                let poly = collect_face_polygon(sat, &face, BOUNDARY_CHORD_FRAC);
                 let (tmin, tspan, full, pmin, pmax) =
                     sphere_param_range(&poly, [cx, cy, cz], pole, u, v);
                 let (center, center_low) = place([cx, cy, cz]);
@@ -746,7 +799,6 @@ fn collect_curved_gens(
 /// their two vertex endpoints; ellipse/circle edges are sampled along their
 /// bounded parametric arc. Points are in body-local space (pre-transform).
 fn collect_feature_edges(sat: &SatDocument) -> Vec<[f64; 3]> {
-    const EDGE_SEGS: usize = 48;
     let mut out: Vec<[f64; 3]> = Vec::new();
     for er in sat.records_of_type("edge") {
         let Some(edge) = SatEdge::from_record(er) else {
@@ -761,7 +813,7 @@ fn collect_feature_edges(sat: &SatDocument) -> Vec<[f64; 3]> {
                     &ellipse,
                     edge.start_param(),
                     edge.end_param(),
-                    EDGE_SEGS,
+                    EDGE_CHORD_FRAC,
                     reversed,
                 );
                 // sample_ellipse_arc drops the end param; append the true end so
@@ -774,7 +826,11 @@ fn collect_feature_edges(sat: &SatDocument) -> Vec<[f64; 3]> {
                 // chord the fallback below would draw (or nothing, for a closed
                 // loop whose endpoints coincide).
                 pts = ic
-                    .sample_range(edge.start_param(), edge.end_param(), EDGE_SEGS)
+                    .sample_range(
+                        edge.start_param(),
+                        edge.end_param(),
+                        nominal_segs(EDGE_CHORD_FRAC),
+                    )
                     .into_iter()
                     .map(|(x, y, z)| [x, y, z])
                     .collect();
@@ -900,15 +956,13 @@ pub(crate) fn apply_body_transform(mesh: &mut MeshModel, m: &[f64; 9], tr: &[f64
     }
 }
 
-/// Scale a LOD's segment counts by FACETRES (clamped to AutoCAD's
-/// documented [0.01, 10.0] range). 1.0 is the unchanged baseline.
+/// Tighten/loosen a LOD's chord tolerance by FACETRES (clamped to the
+/// documented [0.01, 10.0] range). A higher FACETRES means a finer mesh, so it
+/// *divides* the chord fraction; 1.0 is the unchanged baseline.
 fn scale_lod(base: LodConfig, facet_res: f64) -> LodConfig {
-    let m = (facet_res.clamp(0.01, 10.0) as f32).max(0.01);
-    let scale = |v: usize| ((v as f32) * m).round().max(4.0) as usize;
+    let m = facet_res.clamp(0.01, 10.0);
     LodConfig {
-        circ_segs: scale(base.circ_segs),
-        grid_u: scale(base.grid_u),
-        grid_v: scale(base.grid_v),
+        chord_frac: (base.chord_frac / m).clamp(1e-4, 0.5),
     }
 }
 
@@ -1032,15 +1086,16 @@ pub fn tessellate_solid3d(
 /// Straight edges contribute their start vertex; curved (ellipse / circle)
 /// edges are sampled into several points so circular boundaries — e.g. the
 /// cap of a cylinder or the rim of a cone — produce a real polygon instead of
-/// a single degenerate vertex. `circ_segs` is the sample count for a full
-/// circle (scaled down for shorter arcs).
+/// a single degenerate vertex. `chord_frac` is the chord-height tolerance (as a
+/// fraction of each edge's own radius); the segment count per edge derives from
+/// it plus that edge's radius and span.
 ///
 /// Returns an empty `Vec` when the loop topology is broken or has fewer than
 /// three distinct points.
 pub(crate) fn collect_face_polygon(
     sat: &SatDocument,
     face: &SatFace,
-    circ_segs: usize,
+    chord_frac: f64,
 ) -> Vec<[f64; 3]> {
     let Some(loop_rec) = sat.resolve(face.first_loop()) else {
         return vec![];
@@ -1048,14 +1103,14 @@ pub(crate) fn collect_face_polygon(
     let Some(sat_loop) = SatLoop::from_record(loop_rec) else {
         return vec![];
     };
-    collect_loop_polygon(sat, &sat_loop, circ_segs)
+    collect_loop_polygon(sat, &sat_loop, chord_frac)
 }
 
 /// Boundary points of a single coedge loop, in order.
 pub(crate) fn collect_loop_polygon(
     sat: &SatDocument,
     sat_loop: &SatLoop,
-    circ_segs: usize,
+    chord_frac: f64,
 ) -> Vec<[f64; 3]> {
     let first_ptr = sat_loop.first_coedge();
     let mut cur = first_ptr;
@@ -1070,7 +1125,7 @@ pub(crate) fn collect_loop_polygon(
 
         if let Some(ce_rec) = sat.resolve(cur) {
             if let Some(coedge) = SatCoedge::from_record(ce_rec) {
-                append_coedge_points(sat, &coedge, circ_segs, &mut pts);
+                append_coedge_points(sat, &coedge, chord_frac, &mut pts);
                 let next = coedge.next();
                 if next == first_ptr {
                     break;
@@ -1090,7 +1145,7 @@ pub(crate) fn collect_loop_polygon(
 pub(crate) fn collect_face_loops(
     sat: &SatDocument,
     face: &SatFace,
-    circ_segs: usize,
+    chord_frac: f64,
 ) -> Vec<Vec<[f64; 3]>> {
     let mut loops: Vec<Vec<[f64; 3]>> = Vec::new();
     let mut loop_ptr = face.first_loop();
@@ -1102,7 +1157,7 @@ pub(crate) fn collect_face_loops(
         let Some(sat_loop) = SatLoop::from_record(loop_rec) else {
             break;
         };
-        let poly = collect_loop_polygon(sat, &sat_loop, circ_segs);
+        let poly = collect_loop_polygon(sat, &sat_loop, chord_frac);
         if poly.len() >= 3 {
             loops.push(poly);
         }
@@ -1118,7 +1173,7 @@ pub(crate) fn collect_face_loops(
 pub(crate) fn append_coedge_points(
     sat: &SatDocument,
     coedge: &SatCoedge,
-    circ_segs: usize,
+    chord_frac: f64,
     pts: &mut Vec<[f64; 3]>,
 ) {
     let fwd = matches!(coedge.sense(), Sense::Forward);
@@ -1138,7 +1193,7 @@ pub(crate) fn append_coedge_points(
                 &ellipse,
                 edge.start_param(),
                 edge.end_param(),
-                circ_segs,
+                chord_frac,
                 reversed,
             );
             if !sampled.is_empty() {
@@ -1154,7 +1209,11 @@ pub(crate) fn append_coedge_points(
         // this the face's parametric extent collapses and it can't be trimmed.
         if let Some(ic) = SatIntCurve::from_record(curve_rec) {
             let mut sampled: Vec<[f64; 3]> = ic
-                .sample_range(edge.start_param(), edge.end_param(), circ_segs)
+                .sample_range(
+                    edge.start_param(),
+                    edge.end_param(),
+                    nominal_segs(chord_frac),
+                )
                 .into_iter()
                 .map(|(x, y, z)| [x, y, z])
                 .collect();
@@ -1189,7 +1248,7 @@ fn sample_ellipse_arc(
     ellipse: &SatEllipseCurve,
     sp: f64,
     ep: f64,
-    circ_segs: usize,
+    chord_frac: f64,
     curve_reversed: bool,
 ) -> Vec<[f64; 3]> {
     let span = ep - sp;
@@ -1220,7 +1279,16 @@ fn sample_ellipse_arc(
     // cylinder of the surface radius.
     let hand = if curve_reversed { -1.0 } else { 1.0 };
 
-    let segs = (circ_segs as f64 * (span.abs() / TAU)).round().max(2.0) as usize;
+    // Segment count from this ellipse's own radius and arc span at the requested
+    // chord tolerance — the same model the 2-D circle/arc/ellipse wires use, so
+    // a big rim samples finer than a small one and a short arc proportionally
+    // less than a full turn. `major_len` is the reference radius.
+    let segs = crate::scene::convert::tess_util::arc_segments_floored(
+        major_len,
+        span.abs(),
+        major_len * chord_frac,
+        2,
+    ) as usize;
     let mut out = Vec::with_capacity(segs);
     for i in 0..segs {
         let t = sp + span * (i as f64 / segs as f64);
@@ -1271,12 +1339,12 @@ pub(crate) fn tess_plane_face(
     sat: &SatDocument,
     face: &SatFace,
     plane: &SatPlaneSurface,
-    circ_segs: usize,
+    chord_frac: f64,
     verts: &mut Vec<[f32; 3]>,
     normals: &mut Vec<[f32; 3]>,
     indices: &mut Vec<u32>,
 ) {
-    let mut poly = collect_face_polygon(sat, face, circ_segs);
+    let mut poly = collect_face_polygon(sat, face, chord_frac);
     if poly.len() < 3 {
         return;
     }
@@ -1320,7 +1388,7 @@ pub(crate) fn tess_cone_face(
     indices: &mut Vec<u32>,
 ) {
     // Determine the height range and angular span from the boundary polygon.
-    let poly = collect_face_polygon(sat, face, lod.circ_segs);
+    let poly = collect_face_polygon(sat, face, lod.chord_frac);
 
     let (cx, cy, cz) = cone.center();
     let (ax, ay, az) = cone.axis(); // axis direction (unit)
@@ -1367,11 +1435,20 @@ pub(crate) fn tess_cone_face(
         return;
     }
 
-    // Angular divisions scale with the arc's share of a full circle, so a short
-    // boundary arc (a curved wall face) isn't tessellated as finely as a whole
-    // rim — matching the wire arc sampler and keeping the triangle budget sane.
-    let segs_u = ((lod.circ_segs as f64 * theta_span / TAU).round() as usize).max(1);
-    let segs_v = (lod.circ_segs / 4).max(1); // height subdivisions
+    // Angular divisions from the rim radius and arc span at the LOD's chord
+    // tolerance — a short boundary arc (a curved wall face) samples proportionally
+    // less than a whole rim. Use the wider rim so the density bounds chord error
+    // at both ends. The height direction is a straight generator (a cone/cylinder
+    // is ruled), so it carries no curvature: one division is geometrically exact.
+    let r_ref = if cos_a.abs() > 1e-9 {
+        (radius + h_min * sin_a / cos_a)
+            .abs()
+            .max((radius + h_max * sin_a / cos_a).abs())
+    } else {
+        radius.abs()
+    };
+    let segs_u = lod.arc_segs(r_ref, theta_span).max(1);
+    let segs_v = 1; // straight generator — no curvature along the height
 
     for j in 0..segs_v {
         let t0 = h_min + h_span * (j as f64 / segs_v as f64);
@@ -1593,13 +1670,10 @@ pub(crate) fn tess_sphere_face(
     let u_dir = norm3([ux, uy, uz]);
     let v_dir = cross3(pole, u_dir);
 
-    let nu = lod.grid_u.max(3);
-    let nv = lod.grid_v.max(2);
-
     // Mesh only the part of the sphere the face covers — its boundary loop's
     // longitude/colatitude window. A partial sphere (a fillet cap) otherwise
     // builds as a full ball floating where the solid is open.
-    let poly = collect_face_polygon(sat, face, nu.max(24));
+    let poly = collect_face_polygon(sat, face, BOUNDARY_CHORD_FRAC);
     let (t_min, t_span, full, p_min, p_max) =
         sphere_param_range(&poly, [cx, cy, cz], pole, u_dir, v_dir);
     let (theta_lo, theta_hi) = if full {
@@ -1612,6 +1686,12 @@ pub(crate) fn tess_sphere_face(
     } else {
         (p_min, p_max)
     };
+
+    // Longitude / colatitude divisions from the sphere radius and the covered
+    // spans at the LOD's chord tolerance — a small cap samples far fewer than a
+    // full ball. Every circle of latitude is at most radius `r` (the equator).
+    let nu = lod.arc_segs(r, theta_hi - theta_lo).max(1);
+    let nv = lod.arc_segs(r, phi_hi - phi_lo).max(1);
 
     for j in 0..nv {
         let phi0 = phi_lo + (phi_hi - phi_lo) * (j as f64 / nv as f64);
@@ -1679,14 +1759,17 @@ pub(crate) fn tess_torus_face(
     let major_r = torus.major_radius();
     let minor_r = torus.minor_radius();
 
-    let nu = lod.grid_u.max(3); // around the tube
+    // Tube cross-section is a closed minor circle → full-circle segment count at
+    // the tube (minor) radius.
+    let nu = lod.circle_segs(minor_r).max(3); // around the tube
 
     // Mesh only the revolution arc the face covers. A partial tube (an open "C")
     // otherwise builds as a full closed ring where the solid is open.
     let (phi_start, phi_arc, full) = torus_phi_range(sat, face, [cx, cy, cz], u_dir, v_dir);
     let phi_total = if full { TAU } else { phi_arc };
-    // Keep the along-length facet density independent of the arc length.
-    let nv = (((phi_total / TAU) * lod.grid_v as f64).ceil() as usize).max(3);
+    // Along-length divisions from the ring (major) radius and the covered arc at
+    // the LOD's chord tolerance — a short arc samples proportionally less.
+    let nv = lod.arc_segs(major_r, phi_total).max(2);
 
     for j in 0..nv {
         let phi0 = phi_start + phi_total * (j as f64 / nv as f64);

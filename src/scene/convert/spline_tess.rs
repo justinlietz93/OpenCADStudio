@@ -77,8 +77,11 @@ pub fn tess_spline_face(
         return;
     }
 
-    let su = lod.grid_u.max(8);
-    let sv = lod.grid_v.max(8);
+    // A B-spline patch has no single analytic radius to drive a chord-tolerance
+    // count, so sample at the LOD's nominal density (its unit-circle segment
+    // count). Floor 8 so a curved patch stays smooth.
+    let n = crate::scene::convert::solid3d_tess::nominal_segs(lod.chord_frac).max(8);
+    let (su, sv) = (n, n);
 
     let base = verts.len() as u32;
     for j in 0..=sv {
