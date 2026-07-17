@@ -87,6 +87,9 @@ pub struct ViewportData {
     /// rendered on top of fills. Most shaded modes turn this off; the
     /// `*WithEdges` variants and the pure wireframes leave it on.
     pub(in crate::scene) show_3d_edges: bool,
+    /// DISPSILH — draw view-dependent silhouette outlines on curved solid faces.
+    /// A document-header global (default off), orthogonal to the visual style.
+    pub(in crate::scene) display_silhouette: bool,
     /// HiddenLine routes 3D fills through a depth-only prepass so edges
     /// occluded by closer geometry are culled by the LessEqual depth
     /// test on the wire passes that follow.
@@ -555,6 +558,14 @@ impl shader::Primitive for Primitive {
                 vp.uniforms.eye_high[1] as f64 + vp.uniforms.eye_low[1] as f64,
                 vp.uniforms.eye_high[2] as f64 + vp.uniforms.eye_low[2] as f64,
             );
+            // DISPSILH: rebuild view-dependent silhouettes each frame (off by
+            // default, so this is a no-op unless the drawing enables it). Only
+            // in modes that draw edges — pure shaded hides them.
+            if vp.display_silhouette && (vp.view_wireframe || vp.show_3d_edges) {
+                inner.upload_silhouettes(device, &vp.meshes[..], eye);
+            } else {
+                inner.upload_silhouettes(device, &[], eye);
+            }
             inner.compute_wire_scissors(view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_wipeout_scissors(view_rot, eye, clip_size.width, clip_size.height);
             inner.compute_image_scissors(view_rot, eye, clip_size.width, clip_size.height);
@@ -1362,6 +1373,7 @@ impl Scene {
             view_wireframe,
             mesh_fill: flags.mesh_fill,
             show_3d_edges: flags.show_3d_edges,
+            display_silhouette: self.document.header.display_silhouette,
             hidden_line: flags.hidden_line,
             // Interaction LOD: suppress the costly hatch pass while the view is
             // actively moving; the scene-render cache holds the full-quality

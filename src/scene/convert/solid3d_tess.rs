@@ -171,6 +171,8 @@ fn tessellate_acis(
 /// double-single `edge_verts` / `edge_verts_low`.
 fn attach_feature_edges(set: &mut MeshLodSet, sat: &SatDocument, isolines: usize) {
     let xform = body_transform(sat);
+    // World-space curved-face generators for the per-frame silhouette pass.
+    set.curved_gens = collect_curved_gens(sat, xform);
     let mut seg_pts = collect_feature_edges(sat);
     // ISOLINES ride the same line list and the same body transform as the
     // feature edges, so they inherit the offset / per-INSTANCE re-split for free.
@@ -199,72 +201,155 @@ fn attach_feature_edges(set: &mut MeshLodSet, sat: &SatDocument, isolines: usize
 /// rather than showing only its two rim circles. Points are body-local
 /// (pre-transform), matching [`collect_feature_edges`], so the caller applies
 /// the body transform uniformly.
+/// Body-local geometry of one cone/cylinder face: its frame, radius, cone taper
+/// and the height/angular extent recovered the same way `tess_cone_face` does.
+/// Shared by the ISOLINES and silhouette-generator collectors.
+struct ConeFaceGeom {
+    center: [f64; 3],
+    axis: [f64; 3],
+    u_dir: [f64; 3],
+    v_dir: [f64; 3],
+    radius: f64,
+    tan_a: f64,
+    h_min: f64,
+    h_max: f64,
+    theta_min: f64,
+    theta_span: f64,
+    full: bool,
+}
+
+fn cone_face_geom(sat: &SatDocument, face: &SatFace) -> Option<ConeFaceGeom> {
+    let surf_rec = sat.resolve(face.surface())?;
+    if surf_rec.entity_type != "cone-surface" {
+        return None;
+    }
+    let cone = SatConeSurface::from_record(surf_rec)?;
+    let (cx, cy, cz) = cone.center();
+    let (ax, ay, az) = cone.axis();
+    let (ux, uy, uz) = cone.major_axis();
+    let radius = cone.radius();
+    let sin_a = cone.sin_half_angle();
+    let cos_a = cone.cos_half_angle();
+    let axis = norm3([ax, ay, az]);
+    let u_dir = norm3([ux, uy, uz]);
+    let v_dir = cross3(axis, u_dir);
+
+    let poly = collect_face_polygon(sat, face, 48);
+    let (mut h_min, mut h_max, mut theta_min, mut theta_max, full) =
+        angular_range(cx, cy, cz, axis, u_dir, v_dir, &poly);
+    if (h_max - h_min).abs() < 1e-9 {
+        if let Some((vmin, vmax)) = cone_axis_span(sat, &cone, axis, [cx, cy, cz]) {
+            h_min = vmin;
+            h_max = vmax;
+            if full {
+                theta_min = 0.0;
+                theta_max = TAU;
+            }
+        }
+    }
+    let theta_span = if full { TAU } else { theta_max - theta_min };
+    if (h_max - h_min).abs() < 1e-10 || theta_span.abs() < 1e-10 {
+        return None;
+    }
+    let tan_a = if cos_a.abs() > 1e-9 { sin_a / cos_a } else { 0.0 };
+    Some(ConeFaceGeom {
+        center: [cx, cy, cz],
+        axis,
+        u_dir,
+        v_dir,
+        radius,
+        tan_a,
+        h_min,
+        h_max,
+        theta_min,
+        theta_span,
+        full,
+    })
+}
+
 fn collect_isolines(sat: &SatDocument, count: usize) -> Vec<[f64; 3]> {
     if count == 0 {
         return Vec::new();
     }
     let mut out: Vec<[f64; 3]> = Vec::new();
     for face in sat.faces() {
-        let Some(surf_rec) = sat.resolve(face.surface()) else {
+        let Some(g) = cone_face_geom(sat, &face) else {
             continue;
         };
-        if surf_rec.entity_type != "cone-surface" {
-            continue;
-        }
-        let Some(cone) = SatConeSurface::from_record(surf_rec) else {
-            continue;
-        };
-        let (cx, cy, cz) = cone.center();
-        let (ax, ay, az) = cone.axis();
-        let (ux, uy, uz) = cone.major_axis();
-        let radius = cone.radius();
-        let sin_a = cone.sin_half_angle();
-        let cos_a = cone.cos_half_angle();
-        let axis = norm3([ax, ay, az]);
-        let u_dir = norm3([ux, uy, uz]);
-        let v_dir = cross3(axis, u_dir);
-
-        // Same face-extent recovery as `tess_cone_face`: read the height and
-        // angular span from the boundary, and when the boundary is a single
-        // closed rim (no height span), recover the top/bottom from the coaxial
-        // circle rims.
-        let poly = collect_face_polygon(sat, &face, 48);
-        let (mut h_min, mut h_max, mut theta_min, mut theta_max, full_circle) =
-            angular_range(cx, cy, cz, axis, u_dir, v_dir, &poly);
-        if (h_max - h_min).abs() < 1e-9 {
-            if let Some((vmin, vmax)) = cone_axis_span(sat, &cone, axis, [cx, cy, cz]) {
-                h_min = vmin;
-                h_max = vmax;
-                if full_circle {
-                    theta_min = 0.0;
-                    theta_max = TAU;
-                }
-            }
-        }
-        let theta_span = if full_circle { TAU } else { theta_max - theta_min };
-        if (h_max - h_min).abs() < 1e-10 || theta_span.abs() < 1e-10 {
-            continue;
-        }
-        let r_at = |h: f64| {
-            if cos_a.abs() > 1e-9 {
-                radius + h * sin_a / cos_a
-            } else {
-                radius
-            }
-        };
-        let (r0, r1) = (r_at(h_min), r_at(h_max));
+        let [cx, cy, cz] = g.center;
+        let (r0, r1) = (g.radius + g.h_min * g.tan_a, g.radius + g.h_max * g.tan_a);
         // A closed rim's line at theta and theta+TAU coincide, so step across
         // [0, TAU) with `count` divisions; a bounded arc gets interior lines
         // spanning its own arc (its two ends are already drawn as rim edges).
         for k in 0..count {
-            let a = if full_circle {
-                theta_min + theta_span * (k as f64 / count as f64)
+            let a = if g.full {
+                g.theta_min + g.theta_span * (k as f64 / count as f64)
             } else {
-                theta_min + theta_span * ((k as f64 + 1.0) / (count as f64 + 1.0))
+                g.theta_min + g.theta_span * ((k as f64 + 1.0) / (count as f64 + 1.0))
             };
-            out.push(cone_pt(cx, cy, cz, axis, u_dir, v_dir, r0, a, h_min));
-            out.push(cone_pt(cx, cy, cz, axis, u_dir, v_dir, r1, a, h_max));
+            out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r0, a, g.h_min));
+            out.push(cone_pt(cx, cy, cz, g.axis, g.u_dir, g.v_dir, r1, a, g.h_max));
         }
+    }
+    out
+}
+
+/// World-space silhouette generators for each cone/cylinder face — the params a
+/// per-frame DISPSILH pass needs. `xform` is the solid's body transform (or
+/// `None`); directions are rotated by it, the base point is placed by it and
+/// split into the double-single pair.
+fn collect_curved_gens(
+    sat: &SatDocument,
+    xform: Option<([f64; 9], [f64; 3], f64)>,
+) -> Vec<crate::scene::model::mesh_model::CurvedGen> {
+    use crate::scene::model::mesh_model::CurvedGen;
+    let rot_dir = |d: [f64; 3]| -> [f32; 3] {
+        let w = match xform {
+            Some((m, _, _)) => norm3([
+                d[0] * m[0] + d[1] * m[3] + d[2] * m[6],
+                d[0] * m[1] + d[1] * m[4] + d[2] * m[7],
+                d[0] * m[2] + d[1] * m[5] + d[2] * m[8],
+            ]),
+            None => d,
+        };
+        [w[0] as f32, w[1] as f32, w[2] as f32]
+    };
+    let mut out = Vec::new();
+    for face in sat.faces() {
+        let Some(g) = cone_face_geom(sat, &face) else {
+            continue;
+        };
+        // Base circle centre in world space (double-single) — heights are along
+        // the unit axis, so the base sits at h_min.
+        let base_local = [
+            g.center[0] + g.h_min * g.axis[0],
+            g.center[1] + g.h_min * g.axis[1],
+            g.center[2] + g.h_min * g.axis[2],
+        ];
+        let (bx, by, bz, scale) = match xform {
+            Some((m, tr, s)) => (
+                s * (base_local[0] * m[0] + base_local[1] * m[3] + base_local[2] * m[6]) + tr[0],
+                s * (base_local[0] * m[1] + base_local[1] * m[4] + base_local[2] * m[7]) + tr[1],
+                s * (base_local[0] * m[2] + base_local[1] * m[5] + base_local[2] * m[8]) + tr[2],
+                s,
+            ),
+            None => (base_local[0], base_local[1], base_local[2], 1.0),
+        };
+        let (hx, hy, hz) = (bx as f32, by as f32, bz as f32);
+        out.push(CurvedGen {
+            base: [hx, hy, hz],
+            base_low: [(bx - hx as f64) as f32, (by - hy as f64) as f32, (bz - hz as f64) as f32],
+            axis: rot_dir(g.axis),
+            u_dir: rot_dir(g.u_dir),
+            v_dir: rot_dir(g.v_dir),
+            radius: (g.radius * scale) as f32,
+            tan_a: g.tan_a as f32,
+            h_min: 0.0,
+            h_max: ((g.h_max - g.h_min) * scale) as f32,
+            theta_min: g.theta_min as f32,
+            theta_span: g.theta_span as f32,
+            full: g.full,
+        });
     }
     out
 }

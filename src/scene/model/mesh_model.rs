@@ -36,6 +36,36 @@ pub struct MeshModel {
 ///
 /// `lods` holds up to one MeshModel per LOD level (high → low). Empty
 /// slots fall back to the nearest available LOD at render time.
+/// A curved face's generator, kept so a view-dependent silhouette (DISPSILH)
+/// can be computed per frame — the silhouette is where the surface turns away
+/// from the eye, which no baked edge can capture. World-space, post body
+/// transform; the base point carries a double-single low half so it stays
+/// precise at UTM scale like the mesh verts.
+#[derive(Clone, Copy, Debug)]
+pub struct CurvedGen {
+    /// Base-circle centre (world), high half of the double-single.
+    pub base: [f32; 3],
+    /// Low residual paired with `base`.
+    pub base_low: [f32; 3],
+    /// Unit axis direction (world).
+    pub axis: [f32; 3],
+    /// Radial frame: `u` is the θ=0 direction, `v = axis × u`.
+    pub u_dir: [f32; 3],
+    pub v_dir: [f32; 3],
+    /// Radius at the base (`h = 0`).
+    pub radius: f32,
+    /// `tan(half-angle)`: radius at height `h` is `radius + h * tan_a`
+    /// (0 for a cylinder, non-zero for a cone).
+    pub tan_a: f32,
+    /// Height span along the axis the face covers.
+    pub h_min: f32,
+    pub h_max: f32,
+    /// Angular span the face covers; `full` = a closed revolution.
+    pub theta_min: f32,
+    pub theta_span: f32,
+    pub full: bool,
+}
+
 #[derive(Clone, Debug)]
 pub struct MeshLodSet {
     pub lods: Vec<MeshModel>,
@@ -46,6 +76,9 @@ pub struct MeshLodSet {
     pub edge_verts: Vec<[f32; 3]>,
     /// Low residual paired with `edge_verts`.
     pub edge_verts_low: Vec<[f32; 3]>,
+    /// Curved-face generators for per-frame silhouette (DISPSILH). Empty for a
+    /// solid with no curved faces, or when silhouettes aren't wanted.
+    pub curved_gens: Vec<CurvedGen>,
     /// World XY AABB `[min_x, min_y, max_x, max_y]` of the mesh — used
     /// by the per-frame LOD selector to compute the projected pixel
     /// diagonal.
@@ -87,6 +120,7 @@ impl MeshLodSet {
             lods,
             edge_verts: Vec::new(),
             edge_verts_low: Vec::new(),
+            curved_gens: Vec::new(),
             world_aabb,
             z_aabb,
         }

@@ -693,6 +693,12 @@ fn transform_block_mesh_lod_set(
 ) -> MeshLodSet {
     use acadrust::types::Vector3;
     let mut out = set.clone();
+    // Silhouette generators are world-space and untransformed here, so a block
+    // instance would silhouette against the block-local pose. Drop them: a
+    // block-internal solid keeps its baked isolines and feature edges, just not
+    // the per-frame silhouette (deferred until the generators track the INSTANCE
+    // transform).
+    out.curved_gens.clear();
     let mut min_x = f32::INFINITY;
     let mut min_y = f32::INFINITY;
     let mut max_x = f32::NEG_INFINITY;

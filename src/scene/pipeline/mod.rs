@@ -115,6 +115,11 @@ pub struct Pipeline {
     /// it back into the base set (issue #316).
     text_preview_vbuf: Option<wgpu::Buffer>,
     text_preview_vcount: u32,
+    /// Per-frame DISPSILH silhouette line list — rebuilt every prepare() from
+    /// the mesh sets' curved-face generators and the current view direction, so
+    /// the outline tracks the camera. Reuses the mesh vertex format / pipeline.
+    silhouette_vbuf: Option<wgpu::Buffer>,
+    silhouette_vcount: u32,
     /// Last requested render size (the full viewport rect, in pixels). The
     /// geometry passes render at this size; the blit UV is scaled by
     /// `depth_texture_size / alloc_size` so it samples only the filled region.
@@ -1295,6 +1300,8 @@ impl Pipeline {
             text_highlight_vcount: 0,
             text_preview_vbuf: None,
             text_preview_vcount: 0,
+            silhouette_vbuf: None,
+            silhouette_vcount: 0,
             mesh_pipeline,
             mesh_transparent_pipeline,
             mesh_highlight_pipeline,
@@ -1565,6 +1572,102 @@ impl Pipeline {
         }
         self.text_preview_vbuf = text_gpu::upload_vertices(device, verts);
         self.text_preview_vcount = verts.len() as u32;
+    }
+
+    // The math lives outside the GPU method so it can be unit-tested; see the
+    // module test below.
+
+    /// Rebuild the per-frame DISPSILH silhouette line list from the mesh sets'
+    /// curved-face generators and the current eye. For each cone/cylinder face
+    /// the silhouette runs at the two angles where the surface turns edge-on to
+    /// the view — `θ = φ ± acos(-tanα·(view·axis) / |view⊥|)`, which reduces to
+    /// `φ ± π/2` for a cylinder. Segments are uploaded in the mesh vertex format
+    /// so they draw through the existing wireframe pipeline.
+    pub fn upload_silhouettes(
+        &mut self,
+        device: &wgpu::Device,
+        sets: &[crate::scene::model::mesh_model::MeshLodSet],
+        eye: glam::DVec3,
+    ) {
+        use crate::scene::pipeline::mesh_gpu::MeshVertex;
+        let mut verts: Vec<MeshVertex> = Vec::new();
+        let dot = |a: [f32; 3], b: glam::DVec3| {
+            a[0] as f64 * b.x + a[1] as f64 * b.y + a[2] as f64 * b.z
+        };
+        for set in sets {
+            for g in &set.curved_gens {
+                let base = glam::DVec3::new(
+                    g.base[0] as f64 + g.base_low[0] as f64,
+                    g.base[1] as f64 + g.base_low[1] as f64,
+                    g.base[2] as f64 + g.base_low[2] as f64,
+                );
+                // View direction from eye toward the face (accurate for both
+                // orthographic and perspective).
+                let view = (base - eye).normalize();
+                let Some((t0, t1)) = silhouette_thetas(
+                    dot(g.u_dir, view),
+                    dot(g.v_dir, view),
+                    dot(g.axis, view),
+                    g.tan_a as f64,
+                ) else {
+                    continue;
+                };
+                let r0 = g.radius as f64;
+                let r1 = g.radius as f64 + g.h_max as f64 * g.tan_a as f64;
+                for theta in [t0, t1] {
+                    if !g.full {
+                        // Only within the face's own arc; normalise the offset
+                        // from theta_min into [0, TAU).
+                        let mut off = theta - g.theta_min as f64;
+                        let tau = std::f64::consts::TAU;
+                        off = off.rem_euclid(tau);
+                        if off > g.theta_span as f64 {
+                            continue;
+                        }
+                    }
+                    let (c, s) = (theta.cos(), theta.sin());
+                    let radial = |r: f64| {
+                        [
+                            g.u_dir[0] as f64 * r * c + g.v_dir[0] as f64 * r * s,
+                            g.u_dir[1] as f64 * r * c + g.v_dir[1] as f64 * r * s,
+                            g.u_dir[2] as f64 * r * c + g.v_dir[2] as f64 * r * s,
+                        ]
+                    };
+                    let rb = radial(r0);
+                    let rt = radial(r1);
+                    let mk = |off: [f64; 3], h: f64| -> MeshVertex {
+                        let wx = base.x + off[0] + h * g.axis[0] as f64;
+                        let wy = base.y + off[1] + h * g.axis[1] as f64;
+                        let wz = base.z + off[2] + h * g.axis[2] as f64;
+                        let (hx, hy, hz) = (wx as f32, wy as f32, wz as f32);
+                        MeshVertex {
+                            position: [hx, hy, hz],
+                            normal: [0.0, 1.0, 0.0],
+                            color: set.lods.first().map(|m| m.color).unwrap_or([0.0, 0.0, 0.0, 1.0]),
+                            position_low: [
+                                (wx - hx as f64) as f32,
+                                (wy - hy as f64) as f32,
+                                (wz - hz as f64) as f32,
+                            ],
+                        }
+                    };
+                    verts.push(mk(rb, 0.0));
+                    verts.push(mk(rt, g.h_max as f64));
+                }
+            }
+        }
+        if verts.is_empty() {
+            self.silhouette_vbuf = None;
+            self.silhouette_vcount = 0;
+            return;
+        }
+        use wgpu::util::DeviceExt;
+        self.silhouette_vbuf = Some(device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mesh.silhouette.vbuf"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::VERTEX,
+        }));
+        self.silhouette_vcount = verts.len() as u32;
     }
 
     /// Recompute pixel scissor rects for viewport-clipped wires from the current view_proj.
@@ -2090,6 +2193,11 @@ impl Pipeline {
                         pass.draw(0..c.edge_vertex_count, 0..1);
                     }
                 }
+                // DISPSILH silhouettes (whole batch, one buffer).
+                if let Some(ref vb) = self.silhouette_vbuf {
+                    pass.set_vertex_buffer(0, vb.slice(..));
+                    pass.draw(0..self.silhouette_vcount, 0..1);
+                }
             } else {
                 if mesh_wireframe {
                     pass.set_pipeline(&self.mesh_wireframe_pipeline);
@@ -2106,6 +2214,11 @@ impl Pipeline {
                             pass.set_vertex_buffer(0, c.edge_vertex_buffer.slice(..));
                             pass.draw(0..c.edge_vertex_count, 0..1);
                         }
+                    }
+                    // DISPSILH silhouettes.
+                    if let Some(ref vb) = self.silhouette_vbuf {
+                        pass.set_vertex_buffer(0, vb.slice(..));
+                        pass.draw(0..self.silhouette_vcount, 0..1);
                     }
                 } else {
                     // Opaque fills first (they write depth).
@@ -2166,6 +2279,11 @@ impl Pipeline {
                             pass.set_vertex_buffer(0, c.edge_vertex_buffer.slice(..));
                             pass.draw(0..c.edge_vertex_count, 0..1);
                         }
+                    }
+                    // DISPSILH silhouettes over the shaded fill.
+                    if let Some(ref vb) = self.silhouette_vbuf {
+                        pass.set_vertex_buffer(0, vb.slice(..));
+                        pass.draw(0..self.silhouette_vcount, 0..1);
                     }
                 }
             }
@@ -2938,4 +3056,27 @@ impl iced::widget::shader::Pipeline for MultiPipeline {
             wire_buffer_cache: rustc_hash::FxHashMap::default(),
         }
     }
+}
+
+/// The two silhouette angles of a cone/cylinder face for a view direction,
+/// expressed in the face's `(u, v, axis)` frame via the view's components on
+/// each: `du = view·u`, `dv = view·v`, `da = view·axis`. `tan_a` is the cone
+/// taper (0 for a cylinder).
+///
+/// The outward normal is edge-on to the view where `du·cosθ + dv·sinθ =
+/// -tanα·da`, i.e. `θ = φ ± acos(-tanα·da / |view⊥|)` with `φ = atan2(dv, du)`.
+/// `None` when the view runs down the axis (no outline) or the whole cone faces
+/// toward/away (`|arg| > 1`).
+fn silhouette_thetas(du: f64, dv: f64, da: f64, tan_a: f64) -> Option<(f64, f64)> {
+    let r_perp = (du * du + dv * dv).sqrt();
+    if r_perp < 1e-6 {
+        return None;
+    }
+    let arg = -tan_a * da / r_perp;
+    if arg.abs() > 1.0 {
+        return None;
+    }
+    let phi = dv.atan2(du);
+    let delta = arg.acos();
+    Some((phi + delta, phi - delta))
 }
