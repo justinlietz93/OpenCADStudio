@@ -148,6 +148,8 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
                 rot += std::f32::consts::PI;
             }
             Some(layout_mtext(&MTextRenderOpts {
+                // Not an MTEXT: text in a fixed box, never columnar.
+                columns: Default::default(),
                 value: &ctx.text_string,
                 insertion: [text_loc.x, text_loc.y, text_loc.z],
                 height,
@@ -341,6 +343,8 @@ fn text_box_geom(ml: &MultiLeader) -> (f64, [f64; 3]) {
         is_upside_down: false,
     };
     let layout = layout_mtext(&MTextRenderOpts {
+        // Not an MTEXT: text in a fixed box, never columnar.
+        columns: Default::default(),
         value: &ml.context.text_string,
         insertion: [0.0, 0.0, 0.0],
         height,
@@ -1616,6 +1620,8 @@ impl MultiLeaderTess for MultiLeader {
             // fractions, …) reaches the stroke output. Stroke origins are
             // already in offset-relative space because we pass local_ins_x/y.
             let layout = layout_mtext(&MTextRenderOpts {
+                // Not an MTEXT: text in a fixed box, never columnar.
+                columns: Default::default(),
                 value: &ctx.text_string,
                 insertion: [local_ins_x as f64, local_ins_y as f64, z as f64],
                 height,

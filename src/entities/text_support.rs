@@ -305,6 +305,14 @@ pub enum MTextRunKind {
     /// Handled in the layout matches but not emitted by the parser yet.
     #[allow(dead_code)]
     Tab,
+    /// A `\S` stack: `numerator` over `denominator`, sharing one horizontal
+    /// slot. `bar` draws the fraction rule between them (`\S1/2;`); without it
+    /// the two just sit one above the other (`\S1^2;`, a limit).
+    Stack {
+        numerator: String,
+        denominator: String,
+        bar: bool,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -325,6 +333,10 @@ pub struct MTextLine {
     pub indent_left: f32,
     pub indent_right: f32,
     pub tab_stops: Vec<TabStop>,
+    /// Set when this line opened a new column (`\N`, not `\P`). Layout starts a
+    /// fresh column here when the entity defines any; with no columns it reads
+    /// as a plain line break, which is what `\N` degrades to anyway.
+    pub starts_column: bool,
 }
 
 impl MTextLine {
@@ -332,6 +344,7 @@ impl MTextLine {
         self.runs.iter().all(|r| match &r.kind {
             MTextRunKind::Glyphs(t) => t.trim().is_empty(),
             MTextRunKind::Tab => false,
+            MTextRunKind::Stack { .. } => false,
         })
     }
 }
@@ -403,6 +416,7 @@ pub fn adapt_mtext_paragraphs(
         let props = &para.properties;
         let mut line = MTextLine {
             align: props.alignment.and_then(map_align),
+            starts_column: para.starts_column,
             indent_first: props.first_line_indent.unwrap_or(0.0) as f32,
             indent_left: props.left_margin.unwrap_or(0.0) as f32,
             indent_right: props.right_margin.unwrap_or(0.0) as f32,
@@ -444,21 +458,35 @@ pub fn adapt_mtext_paragraphs(
                 overline: p.stroke.overline(),
                 strike: p.stroke.strikethrough(),
             };
-            let text = match &span.stacking {
-                Some(st) => {
-                    let sep = match st.stacking_type {
-                        StackingType::Limit => '^',
-                        _ => '/',
-                    };
+            if let Some(st) = &span.stacking {
+                // `\S` stacks the two halves in one slot. A diagonal stack
+                // (`\S1#2;`) is the exception — it reads as an inline `num/den`
+                // and is drawn that way rather than as a slanted rule.
+                if matches!(st.stacking_type, StackingType::Diagonal) {
                     let mut t = st.numerator.clone();
                     if !st.denominator.is_empty() {
-                        t.push(sep);
+                        t.push('/');
                         t.push_str(&st.denominator);
                     }
-                    t
+                    if !t.is_empty() {
+                        line.runs.push(MTextRun {
+                            kind: MTextRunKind::Glyphs(t),
+                            state,
+                        });
+                    }
+                } else if !st.numerator.is_empty() || !st.denominator.is_empty() {
+                    line.runs.push(MTextRun {
+                        kind: MTextRunKind::Stack {
+                            numerator: st.numerator.clone(),
+                            denominator: st.denominator.clone(),
+                            bar: matches!(st.stacking_type, StackingType::Horizontal),
+                        },
+                        state,
+                    });
                 }
-                None => span.text.clone(),
-            };
+                continue;
+            }
+            let text = span.text.clone();
             if text.is_empty() {
                 continue;
             }
@@ -521,7 +549,22 @@ pub enum AtomKind {
     Word(String),
     Space,
     Tab,
+    /// A `\S` stack — both halves share this one slot, so it measures as wide
+    /// as the wider of them rather than as the two laid end to end.
+    Stack {
+        numerator: String,
+        denominator: String,
+        bar: bool,
+    },
 }
+
+/// Each half of a `\S` stack, as a fraction of the run's own height.
+pub const STACK_HALF_SCALE: f32 = 0.55;
+/// Baseline of the numerator, as a fraction of the run's height above the
+/// denominator's. Leaves a gap the fraction rule sits in.
+pub const STACK_RAISE: f32 = 0.68;
+/// Height of the fraction rule above the denominator's baseline.
+pub const STACK_BAR_Y: f32 = 0.60;
 
 #[derive(Clone)]
 pub struct LayoutAtom {
@@ -578,6 +621,19 @@ pub fn atom_width(atom: &LayoutAtom, entity_h: f32, base_wf: f32, base_font: &st
         AtomKind::Word(t) => measure_word(t, &atom.state, entity_h, base_wf, base_font),
         AtomKind::Space => measure_space(&atom.state, entity_h, base_wf, base_font),
         AtomKind::Tab => 0.0,
+        AtomKind::Stack {
+            numerator,
+            denominator,
+            ..
+        } => {
+            // Both halves start at the slot's left edge, so the slot is as wide
+            // as the wider one — measured at the shrunk height they draw at.
+            let mut half = atom.state.clone();
+            half.height_mul *= STACK_HALF_SCALE;
+            let n = measure_word(numerator, &half, entity_h, base_wf, base_font);
+            let d = measure_word(denominator, &half, entity_h, base_wf, base_font);
+            n.max(d)
+        }
     }
 }
 
@@ -625,7 +681,8 @@ pub fn wrap_paragraph(
 
     for atom in atoms {
         match &atom.kind {
-            AtomKind::Word(_) => {
+            // A stack is one unbreakable slot — it wraps exactly like a word.
+            AtomKind::Word(_) | AtomKind::Stack { .. } => {
                 let w = atom_width(&atom, entity_h, base_wf, base_font);
                 let max_w = line_max_w(subline_idx);
                 if !cur.is_empty() && cur_w + w > max_w {
@@ -781,6 +838,36 @@ pub struct MTextRenderOpts<'a> {
     /// one world-space box per visible character (used by the MText editor's
     /// click-to-select preview). Off in the hot render path.
     pub want_glyph_boxes: bool,
+    /// The entity's column layout. `Default` (count 0) = a single column, which
+    /// is what everything except a multi-column MTEXT wants.
+    pub columns: MTextColumns,
+}
+
+/// An MTEXT's column layout, flattened from its `column_data`.
+///
+/// Content moves to the next column at a `\N` break. Filling a column and
+/// spilling into the next on its own is not modelled: `heights` / `auto_height`
+/// are not read, so a column runs as long as its content does.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct MTextColumns {
+    /// Column count. 0 or 1 both mean "no column layout".
+    pub count: usize,
+    /// Width of one column, world units.
+    pub width: f32,
+    /// Gap between two adjacent columns, world units.
+    pub gutter: f32,
+}
+
+impl MTextColumns {
+    /// Whether this describes a real multi-column layout.
+    pub fn active(&self) -> bool {
+        self.count > 1 && self.width > 1e-6
+    }
+
+    /// Left edge of column `i`, relative to the text block's own left edge.
+    pub fn offset_of(&self, i: usize) -> f32 {
+        i as f32 * (self.width + self.gutter)
+    }
 }
 
 /// One selectable character in the laid-out text: its world-space AABB plus
@@ -846,10 +933,21 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         indent_right: f32,
         tab_stops: Vec<TabStop>,
         is_first_in_paragraph: bool,
+        /// Which column this line lives in; always 0 without a column layout.
+        column: usize,
     }
+
+    let cols = opts.columns;
+    // A `\N` past the last column has nowhere to go — keep those lines in the
+    // last one rather than laying them out beyond the block.
+    let last_col = cols.count.saturating_sub(1);
+    let mut column = 0usize;
 
     let mut sub_lines: Vec<SubLine> = Vec::new();
     for para in &paragraphs {
+        if cols.active() && para.starts_column {
+            column = (column + 1).min(last_col);
+        }
         let mut atoms: Vec<LayoutAtom> = Vec::new();
         for run in &para.runs {
             match &run.kind {
@@ -884,6 +982,20 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         state: run.state.clone(),
                     });
                 }
+                MTextRunKind::Stack {
+                    numerator,
+                    denominator,
+                    bar,
+                } => {
+                    atoms.push(LayoutAtom {
+                        kind: AtomKind::Stack {
+                            numerator: numerator.clone(),
+                            denominator: denominator.clone(),
+                            bar: *bar,
+                        },
+                        state: run.state.clone(),
+                    });
+                }
             }
         }
 
@@ -906,9 +1018,13 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
             }
         }
 
+        // Wrap to the column the text actually flows down, not to the block:
+        // measuring against the full width would let a line run across the
+        // gutter and over its neighbour.
+        let wrap_w = if cols.active() { cols.width } else { rect_w };
         let wrapped = wrap_paragraph(
             atoms,
-            rect_w,
+            wrap_w,
             para.indent_first,
             para.indent_left,
             para.indent_right,
@@ -926,6 +1042,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                 indent_right: para.indent_right,
                 tab_stops: para.tab_stops.clone(),
                 is_first_in_paragraph: idx == 0,
+                column,
             });
         }
     }
@@ -938,11 +1055,24 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
             indent_right: 0.0,
             tab_stops: Vec::new(),
             is_first_in_paragraph: true,
+            column: 0,
         });
     }
 
     // ── 3. Block geometry (line spacing, attachment, rotation) ───────────
-    let n_lines = sub_lines.len().max(1) as f32;
+    // Row of each sub-line *within its own column* — the flat index only tracks
+    // depth down the page when there is one column. Columns sit side by side, so
+    // each restarts at the top and the block is as deep as its longest one.
+    let mut col_rows = vec![0usize; cols.count.max(1)];
+    let row_in_column: Vec<f32> = sub_lines
+        .iter()
+        .map(|s| {
+            let r = col_rows[s.column];
+            col_rows[s.column] = r + 1;
+            r as f32
+        })
+        .collect();
+    let n_lines = col_rows.iter().copied().max().unwrap_or(0).max(1) as f32;
     let ls_factor = if opts.line_spacing_factor > 0.0 {
         opts.line_spacing_factor
     } else {
@@ -1012,7 +1142,14 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         )
     };
     for (i, sub) in sub_lines.iter().enumerate() {
-        let li = i as f32;
+        let li = row_in_column[i];
+        // The block anchors on its full width; each column then sits at its own
+        // offset inside it and wraps to its own width, not the block's.
+        let (box_left, rect_w) = if cols.active() {
+            (box_left + cols.offset_of(sub.column), cols.width)
+        } else {
+            (box_left, rect_w)
+        };
         let (line_base_x, line_base_y) = if opts.vertical_text {
             let col_offset = li * entity_h * 1.2;
             (
@@ -1174,6 +1311,97 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                     cursor_x +=
                         measure_word(text, &atom.state, entity_h, base_wf, &base_font_name);
                 }
+                AtomKind::Stack {
+                    numerator,
+                    denominator,
+                    bar,
+                } => {
+                    let run_h = atom.state.height_mul * entity_h;
+                    let signed_wf = base_wf.signum() * atom.state.width_mul * base_wf.abs();
+                    let oblique = base_oblique + atom.state.oblique_rad;
+                    let font_name = resolve_font(&atom.state, &base_font_name);
+                    let tracking = atom.state.tracking;
+                    let color = atom.state.color.as_ref().and_then(resolve_inline_color);
+                    let valign_dy = match atom.state.valign {
+                        1 => (line_max_h - run_h) * 0.5,
+                        2 => line_max_h - run_h,
+                        _ => 0.0,
+                    };
+
+                    // Both halves draw at the shrunk height; the numerator sits
+                    // a fixed lift above the denominator's baseline, so the two
+                    // occupy one slot instead of running on horizontally.
+                    let mut half_state = atom.state.clone();
+                    half_state.height_mul *= STACK_HALF_SCALE;
+                    let half_h = run_h * STACK_HALF_SCALE;
+
+                    let slot_w = atom_width(atom, entity_h, base_wf, &base_font_name);
+
+                    let mut emit = |text: &str, ly: f32| {
+                        if text.is_empty() {
+                            return;
+                        }
+                        let lx = cursor_x;
+                        let world_dx = lx * cos_r - ly * sin_r;
+                        let world_dy = lx * sin_r + ly * cos_r;
+                        let origin: [f64; 2] = [
+                            ins_x + (line_base_x + world_dx) as f64,
+                            ins_y + (line_base_y + world_dy) as f64,
+                        ];
+                        let (strokes, fill_tris) = lff::tessellate_text_run(
+                            [0.0, 0.0],
+                            half_h,
+                            rot,
+                            signed_wf,
+                            oblique,
+                            tracking,
+                            &font_name,
+                            text,
+                        );
+                        all_strokes.push(TextStroke {
+                            strokes,
+                            origin,
+                            color,
+                            fill_tris,
+                            run: Some(GlyphRun {
+                                text: text.to_string(),
+                                font: font_name.to_string(),
+                                height: half_h,
+                                rotation: rot,
+                                width_factor: signed_wf,
+                                oblique,
+                                tracking,
+                                bold: atom.state.bold,
+                            }),
+                        });
+                    };
+                    emit(denominator, valign_dy);
+                    emit(numerator, valign_dy + run_h * STACK_RAISE);
+
+                    if *bar && slot_w > 0.0 {
+                        // The rule is plain geometry, not a glyph, so it rides a
+                        // run-less group — those keep their strokes, while a
+                        // group carrying a `GlyphRun` renders as SDF quads and
+                        // has its strokes suppressed.
+                        let by = valign_dy + run_h * STACK_BAR_Y;
+                        let p = |lx: f32, ly: f32| -> [f32; 2] {
+                            [lx * cos_r - ly * sin_r, lx * sin_r + ly * cos_r]
+                        };
+                        let (ox, oy) = (
+                            ins_x + (line_base_x + p(cursor_x, by)[0]) as f64,
+                            ins_y + (line_base_y + p(cursor_x, by)[1]) as f64,
+                        );
+                        let end = p(slot_w, 0.0);
+                        all_strokes.push(TextStroke {
+                            strokes: vec![vec![[0.0, 0.0], end]],
+                            origin: [ox, oy],
+                            color,
+                            fill_tris: Vec::new(),
+                            run: None,
+                        });
+                    }
+                    cursor_x += slot_w;
+                }
                 AtomKind::Space => {
                     let adv = measure_space(&atom.state, entity_h, base_wf, &base_font_name);
                     if opts.want_glyph_boxes {
@@ -1245,6 +1473,7 @@ mod tests {
         assert_eq!(resolve_font(&state, base), base);
 
         let layout = layout_mtext(&MTextRenderOpts {
+            columns: Default::default(),
             value: "{\\f__definitely_not_an_installed_font__|b0|i0|c0|p34;Storage Units}",
             insertion: [0.0, 0.0, 0.0],
             height: 2.5,
@@ -1267,6 +1496,7 @@ mod tests {
     #[test]
     fn block_style_font_name_from_ttf_file_renders_mtext() {
         let layout = layout_mtext(&MTextRenderOpts {
+            columns: Default::default(),
             value: "FERRAGAMO",
             insertion: [0.0, 0.0, 0.0],
             height: 20.0,
@@ -1349,12 +1579,31 @@ mod adapter_tests {
     }
 
     #[test]
-    fn stacking_flattens_like_the_legacy_parser() {
-        let (t, _) = first_run(&adapt_mtext_paragraphs("\\S1/2;", 2.5, true));
-        assert_eq!(t, "1/2");
-        let (t, _) = first_run(&adapt_mtext_paragraphs("\\S1^2;", 2.5, true));
-        assert_eq!(t, "1^2");
-        // Diagonal `#` renders with a `/` separator.
+    fn stacking_keeps_its_halves_apart() {
+        // `\S` reaches layout as a stack, not as flattened text: the halves
+        // share one slot, which is what keeps a fraction from widening the line.
+        let lines = adapt_mtext_paragraphs("\\S1/2;", 2.5, true);
+        match &lines[0].runs[0].kind {
+            MTextRunKind::Stack {
+                numerator,
+                denominator,
+                bar,
+            } => {
+                assert_eq!((numerator.as_str(), denominator.as_str()), ("1", "2"));
+                assert!(*bar, "`/` draws a fraction rule");
+            }
+            other => panic!("expected a stack run, got {other:?}"),
+        }
+
+        // `^` is the same stack without the rule.
+        let lines = adapt_mtext_paragraphs("\\S1^2;", 2.5, true);
+        match &lines[0].runs[0].kind {
+            MTextRunKind::Stack { bar, .. } => assert!(!*bar, "`^` is a limit, no rule"),
+            other => panic!("expected a stack run, got {other:?}"),
+        }
+
+        // Diagonal stays inline `num/den` — that is what a slanted fraction
+        // reads as, and it needs no second baseline.
         let (t, _) = first_run(&adapt_mtext_paragraphs("\\S1#2;", 2.5, true));
         assert_eq!(t, "1/2");
     }
@@ -1395,6 +1644,7 @@ mod v_anchor_tests {
             is_upside_down: false,
         };
         layout_mtext(&MTextRenderOpts {
+            columns: Default::default(),
             value,
             insertion: [0.0, 0.0, 0.0],
             height,
@@ -1442,3 +1692,5 @@ mod v_anchor_tests {
         }
     }
 }
+
+

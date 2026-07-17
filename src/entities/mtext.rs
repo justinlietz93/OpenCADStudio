@@ -5,12 +5,30 @@ use crate::entities::common::{
     edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
 };
 use crate::entities::text_support::{
-    layout_mtext, resolve_text_style, GlyphBox, MTextRenderOpts, MTextVAnchor,
+    layout_mtext, resolve_text_style, GlyphBox, MTextColumns, MTextRenderOpts, MTextVAnchor,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::SnapHint;
+
+/// The entity's `column_data` as the layout's column description.
+///
+/// `column_type` 0 means the MTEXT never opted into columns, so ignore whatever
+/// stale width/count sit alongside it. Static (1) and dynamic (2) both flow at
+/// the `\N` breaks in the value; the difference between them is how a *full*
+/// column spills into the next, which the layout does not model.
+fn columns_of(t: &MText) -> MTextColumns {
+    let c = &t.column_data;
+    if c.column_type == 0 {
+        return MTextColumns::default();
+    }
+    MTextColumns {
+        count: c.column_count.max(0) as usize,
+        width: c.width as f32,
+        gutter: c.gutter as f32,
+    }
+}
 
 /// Combined attachment point shown as a single justify dropdown value.
 fn attachment_str(a: &AttachmentPoint) -> &'static str {
@@ -96,6 +114,7 @@ pub fn glyph_boxes(t: &MText, document: &acadrust::CadDocument) -> Vec<GlyphBox>
         line_spacing_factor: t.line_spacing_factor as f32,
         vertical_text: matches!(t.drawing_direction, DrawingDirection::TopToBottom),
         want_glyph_boxes: true,
+        columns: columns_of(t),
     });
     layout.glyph_boxes
 }
@@ -143,6 +162,7 @@ fn to_truck(t: &MText, document: &acadrust::CadDocument) -> TruckEntity {
         line_spacing_factor: t.line_spacing_factor as f32,
         vertical_text: matches!(t.drawing_direction, DrawingDirection::TopToBottom),
         want_glyph_boxes: false,
+        columns: columns_of(t),
     });
     let insertion = glam::DVec3::new(
         t.insertion_point.x,

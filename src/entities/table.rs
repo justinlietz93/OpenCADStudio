@@ -286,6 +286,8 @@ impl TruckConvertible for Table {
                 // Content rotation (radians) on top of table cell rotation.
                 let rot = content.map(|c| c.rotation as f32).unwrap_or(0.0) + cell.rotation as f32;
                 let layout = layout_mtext(&MTextRenderOpts {
+                    // Not an MTEXT: text in a fixed box, never columnar.
+                    columns: Default::default(),
                     value: text,
                     insertion: [text_origin.x as f64, text_origin.y as f64, origin.z as f64],
                     height: cell_h,
@@ -694,6 +696,8 @@ pub fn tessellate_table(
             let to = origin + h * x_offset + v_flow * y_offset;
             let rot = content.map(|c| c.rotation as f32).unwrap_or(0.0) + cell.rotation as f32;
             let layout = layout_mtext(&MTextRenderOpts {
+                // Not an MTEXT: text in a fixed box, never columnar.
+                columns: Default::default(),
                 value: text,
                 insertion: [(to.x as f64), (to.y as f64), (to.z as f64)],
                 height: cell_h,

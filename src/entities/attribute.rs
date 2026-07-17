@@ -201,6 +201,8 @@ fn build_attr_truck(input: AttrTextInputs<'_>, document: &acadrust::CadDocument)
             is_upside_down: false,
         };
         let layout = layout_mtext(&MTextRenderOpts {
+            // Not an MTEXT: text in a fixed box, never columnar.
+            columns: Default::default(),
             value: &display_value,
             insertion: [anchor_pt.x, anchor_pt.y, anchor_pt.z],
             height: input.height as f32,
