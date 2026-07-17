@@ -130,6 +130,12 @@ pub struct MTextEditorState {
     /// Canvas-space anchor where the toolbar + text area are drawn (the
     /// insertion-point click position).
     pub screen_anchor: iced::Point,
+    /// The entity as it was opened, when editing an existing MText. `build_mtext`
+    /// starts from this so every field the toolbar doesn't touch — columns,
+    /// rotation, normal, background fill, defined height, annotative flag —
+    /// survives the edit instead of resetting to `MText::default()`. `None` for
+    /// a freshly created MText, which has nothing to preserve.
+    pub original: Option<MText>,
 }
 
 impl MTextEditorState {
@@ -163,6 +169,7 @@ impl MTextEditorState {
             rect_width: (height * 20.0).max(1.0),
             editing,
             screen_anchor: iced::Point::new(60.0, 90.0),
+            original: None,
         }
     }
 
@@ -220,18 +227,22 @@ impl MTextEditorState {
     }
 
     /// Build the MText entity from the current editor state for preview/commit.
+    ///
+    /// Starts from the original entity (when editing one) so fields the toolbar
+    /// never exposes — columns above all, plus rotation, normal, defined height,
+    /// background fill, annotative flag — round-trip untouched. Rebuilding from
+    /// `MText::default()` here is what silently stripped a columnar MTEXT's
+    /// columns the moment it was edited.
     pub fn build_mtext(&self) -> MText {
-        let h = self.height_value();
-        MText {
-            value: self.folded_value(),
-            insertion_point: Vector3::new(self.pos.x, self.pos.y, self.pos.z),
-            height: h,
-            rectangle_width: self.rect_width,
-            attachment_point: self.attachment,
-            line_spacing_factor: self.line_spacing as f64,
-            style: self.style.clone(),
-            ..Default::default()
-        }
+        let mut mt = self.original.clone().unwrap_or_default();
+        mt.value = self.folded_value();
+        mt.insertion_point = Vector3::new(self.pos.x, self.pos.y, self.pos.z);
+        mt.height = self.height_value();
+        mt.rectangle_width = self.rect_width;
+        mt.attachment_point = self.attachment;
+        mt.line_spacing_factor = self.line_spacing as f64;
+        mt.style = self.style.clone();
+        mt
     }
 }
 
@@ -256,9 +267,12 @@ enum Cell {
     /// A visible character carrying its span's formatting. Tabs count as a
     /// normal char here (one slot), matching the previous caret model.
     Char(char, SpanProperties),
-    /// A paragraph break (`\P`), carrying the paragraph properties (alignment,
+    /// A paragraph break, carrying the paragraph properties (alignment,
     /// indents…) of the paragraph it opens, so they survive an edit round-trip.
-    Break(ParagraphProperties),
+    /// The `bool` is `starts_column`: `true` for a `\N` column break, `false`
+    /// for a plain `\P`. Without it every edit flattens `\N` to `\P` and a
+    /// columnar MTEXT loses its columns on the first keystroke.
+    Break(ParagraphProperties, bool),
     /// One flattened glyph of a stacking (`\S`) span, kept atomic: continuation
     /// cells (`head=false`) extend the run begun by a `head=true` one, and edits
     /// never split a run.
@@ -298,7 +312,7 @@ fn doc_to_cells(doc: &MTextDocument) -> Vec<Cell> {
     let mut cells = Vec::new();
     for (pi, para) in doc.paragraphs.iter().enumerate() {
         if pi > 0 {
-            cells.push(Cell::Break(para.properties.clone()));
+            cells.push(Cell::Break(para.properties.clone(), para.starts_column));
         }
         for span in &para.spans {
             if let Some(st) = &span.stacking {
@@ -341,10 +355,11 @@ fn cells_to_doc(para0: &ParagraphProperties, cells: &[Cell]) -> MTextDocument {
     para.properties = para0.clone();
     for cell in cells {
         match cell {
-            Cell::Break(props) => {
+            Cell::Break(props, starts_column) => {
                 doc.paragraphs
                     .push(std::mem::replace(&mut para, MTextParagraph::new()));
                 para.properties = props.clone();
+                para.starts_column = *starts_column;
             }
             Cell::Char(ch, props) => match para.spans.last_mut() {
                 Some(s) if s.stacking.is_none() && &s.properties == props => s.text.push(*ch),
@@ -369,7 +384,7 @@ fn cells_to_doc(para0: &ParagraphProperties, cells: &[Cell]) -> MTextDocument {
 fn para_props_at(para0: &ParagraphProperties, cells: &[Cell], caret: usize) -> ParagraphProperties {
     let mut props = para0.clone();
     for cell in cells.iter().take(caret) {
-        if let Cell::Break(p) = cell {
+        if let Cell::Break(p, _) = cell {
             props = p.clone();
         }
     }
@@ -382,7 +397,9 @@ fn str_to_cells(s: &str, span_props: &SpanProperties, para_props: &ParagraphProp
     let mut cells = Vec::new();
     for (i, seg) in s.split("\\P").enumerate() {
         if i > 0 {
-            cells.push(Cell::Break(para_props.clone()));
+            // A typed / pasted break is a plain `\P`; the editor offers no way to
+            // insert a column break, so existing `\N`s are the only columnar ones.
+            cells.push(Cell::Break(para_props.clone(), false));
         }
         for ch in seg.chars() {
             cells.push(Cell::Char(ch, span_props.clone()));
@@ -434,7 +451,7 @@ enum Class {
 
 fn cell_class(c: &Cell) -> Class {
     match c {
-        Cell::Break(_) => Class::Break,
+        Cell::Break(..) => Class::Break,
         Cell::Char(ch, _) if ch.is_whitespace() => Class::Space,
         // A char or an atomic stacking glyph is part of a word.
         _ => Class::Word,
@@ -516,6 +533,9 @@ impl super::OpenCADStudio {
                     if m.rectangle_width > 0.0 {
                         state.rect_width = m.rectangle_width;
                     }
+                    // Keep the whole entity so `build_mtext` preserves the fields
+                    // the toolbar can't edit (columns, rotation, background…).
+                    state.original = Some(m.clone());
                 }
                 Some(EntityType::MultiLeader(ml)) => {
                     state.line_spacing = ml.context.line_spacing_factor as f32;
@@ -567,6 +587,14 @@ impl super::OpenCADStudio {
                 None => mt.value.push(' '),
             }
         }
+        // Lay the preview out at the origin, not at the entity's real insertion.
+        // The panel fits the strokes to its own box and never places them on the
+        // drawing, so world position is irrelevant here — and a UTM-scale
+        // insertion cast to f32 (glyph boxes) or split high/low (strokes, whose
+        // low half this 2-D canvas drops) garbles every glyph through
+        // catastrophic cancellation. Insertion is a pure translation, so zeroing
+        // it keeps the layout's shape, wrapping and alignment identical.
+        mt.insertion_point = Vector3::new(0.0, 0.0, 0.0);
         let entity = EntityType::MText(mt.clone());
         let anno = self.tabs[i].scene.annotation_scale;
         let bg = self.tabs[i].scene.bg_color;
@@ -618,7 +646,7 @@ impl super::OpenCADStudio {
         fn all_have(cells: &[Cell], get: impl Fn(&SpanProperties) -> bool) -> bool {
             cells.iter().all(|c| match c {
                 Cell::Char(_, p) | Cell::Stack { props: p, .. } => get(p),
-                Cell::Break(_) => true,
+                Cell::Break(..) => true,
             })
         }
         // Apply `f` to every span-carrying cell's properties in the range.
@@ -626,7 +654,7 @@ impl super::OpenCADStudio {
             for c in cells {
                 match c {
                     Cell::Char(_, p) | Cell::Stack { props: p, .. } => f(p),
-                    Cell::Break(_) => {}
+                    Cell::Break(..) => {}
                 }
             }
         }
@@ -747,7 +775,7 @@ impl super::OpenCADStudio {
             });
             // Paragraph index of a cell = number of breaks before it.
             let para_of =
-                |idx: usize| cells.iter().take(idx).filter(|c| matches!(c, Cell::Break(_))).count();
+                |idx: usize| cells.iter().take(idx).filter(|c| matches!(c, Cell::Break(..))).count();
             let last_cell = if b > a { b - 1 } else { a };
             let first = para_of(a);
             let last = para_of(last_cell);
@@ -1105,7 +1133,7 @@ mod cell_tests {
         let cells = vec![
             Cell::Char('a', SpanProperties::default()),
             Cell::Char('b', SpanProperties::default()),
-            Cell::Break(ParagraphProperties::default()),
+            Cell::Break(ParagraphProperties::default(), false),
         ];
         let back = doc_to_cells(&cells_to_doc(&ParagraphProperties::default(), &cells));
         assert_eq!(back, cells);
@@ -1263,7 +1291,7 @@ mod cell_tests {
         let cells = vec![
             Cell::Char('a', SpanProperties::default()),
             Cell::Char('b', SpanProperties::default()),
-            Cell::Break(ParagraphProperties::default()),
+            Cell::Break(ParagraphProperties::default(), false),
         ];
         let raw = cells_to_doc(&ParagraphProperties::default(), &cells).to_mtext_string();
         // rebuild() re-parses + restores the trailing empty paragraph.
