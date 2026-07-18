@@ -638,10 +638,17 @@ pub fn tessellate(
                                 );
                                 // Fill / mask — two triangles behind the glyphs.
                                 if has_fill {
-                                    let fill_color = if m.background_fill_flags & 0x01 != 0 {
-                                        color_or_inherit(&m.background_color, bg_color)
-                                    } else {
+                                    // 0x02 (use the drawing-window colour) is a
+                                    // MASK — it wins when set, even alongside
+                                    // 0x01, so text flagged "drawing background"
+                                    // erases what's behind it (a dark box on a
+                                    // dark canvas = no visible colour), instead
+                                    // of painting the stored background_color. A
+                                    // plain 0x01 fill paints that colour.
+                                    let fill_color = if m.background_fill_flags & 0x02 != 0 {
                                         bg_color
+                                    } else {
+                                        color_or_inherit(&m.background_color, bg_color)
                                     };
                                     let corners = [[l, b], [r, b], [r, t], [l, t]];
                                     let mut ft = Vec::with_capacity(6);
