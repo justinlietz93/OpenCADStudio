@@ -289,7 +289,7 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
         let h = e.common().handle;
         match e {
             EntityType::Hatch(_) | EntityType::Solid(_) => hatch_handles.push(h),
-            EntityType::RasterImage(_) => image_handles.push(h),
+            EntityType::RasterImage(_) | EntityType::Ole2Frame(_) => image_handles.push(h),
             EntityType::Solid3D(_) | EntityType::Region(_) | EntityType::Body(_) | EntityType::Surface(_) => {
                 mesh_handles.push(h)
             }
@@ -326,12 +326,14 @@ pub fn build_derived_caches(doc: &CadDocument) -> DerivedCaches {
     // images
     let images: HashMap<Handle, ImageModel> = image_handles
         .par_iter()
-        .filter_map(|&handle| {
-            if let EntityType::RasterImage(img) = doc.get_entity(handle)? {
+        .filter_map(|&handle| match doc.get_entity(handle)? {
+            EntityType::RasterImage(img) => {
                 ImageModel::from_raster_image(img).map(|m| (handle, m))
-            } else {
-                None
             }
+            EntityType::Ole2Frame(ole) => {
+                ImageModel::from_ole2frame(ole).map(|m| (handle, m))
+            }
+            _ => None,
         })
         .collect();
 

@@ -90,6 +90,93 @@ impl ImageModel {
     }
 }
 
+impl ImageModel {
+    /// Build an ImageModel from an OLE2FRAME's embedded presentation bitmap.
+    /// Returns `None` when the frame is degenerate or carries no decodable
+    /// bitmap (e.g. a metafile-only OLE), so the caller falls back to the frame
+    /// placeholder.
+    pub fn from_ole2frame(ole: &acadrust::entities::Ole2Frame) -> Option<Self> {
+        let (pixels, width, height) = decode_ole_bitmap(&ole.binary_data)?;
+
+        // Frame rectangle in WCS. `upper_left`/`lower_right` name the diagonal;
+        // normalise to left/right/top/bottom so the bitmap sits upright.
+        let left = ole.upper_left_corner.x.min(ole.lower_right_corner.x);
+        let right = ole.upper_left_corner.x.max(ole.lower_right_corner.x);
+        let bottom = ole.upper_left_corner.y.min(ole.lower_right_corner.y);
+        let top = ole.upper_left_corner.y.max(ole.lower_right_corner.y);
+        let z = ole.upper_left_corner.z;
+        if (right - left).abs() < 1e-9 || (top - bottom).abs() < 1e-9 {
+            return None;
+        }
+
+        // Double-single split per corner so the quad stays precise at UTM scale.
+        let split = |x: f64, y: f64| -> ([f32; 3], [f32; 3]) {
+            let (hx, hy, hz) = (x as f32, y as f32, z as f32);
+            (
+                [hx, hy, hz],
+                [
+                    (x - hx as f64) as f32,
+                    (y - hy as f64) as f32,
+                    (z - hz as f64) as f32,
+                ],
+            )
+        };
+        // corners: [BL, BR, TR, TL] — the image pipeline maps texel (0,0) to TL.
+        let (c0, l0) = split(left, bottom);
+        let (c1, l1) = split(right, bottom);
+        let (c2, l2) = split(right, top);
+        let (c3, l3) = split(left, top);
+
+        Some(Self {
+            file_path: "OLE2FRAME".to_string(),
+            pixels: Arc::new(pixels),
+            width,
+            height,
+            opacity: 1.0,
+            corners: [c0, c1, c2, c3],
+            corners_low: [l0, l1, l2, l3],
+            vp_scissor: None,
+            draw_depth: 0.0,
+        })
+    }
+}
+
+/// Extract and decode the presentation BMP embedded in an OLE2FRAME data blob.
+/// The blob carries the OLE object's cached bitmap (a `BITMAPFILEHEADER` "BM"
+/// followed by a DIB); scan for a self-consistent one and decode it. Returns
+/// `None` when no valid BMP is present (a metafile/other-format OLE).
+fn decode_ole_bitmap(data: &[u8]) -> Option<(Vec<u8>, u32, u32)> {
+    let mut i = 0usize;
+    while i + 54 <= data.len() {
+        if &data[i..i + 2] != b"BM" {
+            i += 1;
+            continue;
+        }
+        let file_size = u32::from_le_bytes(data[i + 2..i + 6].try_into().unwrap()) as usize;
+        let dib_size = u32::from_le_bytes(data[i + 14..i + 18].try_into().unwrap());
+        // A plausible BITMAPFILEHEADER points at a known DIB-header size.
+        if !matches!(dib_size, 12 | 40 | 52 | 56 | 64 | 108 | 124) {
+            i += 1;
+            continue;
+        }
+        let end = if file_size >= 54 && i + file_size <= data.len() {
+            i + file_size
+        } else {
+            data.len()
+        };
+        if let Ok(img) = image::load_from_memory_with_format(&data[i..end], image::ImageFormat::Bmp)
+        {
+            let rgba = img.to_rgba8();
+            let (w, h) = rgba.dimensions();
+            if w > 0 && h > 0 {
+                return Some((rgba.into_raw(), w, h));
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
 /// Decode a raster image file into RGBA8 pixels.
 /// Returns `None` if the file does not exist or cannot be decoded.
 pub fn load_pixels(path_str: &str) -> Option<(Vec<u8>, u32, u32)> {

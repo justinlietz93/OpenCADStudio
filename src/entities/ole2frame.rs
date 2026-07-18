@@ -28,8 +28,10 @@ fn to_truck(ole: &Ole2Frame) -> TruckEntity {
 
     let cx = (x0 + x1) * 0.5;
     let cy = (y0 + y1) * 0.5;
+    // Frame border only — the embedded presentation bitmap is drawn inside the
+    // rectangle by the image pass (see `ImageModel::from_ole2frame`). The old
+    // diagonal-X placeholder would have crossed over that image.
     let pts: Vec<[f64; 3]> = vec![
-        // Rectangle
         [x0, y0, z],
         [x1, y0, z],
         [x1, y0, z],
@@ -38,12 +40,6 @@ fn to_truck(ole: &Ole2Frame) -> TruckEntity {
         [x0, y1, z],
         [x0, y1, z],
         [x0, y0, z],
-        // Diagonal X
-        [x0, y0, z],
-        [x1, y1, z],
-        [f64::NAN; 3],
-        [x1, y0, z],
-        [x0, y1, z],
     ];
     let center = glam::DVec3::new(cx, cy, z);
     TruckEntity {
@@ -171,9 +167,7 @@ impl TruckConvertible for Ole2Frame {
 crate::impl_entity_basics!(Ole2Frame);
 
 impl crate::entities::traits::FallbackTess for Ole2Frame {
-    fn fallback_geometry(
-        &self,
-    ) -> crate::scene::convert::tess_util::FallbackGeometry {
+    fn fallback_geometry(&self) -> crate::scene::convert::tess_util::FallbackGeometry {
         // OLE objects carry a bounding rectangle in model space.
         // Render a simple X-through-rectangle placeholder.
         let x0 = self.upper_left_corner.x;
@@ -187,7 +181,7 @@ impl crate::entities::traits::FallbackTess for Ole2Frame {
             return (vec![[-s, 0.0, 0.0], [s, 0.0, 0.0]], vec![], vec![], vec![]);
         }
         let pts = vec![
-            // Outer rectangle
+            // Frame border only; the presentation bitmap fills the rectangle.
             [x0, y0, z],
             [x1, y0, z],
             [x1, y0, z],
@@ -196,12 +190,6 @@ impl crate::entities::traits::FallbackTess for Ole2Frame {
             [x0, y1, z],
             [x0, y1, z],
             [x0, y0, z],
-            // Diagonal X
-            [x0, y0, z],
-            [x1, y1, z],
-            [f64::NAN, f64::NAN, f64::NAN],
-            [x1, y0, z],
-            [x0, y1, z],
         ];
         (pts, vec![], vec![], vec![[x0, y0, z], [x1, y1, z]])
     }
