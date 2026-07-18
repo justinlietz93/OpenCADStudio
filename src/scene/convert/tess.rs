@@ -244,41 +244,99 @@ pub(crate) fn tessellate_entity(
     // occupies its real place instead of silently disappearing.
     if let EntityType::Unknown(_) = e {
         if let Some(blob) = e.common().graphic_data.as_ref() {
-            let polys = convert::proxy_graphics::decode(blob);
-            if !polys.is_empty() {
-                // Group primitives by their preview colour so each colour draws
-                // in its own wire (the poly-lines within share a wire, joined by
-                // NaN separators; arcs are already flattened to points).
+            let dec = convert::proxy_graphics::decode(blob);
+            if !dec.polylines.is_empty() || !dec.texts.is_empty() {
+                use crate::scene::convert::proxy_graphics::ProxyColor;
                 use std::collections::BTreeMap;
                 let nan = [f64::NAN; 3];
-                let mut by_color: BTreeMap<i32, Vec<[f64; 3]>> = BTreeMap::new();
-                for poly in &polys {
-                    let buf = by_color.entry(poly.color).or_default();
+                // A specific ACI / RGB overrides the entity colour; ByLayer /
+                // ByBlock inherit it.
+                let resolve = |pc: ProxyColor| -> ([f32; 4], u8) {
+                    match pc {
+                        ProxyColor::Aci(a) => (
+                            view::render::adapt_to_bg(
+                                convert::tess_util::aci_to_rgba(&acadrust::types::Color::Index(a)),
+                                bg_color,
+                            ),
+                            a,
+                        ),
+                        ProxyColor::Rgb(r, g, b) => (
+                            view::render::adapt_to_bg(
+                                [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0],
+                                bg_color,
+                            ),
+                            0,
+                        ),
+                        ProxyColor::Inherit => (entity_color, aci),
+                    }
+                };
+                let mut wires = Vec::new();
+                // Lines / shells: group by (colour, lineweight), one wire each.
+                let mut groups: BTreeMap<(ProxyColor, i16), Vec<[f64; 3]>> = BTreeMap::new();
+                for poly in &dec.polylines {
+                    let buf = groups.entry((poly.color, poly.lineweight)).or_default();
                     if !buf.is_empty() {
                         buf.push(nan);
                     }
                     buf.extend_from_slice(&poly.points);
                 }
-                let mut wires = Vec::with_capacity(by_color.len());
-                for (pcolor, pts64) in by_color {
-                    // A real ACI index overrides the entity colour; ByLayer
-                    // (256) / ByBlock (0) inherit it.
-                    let (col, w_aci) = if (1..=255).contains(&pcolor) {
-                        let rgba = convert::tess_util::aci_to_rgba(
-                            &acadrust::types::Color::Index(pcolor as u8),
-                        );
-                        (view::render::adapt_to_bg(rgba, bg_color), pcolor as u8)
+                for ((pcolor, plw), pts64) in groups {
+                    let (col, w_aci) = resolve(pcolor);
+                    let lw_px = if plw >= 0 {
+                        view::render::lineweight_to_px(&acadrust::types::LineWeight::Value(plw))
                     } else {
-                        (entity_color, aci)
+                        line_weight_px
                     };
                     let (pts, pts_low) = convert::tessellate::points_to_ds(pts64);
                     let mut w = WireModel::solid(h.value().to_string(), pts, col, sel);
                     w.points_low = pts_low;
-                    w.line_weight_px = line_weight_px;
+                    w.line_weight_px = lw_px;
                     w.aci = w_aci;
                     wires.push(w);
                 }
-                return wires;
+                // Text labels: draw the glyph strokes (simplex.shx etc. are
+                // single-stroke fonts, so the outline is the character).
+                for t in &dec.texts {
+                    let font = t.font.trim().trim_end_matches(".shx").trim_end_matches(".SHX");
+                    let font = if font.is_empty() { "standard" } else { font };
+                    let (strokes, _) = crate::scene::text::lff::tessellate_text_ex(
+                        [0.0, 0.0],
+                        t.height as f32,
+                        t.rotation as f32,
+                        1.0,
+                        0.0,
+                        font,
+                        &t.text,
+                    );
+                    let mut pts64: Vec<[f64; 3]> = Vec::new();
+                    for stroke in &strokes {
+                        if stroke.len() < 2 {
+                            continue;
+                        }
+                        if !pts64.is_empty() {
+                            pts64.push(nan);
+                        }
+                        for &[x, y] in stroke {
+                            pts64.push([
+                                t.position[0] + x as f64,
+                                t.position[1] + y as f64,
+                                t.position[2],
+                            ]);
+                        }
+                    }
+                    if pts64.len() >= 2 {
+                        let (col, w_aci) = resolve(t.color);
+                        let (pts, pts_low) = convert::tessellate::points_to_ds(pts64);
+                        let mut w = WireModel::solid(h.value().to_string(), pts, col, sel);
+                        w.points_low = pts_low;
+                        w.line_weight_px = line_weight_px;
+                        w.aci = w_aci;
+                        wires.push(w);
+                    }
+                }
+                if !wires.is_empty() {
+                    return wires;
+                }
             }
         }
     }
