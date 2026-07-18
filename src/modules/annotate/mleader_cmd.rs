@@ -150,6 +150,7 @@ fn preview_wire(pts: &[Vec3]) -> WireModel {
         points.push([w2.x, w2.y, w2.z]);
     }
     WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

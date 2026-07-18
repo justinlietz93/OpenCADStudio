@@ -63,6 +63,7 @@ impl CadCommand for DistCommand {
         let p1 = self.first?;
         // The preview wire is purely visual, so f32 vertices are fine here.
         Some(WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

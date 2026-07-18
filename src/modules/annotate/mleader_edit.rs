@@ -458,6 +458,7 @@ impl CadCommand for MLeaderCollectCommand {
 
 fn preview_wire(pts: &[Vec3]) -> WireModel {
     WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

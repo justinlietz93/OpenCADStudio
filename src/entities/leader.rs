@@ -590,6 +590,7 @@ impl LeaderTess for Leader {
 
         if verts.len() < 2 {
             return WireModel {
+                fill_is_3d: false,
                 pick_tris: Vec::new(),
                 pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -696,6 +697,7 @@ impl LeaderTess for Leader {
         }
 
         WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

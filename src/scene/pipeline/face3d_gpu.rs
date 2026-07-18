@@ -186,12 +186,13 @@ impl Face3DGpu {
             // (text greek, MultiLeader / dimension backgrounds) deliberately
             // leave `fill_tris_low` empty and order by draw rank instead.
             //
-            // NOTE: classifying by `!points.is_empty()` is wrong here — the
-            // tessellator emits a mesh's edges and its fill as *separate*
-            // WireModels (points-only vs fill-only), so the fill model has no
-            // points and was being misrouted to the 2-D (draw-order-biased)
-            // buffer, which drew meshes in front of solids.
-            let is_3d_mesh_face = !wire.fill_tris_low.is_empty();
+            // NOTE: classifying by `!points.is_empty()` is wrong (a mesh emits
+            // its edges and its fill as *separate* WireModels), and so is
+            // `!fill_tris_low.is_empty()` — a 2-D overlay fill (SOLID arrowhead,
+            // dimension text background) at UTM scale carries a low residual
+            // too, and would be misrouted to the 3-D buffer where it only shows
+            // in shaded modes. The tessellator flags real surfaces explicitly.
+            let is_3d_mesh_face = wire.fill_is_3d;
             let [r, g, b, a] = wire.color;
             if is_3d_mesh_face {
                 if !keep_3d_mesh_fills {

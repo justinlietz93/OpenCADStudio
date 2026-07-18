@@ -1352,6 +1352,7 @@ fn tessellate_dimension_inner(
             let (ext1, ext2) = split_ext_lines(&geom.ext_lines);
             if !ext1.is_empty() {
                 wires.push(WireModel {
+                    fill_is_3d: false,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1378,6 +1379,7 @@ fn tessellate_dimension_inner(
             }
             if !ext2.is_empty() {
                 wires.push(WireModel {
+                    fill_is_3d: false,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1404,6 +1406,7 @@ fn tessellate_dimension_inner(
             }
         } else {
             wires.push(WireModel {
+                fill_is_3d: false,
                 pick_tris: Vec::new(),
                 pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1431,6 +1434,7 @@ fn tessellate_dimension_inner(
     }
 
     wires.push(WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1474,6 +1478,7 @@ fn tessellate_dimension_inner(
                     aci_to_rgba(&c)
                 };
                 wires.push(WireModel {
+                    fill_is_3d: false,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
             dash_from_start: false,

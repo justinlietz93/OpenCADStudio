@@ -122,6 +122,13 @@ pub struct WireModel {
     /// exactly like `points` — no separate collector pass. The renderer
     /// gathers these across all wires into the text vertex buffer.
     pub text_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex>,
+    /// `true` when [`fill_tris`] is a real 3-D surface (PolyfaceMesh /
+    /// PolygonMesh face) that must render with hidden-surface depth and only in
+    /// shaded modes. `false` for a flat 2-D overlay fill (SOLID arrowhead,
+    /// dimension / MultiLeader text background, greek-LOD text) that draws in
+    /// every view mode. The render pass can't infer this from `fill_tris_low`
+    /// alone — a 2-D fill at UTM scale carries a low residual too.
+    pub fill_is_3d: bool,
 }
 
 impl WireModel {
@@ -169,6 +176,7 @@ impl WireModel {
     /// Create a solid wire (no dash pattern, 1px weight).
     pub fn solid(name: String, points: Vec<[f32; 3]>, color: [f32; 4], selected: bool) -> Self {
         Self {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             text_verts: Vec::new(),
@@ -401,6 +409,7 @@ impl Default for WireModel {
             vp_scissor: None,
             fill_tris: Vec::new(),
             fill_tris_low: Vec::new(),
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
         }

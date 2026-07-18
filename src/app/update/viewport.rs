@@ -1235,6 +1235,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                 let far_pos = base + dir * far;
                                 let far_neg = base - dir * far;
                                 let guide = crate::scene::WireModel {
+                                    fill_is_3d: false,
                                     pick_tris: Vec::new(),
                                     pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1273,6 +1274,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             let far_pos = h.base + h.dir * far;
                             let far_neg = h.base - h.dir * far;
                             previews.push(crate::scene::WireModel {
+                                fill_is_3d: false,
                                 pick_tris: Vec::new(),
                                 pick_tris_low: Vec::new(),
             dash_from_start: false,

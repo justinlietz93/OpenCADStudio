@@ -85,6 +85,7 @@ impl CadCommand for DimJogLineCommand {
         }
         let d = 0.3_f32;
         Some(WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

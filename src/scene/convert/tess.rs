@@ -555,6 +555,7 @@ pub(crate) fn tessellate_entity(
             (ins.insert_point.z) as f32,
         );
         let marker = WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -934,6 +935,7 @@ fn lod_stub_wire(
     // LOD boundary. #19.
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
         dash_from_start: false,
@@ -1020,6 +1022,7 @@ fn lod_stub_wire_3d(
     }
     let stored_color = if selected { WireModel::SELECTED } else { color };
     WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
         dash_from_start: false,

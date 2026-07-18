@@ -305,6 +305,7 @@ pub fn apply_along(
         .into_iter()
         .filter(|s| s.len() >= 2)
         .map(|pts| WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -344,6 +345,7 @@ pub fn apply_along(
             xy = xy.max(y);
         }
         out.push(WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

@@ -130,6 +130,7 @@ fn v3(pt: DVec3) -> Vector3 {
 
 fn preview_wire(points: Vec<Vec3>) -> WireModel {
     WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,

@@ -136,6 +136,7 @@ impl CadCommand for MlineCommand {
             .collect();
         pts.push([pt.x, pt.y, pt.z]);
         Some(WireModel {
+            fill_is_3d: false,
             pick_tris: Vec::new(),
             pick_tris_low: Vec::new(),
             dash_from_start: false,

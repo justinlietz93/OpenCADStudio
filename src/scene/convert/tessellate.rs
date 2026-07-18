@@ -370,6 +370,7 @@ pub fn tessellate(
                     None
                 };
                 elem_wires.push(WireModel {
+                    fill_is_3d: false,
                     pick_tris: Vec::new(),
                     pick_tris_low: Vec::new(),
                     // MLINE dashes: A-type aligned, but the end-dash length is
@@ -652,6 +653,7 @@ pub fn tessellate(
                                         ftl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        fill_is_3d: false,
                                         pick_tris: Vec::new(),
                                         pick_tris_low: Vec::new(),
                                         dash_from_start: false,
@@ -689,6 +691,7 @@ pub fn tessellate(
                                         fpl.push(lo);
                                     }
                                     wires.push(WireModel {
+                                        fill_is_3d: false,
                                         pick_tris: Vec::new(),
                                         pick_tris_low: Vec::new(),
                                         dash_from_start: false,
@@ -733,6 +736,7 @@ pub fn tessellate(
                             low.push(ll);
                         }
                         wires.push(WireModel {
+                            fill_is_3d: false,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
                             dash_from_start: false,
@@ -758,6 +762,7 @@ pub fn tessellate(
                         });
                     }
                     wires.push(WireModel {
+                        fill_is_3d: false,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
                         dash_from_start: false,
@@ -813,6 +818,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            fill_is_3d: false,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -850,6 +856,7 @@ pub fn tessellate(
                             (Vec::new(), Vec::new(), Vec::new())
                         };
                         out.push(WireModel {
+                            fill_is_3d: false,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -884,6 +891,7 @@ pub fn tessellate(
                 // are empty → the early-return path above).
                 if !sdf_verts.is_empty() {
                     out.push(WireModel {
+                        fill_is_3d: false,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
                         dash_from_start: false,
@@ -911,6 +919,7 @@ pub fn tessellate(
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        fill_is_3d: false,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -960,6 +969,7 @@ pub fn tessellate(
                             .map(|[kx, ky, kz]| [kx, ky, kz])
                             .collect();
                         return vec![WireModel {
+                            fill_is_3d: false,
                             pick_tris: Vec::new(),
                             pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1008,6 +1018,7 @@ pub fn tessellate(
                         .map(|[x, y, z]| [x, y, z])
                         .collect();
                     return vec![WireModel {
+                        fill_is_3d: false,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1047,6 +1058,7 @@ pub fn tessellate(
                     // A wide polyline arrives here: its band is pick geometry.
                     let (pick_tris, pick_tris_low) = points_to_ds(te.pick_tris);
                     return vec![WireModel {
+                        fill_is_3d: false,
                         pick_tris,
                         pick_tris_low,
             dash_from_start: false,
@@ -1088,6 +1100,14 @@ pub fn tessellate(
                     .map(|[x, y, z]| [x, y, z])
                     .collect();
                 let (fill_tris, fill_tris_low) = points_to_ds(te.fill_tris);
+                // Only a real 3-D mesh surface (PolyfaceMesh / PolygonMesh) fill
+                // renders shaded-only with hidden-surface depth; every other
+                // `fill_tris` here (a SOLID's filled quad — e.g. a `_BoxFilled`
+                // arrowhead) is a flat 2-D overlay visible in every view mode.
+                let fill_is_3d = matches!(
+                    entity,
+                    EntityType::PolyfaceMesh(_) | EntityType::PolygonMesh(_)
+                );
                 // Thickness walls ride on the wire that carries their edges, not
                 // on a wire of their own: they are pick geometry for that entity,
                 // and `fill_tris` below deliberately splits off into a fill-only
@@ -1108,6 +1128,7 @@ pub fn tessellate(
                         (Vec::new(), Vec::new(), Vec::new())
                     };
                     out.push(WireModel {
+                        fill_is_3d: false,
                         pick_tris,
                         pick_tris_low,
             dash_from_start: false,
@@ -1166,11 +1187,13 @@ pub fn tessellate(
                         vp_scissor: None,
                         fill_tris,
                         fill_tris_low,
+                        fill_is_3d,
                     });
                 }
 
                 if out.is_empty() {
                     out.push(WireModel {
+                        fill_is_3d: false,
                         pick_tris: Vec::new(),
                         pick_tris_low: Vec::new(),
             dash_from_start: false,
@@ -1210,6 +1233,7 @@ pub fn tessellate(
                 // A wide polyline with PLINEGEN=0 arrives here.
                 let (pick_tris, pick_tris_low) = points_to_ds(te.pick_tris);
                 return vec![WireModel {
+                    fill_is_3d: false,
                     pick_tris,
                     pick_tris_low,
             dash_from_start: false,
@@ -1278,6 +1302,7 @@ pub fn tessellate(
     let snap_pts: Vec<(glam::DVec3, SnapHint)> =
         snap_pts.into_iter().map(|(p, h)| (p.as_dvec3(), h)).collect();
     vec![WireModel {
+        fill_is_3d: false,
         pick_tris: Vec::new(),
         pick_tris_low: Vec::new(),
             dash_from_start: false,
