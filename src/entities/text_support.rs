@@ -244,6 +244,8 @@ pub enum TabKind {
     Left,
     Center,
     Right,
+    /// Dot-aligned: the text after the tab places its decimal point on the stop.
+    Decimal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -482,9 +484,18 @@ pub fn adapt_mtext_paragraphs(
                     props
                         .tab_stops
                         .iter()
-                        .map(|&p| TabStop {
-                            position: p as f32,
-                            kind: TabKind::Left,
+                        .map(|ts| {
+                            use acadrust::entities::mtext_format::TabStop as ATab;
+                            let kind = match ts {
+                                ATab::Left(_) => TabKind::Left,
+                                ATab::Center(_) => TabKind::Center,
+                                ATab::Right(_) => TabKind::Right,
+                                ATab::Decimal(_) => TabKind::Decimal,
+                            };
+                            TabStop {
+                                position: ts.position() as f32,
+                                kind,
+                            }
                         })
                         .collect::<Vec<_>>(),
                 );
@@ -1047,15 +1058,22 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                 MTextRunKind::Glyphs(text) => {
                     let mut word = String::new();
                     for ch in text.chars() {
-                        if ch == ' ' || ch == '\u{00A0}' {
+                        if ch == ' ' || ch == '\u{00A0}' || ch == '\t' {
                             if !word.is_empty() {
                                 atoms.push(LayoutAtom {
                                     kind: AtomKind::Word(std::mem::take(&mut word)),
                                     state: run.state.clone(),
                                 });
                             }
+                            // A literal tab (acadrust keeps `^I` / `\t` as a tab
+                            // char in the span) advances to the paragraph's next
+                            // tab stop, aligning the field that follows it.
                             atoms.push(LayoutAtom {
-                                kind: AtomKind::Space,
+                                kind: if ch == '\t' {
+                                    AtomKind::Tab
+                                } else {
+                                    AtomKind::Space
+                                },
                                 state: run.state.clone(),
                             });
                         } else {
@@ -1446,7 +1464,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         };
 
         let mut cursor_x = cursor_start;
-        for atom in &sub.atoms {
+        for (ai, atom) in sub.atoms.iter().enumerate() {
             match &atom.kind {
                 AtomKind::Word(text) => {
                     let run_h = atom.state.height_mul * entity_h;
@@ -1737,12 +1755,80 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                     cursor_x += adv;
                 }
                 AtomKind::Tab => {
-                    cursor_x = next_tab_position(
-                        cursor_x,
-                        &sub.tab_stops,
-                        sub.indent_left,
-                        entity_h,
-                    );
+                    // A center/right/decimal stop aligns the field that follows
+                    // the tab (the run of words up to the next space/tab) rather
+                    // than just advancing the pen. Decimal places the first `.`
+                    // on the stop; right the field's end; center its middle.
+                    let local = cursor_x - sub.indent_left;
+                    let stop = sub
+                        .tab_stops
+                        .iter()
+                        .find(|ts| ts.position > local + 1e-4)
+                        .copied();
+                    match stop.map(|s| s.kind) {
+                        Some(TabKind::Center | TabKind::Right | TabKind::Decimal) => {
+                            let sx = sub.indent_left + stop.unwrap().position;
+                            let mut field_w = 0.0_f32;
+                            let mut before_dot: Option<f32> = None;
+                            for next in &sub.atoms[ai + 1..] {
+                                match &next.kind {
+                                    AtomKind::Word(t) => {
+                                        if before_dot.is_none() {
+                                            if let Some(dp) = t.find('.') {
+                                                let pre: String = t[..dp].to_string();
+                                                before_dot = Some(
+                                                    field_w
+                                                        + measure_word(
+                                                            &pre,
+                                                            &next.state,
+                                                            entity_h,
+                                                            base_wf,
+                                                            &base_font_name,
+                                                        ),
+                                                );
+                                            }
+                                        }
+                                        field_w += measure_word(
+                                            t,
+                                            &next.state,
+                                            entity_h,
+                                            base_wf,
+                                            &base_font_name,
+                                        );
+                                    }
+                                    AtomKind::Stack { .. } => {
+                                        field_w += atom_width(
+                                            next,
+                                            entity_h,
+                                            base_wf,
+                                            &base_font_name,
+                                        );
+                                    }
+                                    _ => break,
+                                }
+                            }
+                            let offset = match stop.unwrap().kind {
+                                TabKind::Right => field_w,
+                                TabKind::Center => field_w * 0.5,
+                                // No dot in the field → align its end, as AutoCAD
+                                // does for a decimal tab with no decimal point.
+                                TabKind::Decimal => before_dot.unwrap_or(field_w),
+                                TabKind::Left => 0.0,
+                            };
+                            // The stop wins even when the field is wider than the
+                            // room before it — the dot/edge lands on the stop and
+                            // the field overruns to the left, matching AutoCAD.
+                            cursor_x = sx - offset;
+                        }
+                        _ => {
+                            cursor_x = next_tab_position(
+                                cursor_x,
+                                &sub.tab_stops,
+                                sub.indent_left,
+                                entity_h,
+                            );
+                        }
+                    }
                 }
             }
         }
