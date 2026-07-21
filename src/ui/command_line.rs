@@ -22,6 +22,23 @@ fn cmd_input_id() -> iced::widget::Id {
     iced::widget::Id::new(CMD_INPUT_ID)
 }
 
+/// Drop a prompt's "[A / B / …]" option listing — used for the pinned line
+/// when the same options render as clickable buttons beside it. Collapses the
+/// leftover double spaces and the orphaned " :" the removal leaves behind.
+fn strip_option_listing(s: &str) -> String {
+    let Some(a) = s.find('[') else {
+        return s.to_string();
+    };
+    let Some(off) = s[a..].find(']') else {
+        return s.to_string();
+    };
+    let mut out = format!("{}{}", &s[..a], &s[a + off + 1..]);
+    while out.contains("  ") {
+        out = out.replace("  ", " ");
+    }
+    out.replace(" :", ":").trim().to_string()
+}
+
 const MAX_HISTORY: usize = 64;
 
 #[derive(Clone, Default)]
@@ -346,9 +363,12 @@ impl CommandLine {
                 // The current step's prompt is the single pinned line. When the
                 // step offers options, render them as clickable buttons inline
                 // beside the prompt text — so options need never be typed and
-                // don't clutter the prompt string itself. (#304)
+                // don't clutter the prompt string itself. (#304) The buttons
+                // already name every choice, so the prompt's own "[A / B / …]"
+                // listing is dropped here (the history log keeps the full text).
                 if entry.pinned && !self.step_options.is_empty() {
-                    let mut r = row![text(&entry.text).size(11).color(color)]
+                    let shown = strip_option_listing(&entry.text);
+                    let mut r = row![text(shown).size(11).color(color)]
                         .spacing(6)
                         .align_y(iced::Center);
                     for opt in &self.step_options {

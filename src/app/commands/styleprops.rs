@@ -147,149 +147,247 @@ impl OpenCADStudio {
             }
 
             // ── PURGE unused definitions ──────────────────────────────────
-            cmd if cmd == "PURGE" || cmd.starts_with("PURGE ") => {
+            // Bare PURGE prompts with the category options as clickable
+            // keywords; PURGE <sub> (typed, clicked or scripted) runs directly.
+            "PURGE" => {
+                use crate::command::KeywordCommand;
+                let c = KeywordCommand::new(
+                    "PURGE",
+                    "PURGE  [All / Blocks / LAyers / LineTypes / STyles]:",
+                    vec![
+                        ("All", "ALL", None),
+                        ("Blocks", "BLOCKS", None),
+                        ("LAyers", "LAYERS", None),
+                        ("LineTypes", "LINETYPES", None),
+                        ("STyles", "STYLES", None),
+                    ],
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("PURGE ") => {
                 let sub = cmd
                     .split_whitespace()
                     .nth(1)
                     .unwrap_or("ALL")
                     .to_uppercase();
                 let all = sub == "ALL" || sub.is_empty();
+                let do_layers = all || matches!(sub.as_str(), "LAYERS" | "LAYER" | "LA");
+                let do_styles = all || matches!(sub.as_str(), "TEXTSTYLES" | "STYLES" | "ST");
+                let do_lts = all || matches!(sub.as_str(), "LINETYPES" | "LT");
+                let do_blocks = all || matches!(sub.as_str(), "BLOCKS" | "BLOCK" | "B");
+                if !(do_layers || do_styles || do_lts || do_blocks) {
+                    self.command_line.push_error(&format!(
+                        "PURGE: unknown option \"{sub}\" — use ALL, Blocks, LAyers, LineTypes or STyles."
+                    ));
+                    return Some(Task::none());
+                }
 
-                // Collect names in use (immutable borrows — done in their own scope)
-                let used_layers: rustc_hash::FxHashSet<String> = self.tabs[i]
-                    .scene
-                    .document
-                    .entities()
-                    .filter_map(|e| {
-                        let name = &e.common().layer;
-                        if name.is_empty() {
-                            None
-                        } else {
-                            Some(name.clone())
-                        }
-                    })
-                    .collect();
-                let used_text_styles: rustc_hash::FxHashSet<String> = self.tabs[i]
-                    .scene
-                    .document
-                    .entities()
-                    .filter_map(|e| match e {
-                        acadrust::EntityType::Text(t) => Some(t.style.clone()),
-                        acadrust::EntityType::MText(t) => Some(t.style.clone()),
-                        _ => None,
-                    })
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                let used_linetypes: rustc_hash::FxHashSet<String> = self.tabs[i]
-                    .scene
-                    .document
-                    .entities()
-                    .filter_map(|e| {
-                        let lt = &e.common().linetype;
-                        if lt.is_empty() || lt == "ByLayer" || lt == "ByBlock" {
-                            None
-                        } else {
-                            Some(lt.clone())
-                        }
-                    })
-                    .collect();
-
-                let used_blocks: rustc_hash::FxHashSet<String> = self.tabs[i]
-                    .scene
-                    .document
-                    .entities()
-                    .filter_map(|e| match e {
-                        acadrust::EntityType::Insert(ins) => Some(ins.block_name.clone()),
-                        acadrust::EntityType::Dimension(d) => Some(d.base().block_name.clone()),
-                        _ => None,
-                    })
-                    .filter(|s| !s.is_empty())
-                    .collect();
-
-                // Build removal lists (still immutable)
-                let layer_remove: Vec<String> = if all || sub == "LAYERS" {
-                    self.tabs[i]
+                // Purging a block frees whatever only its members referenced
+                // (nested blocks, layers, linetypes, styles), so those become
+                // purgeable on the next pass — repeat until a pass removes
+                // nothing, so one PURGE does what re-running it used to.
+                let (mut n_layers, mut n_styles, mut n_lts, mut n_blocks) =
+                    (0usize, 0usize, 0usize, 0usize);
+                let mut snapshot_pushed = false;
+                loop {
+                    // Collect names in use (immutable borrows — own scope per pass).
+                    let used_layers: rustc_hash::FxHashSet<String> = self.tabs[i]
                         .scene
                         .document
-                        .layers
-                        .iter()
-                        .filter(|l| l.name != "0" && !used_layers.contains(&l.name))
-                        .map(|l| l.name.clone())
-                        .collect()
-                } else {
-                    vec![]
-                };
-                let style_remove: Vec<String> = if all || sub == "TEXTSTYLES" || sub == "STYLES" {
-                    self.tabs[i]
-                        .scene
-                        .document
-                        .text_styles
-                        .iter()
-                        .filter(|s| s.name != "Standard" && !used_text_styles.contains(&s.name))
-                        .map(|s| s.name.clone())
-                        .collect()
-                } else {
-                    vec![]
-                };
-                let lt_remove: Vec<String> = if all || sub == "LINETYPES" || sub == "LT" {
-                    let standard = ["Continuous", "ByLayer", "ByBlock"];
-                    self.tabs[i]
-                        .scene
-                        .document
-                        .line_types
-                        .iter()
-                        .filter(|lt| {
-                            !standard.iter().any(|s| s.eq_ignore_ascii_case(&lt.name))
-                                && !used_linetypes.contains(&lt.name)
+                        .entities()
+                        .filter_map(|e| {
+                            let name = &e.common().layer;
+                            if name.is_empty() {
+                                None
+                            } else {
+                                Some(name.clone())
+                            }
                         })
-                        .map(|lt| lt.name.clone())
-                        .collect()
-                } else {
-                    vec![]
-                };
-
-                // Blocks: definitions with no INSERT/Dimension reference.
-                // Skip anonymous (*Model_Space/*Paper_Space/*U*/*D*…), layout,
-                // and xref blocks — those are system- or reference-managed.
-                let block_remove: Vec<String> = if all || sub == "BLOCKS" {
-                    self.tabs[i]
+                        .collect();
+                    // Text styles: entity references plus every dimension
+                    // style's DIMTXSTY — a style only a dimstyle uses is not
+                    // purgeable.
+                    let used_text_styles: rustc_hash::FxHashSet<String> = self.tabs[i]
                         .scene
                         .document
-                        .block_records
-                        .iter()
-                        .filter(|br| {
-                            !br.is_anonymous()
-                                && !br.is_layout()
-                                && !br.flags.is_xref
-                                && !br.flags.is_xref_overlay
-                                && !used_blocks.contains(&br.name)
+                        .entities()
+                        .filter_map(|e| match e {
+                            acadrust::EntityType::Text(t) => Some(t.style.clone()),
+                            acadrust::EntityType::MText(t) => Some(t.style.clone()),
+                            acadrust::EntityType::AttributeDefinition(a) => {
+                                Some(a.text_style.clone())
+                            }
+                            acadrust::EntityType::AttributeEntity(a) => {
+                                Some(a.text_style.clone())
+                            }
+                            _ => None,
                         })
-                        .map(|br| br.name.clone())
-                        .collect()
-                } else {
-                    vec![]
-                };
+                        .chain(
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .dim_styles
+                                .iter()
+                                .map(|ds| ds.dimtxsty.clone()),
+                        )
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    // Linetypes: entity references plus every layer's own
+                    // linetype — a ByLayer entity reaches it through the layer.
+                    let used_linetypes: rustc_hash::FxHashSet<String> = self.tabs[i]
+                        .scene
+                        .document
+                        .entities()
+                        .filter_map(|e| {
+                            let lt = &e.common().linetype;
+                            if lt.is_empty() || lt == "ByLayer" || lt == "ByBlock" {
+                                None
+                            } else {
+                                Some(lt.clone())
+                            }
+                        })
+                        .chain(
+                            self.tabs[i]
+                                .scene
+                                .document
+                                .layers
+                                .iter()
+                                .map(|l| l.line_type.clone()),
+                        )
+                        .filter(|s| !s.is_empty())
+                        .collect();
 
-                // Apply removals (mutable)
-                let purged = layer_remove.len()
-                    + style_remove.len()
-                    + lt_remove.len()
-                    + block_remove.len();
-                for name in &layer_remove {
-                    self.tabs[i].scene.document.layers.remove(name);
-                }
-                for name in &style_remove {
-                    self.tabs[i].scene.document.text_styles.remove(name);
-                }
-                for name in &lt_remove {
-                    self.tabs[i].scene.document.line_types.remove(name);
-                }
-                for name in &block_remove {
-                    // Drop the block definition's member entities (and the
-                    // BLOCK/ENDBLK delimiters) before the record so no orphaned
-                    // geometry survives in the document entity list.
-                    let handles: Vec<_> =
-                        if let Some(br) = self.tabs[i].scene.document.block_records.get(name) {
+                    let mut used_blocks: rustc_hash::FxHashSet<String> = self.tabs[i]
+                        .scene
+                        .document
+                        .entities()
+                        .filter_map(|e| match e {
+                            acadrust::EntityType::Insert(ins) => Some(ins.block_name.clone()),
+                            acadrust::EntityType::Dimension(d) => {
+                                Some(d.base().block_name.clone())
+                            }
+                            _ => None,
+                        })
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                    // Dimension-style arrowheads reference blocks by handle
+                    // (DIMBLK/DIMBLK1/DIMBLK2/DIMLDRBLK) — keep those too.
+                    {
+                        let doc = &self.tabs[i].scene.document;
+                        let arrow_handles: Vec<acadrust::Handle> = doc
+                            .dim_styles
+                            .iter()
+                            .flat_map(|ds| [ds.dimblk, ds.dimblk1, ds.dimblk2, ds.dimldrblk])
+                            .filter(|h| !h.is_null())
+                            .collect();
+                        if !arrow_handles.is_empty() {
+                            for br in doc.block_records.iter() {
+                                if arrow_handles.contains(&br.handle) {
+                                    used_blocks.insert(br.name.clone());
+                                }
+                            }
+                        }
+                    }
+
+                    // Build removal lists (still immutable)
+                    let layer_remove: Vec<String> = if do_layers {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .layers
+                            .iter()
+                            .filter(|l| l.name != "0" && !used_layers.contains(&l.name))
+                            .map(|l| l.name.clone())
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    let style_remove: Vec<String> = if do_styles {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .text_styles
+                            .iter()
+                            .filter(|s| {
+                                s.name != "Standard" && !used_text_styles.contains(&s.name)
+                            })
+                            .map(|s| s.name.clone())
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+                    let lt_remove: Vec<String> = if do_lts {
+                        let standard = ["Continuous", "ByLayer", "ByBlock"];
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .line_types
+                            .iter()
+                            .filter(|lt| {
+                                !standard.iter().any(|s| s.eq_ignore_ascii_case(&lt.name))
+                                    && !used_linetypes.contains(&lt.name)
+                            })
+                            .map(|lt| lt.name.clone())
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+
+                    // Blocks: definitions with no INSERT/Dimension reference.
+                    // Skip anonymous (*Model_Space/*Paper_Space/*U*/*D*…), layout,
+                    // and xref blocks — those are system- or reference-managed.
+                    let block_remove: Vec<String> = if do_blocks {
+                        self.tabs[i]
+                            .scene
+                            .document
+                            .block_records
+                            .iter()
+                            .filter(|br| {
+                                !br.is_anonymous()
+                                    && !br.is_layout()
+                                    && !br.flags.is_xref
+                                    && !br.flags.is_xref_overlay
+                                    && !used_blocks.contains(&br.name)
+                            })
+                            .map(|br| br.name.clone())
+                            .collect()
+                    } else {
+                        vec![]
+                    };
+
+                    if layer_remove.len()
+                        + style_remove.len()
+                        + lt_remove.len()
+                        + block_remove.len()
+                        == 0
+                    {
+                        break;
+                    }
+                    // Snapshot the pre-purge document once, before the first
+                    // removal, so a single UNDO restores everything.
+                    if !snapshot_pushed {
+                        self.push_undo_snapshot(i, "PURGE");
+                        snapshot_pushed = true;
+                    }
+
+                    // Apply removals (mutable)
+                    for name in &layer_remove {
+                        self.tabs[i].scene.document.layers.remove(name);
+                    }
+                    for name in &style_remove {
+                        self.tabs[i].scene.document.text_styles.remove(name);
+                    }
+                    for name in &lt_remove {
+                        self.tabs[i].scene.document.line_types.remove(name);
+                    }
+                    for name in &block_remove {
+                        // Drop the block definition's member entities (and the
+                        // BLOCK/ENDBLK delimiters) before the record so no orphaned
+                        // geometry survives in the document entity list.
+                        let handles: Vec<_> = if let Some(br) =
+                            self.tabs[i].scene.document.block_records.get(name)
+                        {
                             let mut h = br.entity_handles.clone();
                             h.push(br.block_entity_handle);
                             h.push(br.block_end_handle);
@@ -297,31 +395,36 @@ impl OpenCADStudio {
                         } else {
                             Vec::new()
                         };
-                    for h in handles {
-                        self.tabs[i].scene.document.remove_entity(h);
+                        for h in handles {
+                            self.tabs[i].scene.document.remove_entity(h);
+                        }
+                        self.tabs[i].scene.document.block_records.remove(name);
                     }
-                    self.tabs[i].scene.document.block_records.remove(name);
+                    n_layers += layer_remove.len();
+                    n_styles += style_remove.len();
+                    n_lts += lt_remove.len();
+                    n_blocks += block_remove.len();
                 }
 
+                let purged = n_layers + n_styles + n_lts + n_blocks;
                 if purged > 0 {
-                    self.push_undo_snapshot(i, "PURGE");
                     self.tabs[i].dirty = true;
                     // Rebuild the layer/style/linetype panel + ribbon caches so
                     // the removed definitions disappear from the UI immediately.
                     self.refresh_layer_panel();
                     // Per-type breakdown so the user sees exactly what went.
                     let mut parts: Vec<String> = Vec::new();
-                    if !layer_remove.is_empty() {
-                        parts.push(format!("{} layer(s)", layer_remove.len()));
+                    if n_layers > 0 {
+                        parts.push(format!("{n_layers} layer(s)"));
                     }
-                    if !style_remove.is_empty() {
-                        parts.push(format!("{} text style(s)", style_remove.len()));
+                    if n_styles > 0 {
+                        parts.push(format!("{n_styles} text style(s)"));
                     }
-                    if !lt_remove.is_empty() {
-                        parts.push(format!("{} linetype(s)", lt_remove.len()));
+                    if n_lts > 0 {
+                        parts.push(format!("{n_lts} linetype(s)"));
                     }
-                    if !block_remove.is_empty() {
-                        parts.push(format!("{} block(s)", block_remove.len()));
+                    if n_blocks > 0 {
+                        parts.push(format!("{n_blocks} block(s)"));
                     }
                     self.command_line.push_output(&format!(
                         "PURGE: {} definition(s) removed — {}.",
