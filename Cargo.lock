@@ -31,6 +31,7 @@ dependencies = [
  "image",
  "inventory",
  "js-sys",
+ "log",
  "lyon_tessellation",
  "lzma-sys",
  "ocs_plugin_api",
