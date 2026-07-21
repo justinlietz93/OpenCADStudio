@@ -1423,6 +1423,9 @@ impl OpenCADStudio {
                 let dy = delta.y as f64; // drawing plane is world XY
                 let dz = delta.z as f64;
 
+                // Dimensions whose points moved — their baked *D block is
+                // stale afterwards and must be dropped (see #398 / #372).
+                let mut stretched_dims: Vec<acadrust::Handle> = Vec::new();
                 for handle in &handles {
                     let Some(entity) = self.tabs[i].scene.document.get_entity_mut(*handle) else {
                         continue;
@@ -1520,6 +1523,75 @@ impl OpenCADStudio {
                                 stretched = true;
                             }
                         }
+                        acadrust::EntityType::Dimension(dim) => {
+                            use acadrust::entities::Dimension;
+                            // Move every definition point that falls inside the
+                            // window — the same points the grips expose — then
+                            // refresh the stored measurement so the value tracks
+                            // the stretched geometry.
+                            let mut mv = |p: &mut acadrust::types::Vector3| {
+                                if in_win(p.x, p.y) {
+                                    p.x += dx;
+                                    p.y += dy;
+                                    p.z += dz;
+                                    true
+                                } else {
+                                    false
+                                }
+                            };
+                            match dim {
+                                Dimension::Linear(d) => {
+                                    stretched |= mv(&mut d.first_point);
+                                    stretched |= mv(&mut d.second_point);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Aligned(d) => {
+                                    stretched |= mv(&mut d.first_point);
+                                    stretched |= mv(&mut d.second_point);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Radius(d) => {
+                                    stretched |= mv(&mut d.angle_vertex);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Diameter(d) => {
+                                    stretched |= mv(&mut d.angle_vertex);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Angular2Ln(d) => {
+                                    stretched |= mv(&mut d.angle_vertex);
+                                    stretched |= mv(&mut d.first_point);
+                                    stretched |= mv(&mut d.second_point);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Angular3Pt(d) => {
+                                    stretched |= mv(&mut d.angle_vertex);
+                                    stretched |= mv(&mut d.first_point);
+                                    stretched |= mv(&mut d.second_point);
+                                    stretched |= mv(&mut d.definition_point);
+                                }
+                                Dimension::Ordinate(d) => {
+                                    stretched |= mv(&mut d.definition_point);
+                                    stretched |= mv(&mut d.feature_location);
+                                    stretched |= mv(&mut d.leader_endpoint);
+                                }
+                            }
+                            // Pinned text follows too; the zero sentinel means
+                            // "auto placement" and must not be captured by a
+                            // window that happens to cover the origin.
+                            let t = dim.base().text_middle_point;
+                            if t.x * t.x + t.y * t.y + t.z * t.z > 1e-16 {
+                                let mut t = t;
+                                if mv(&mut t) {
+                                    dim.base_mut().text_middle_point = t;
+                                    stretched = true;
+                                }
+                            }
+                            if stretched {
+                                dim.base_mut().actual_measurement = dim.measurement();
+                                stretched_dims.push(*handle);
+                            }
+                        }
                         _ => {
                             // Generic: move entire entity (treat as block-level)
                             stretched = false; // skip generic types
@@ -1529,6 +1601,15 @@ impl OpenCADStudio {
                         self.tabs[i].scene.mark_entity_dirty(*handle);
                         count += 1;
                     }
+                }
+                // A stretched dimension renders through its baked *D block when
+                // one exists (file roundtrip) — drop it so tessellation falls
+                // back to the live points and the next save re-bakes. (#372)
+                for h in stretched_dims {
+                    crate::modules::draw::modify::explode::invalidate_dim_block(
+                        &mut self.tabs[i].scene.document,
+                        h,
+                    );
                 }
 
                 // Geometry was edited in place via get_entity_mut, which the
