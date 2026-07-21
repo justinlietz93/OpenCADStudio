@@ -727,10 +727,26 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = Some(Box::new(cmd));
             }
 
-            // Bare ZOOM enters the interactive window zoom (pick two corners) —
-            // the common "zoom to a rectangle" action. The sub-keyword forms
-            // (ZOOM EXTENTS / IN / OUT / …) are matched above.
-            "ZOOM WINDOW" | "ZOOM W" | "ZW" | "ZOOM" => {
+            // Bare ZOOM prompts with the mode options as clickable keywords;
+            // the sub-keyword forms (ZOOM EXTENTS / WINDOW / …) run directly.
+            "ZOOM" => {
+                use crate::command::KeywordCommand;
+                let c = KeywordCommand::new(
+                    "ZOOM",
+                    "ZOOM  [Window / Extents / All / In / Out / Scale]:",
+                    vec![
+                        ("Window", "WINDOW", None),
+                        ("Extents", "EXTENTS", None),
+                        ("All", "ALL", None),
+                        ("In", "IN", None),
+                        ("Out", "OUT", None),
+                        ("Scale", "SCALE", Some("ZOOM  scale factor (e.g. 2 or 0.5):")),
+                    ],
+                );
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            "ZOOM WINDOW" | "ZOOM W" | "ZW" => {
                 use crate::modules::view::zoom_window::ZoomWindowCommand;
                 let new_cmd = ZoomWindowCommand::new();
                 self.command_line.push_info(&new_cmd.prompt());
