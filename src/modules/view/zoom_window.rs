@@ -59,6 +59,13 @@ impl CadCommand for ZoomWindowCommand {
         CmdResult::Cancel
     }
 
+    fn window_corner_pick(&self) -> bool {
+        // Both zoom-window corners are free points; Ortho/Polar must not pin
+        // the opposite corner to an axis or the window collapses to a line
+        // (#363, same class as #291).
+        true
+    }
+
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
         let p1 = self.first?;
         let min = p1.min(pt);

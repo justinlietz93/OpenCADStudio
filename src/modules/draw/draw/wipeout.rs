@@ -107,6 +107,13 @@ impl CadCommand for WipeoutCommand {
         }
     }
 
+    fn window_corner_pick(&self) -> bool {
+        // Rectangular mode picks free window corners — exempt from Ortho/Polar
+        // (#363/#291 class). Polygon points keep the constraints (axis-aligned
+        // polygon edges are a legitimate use).
+        matches!(self.mode, WipeoutMode::Rectangular)
+    }
+
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
         match &self.mode {
             WipeoutMode::Rectangular => {

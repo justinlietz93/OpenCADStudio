@@ -44,6 +44,11 @@ impl CadCommand for PlotWindowCommand {
         CmdResult::Cancel
     }
 
+    fn window_corner_pick(&self) -> bool {
+        // Free rectangle corners — exempt from Ortho/Polar (#363/#291 class).
+        true
+    }
+
     fn on_mouse_move(&mut self, pt: DVec3) -> Option<WireModel> { let pt = pt.as_vec3();
         let p1 = self.p1?.as_vec3();
         // Draw the selection rectangle.
