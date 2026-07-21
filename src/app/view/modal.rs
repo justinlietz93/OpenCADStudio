@@ -3,6 +3,38 @@ use iced::widget::{button, column, container, pick_list, row, text, Space};
 use iced::{Background, Border, Color, Element, Fill, Theme};
 
 impl OpenCADStudio {
+    /// Title shown in the active modal's title bar, left of the move/close
+    /// buttons. Keep in sync with the [`Self::modal_content`] dispatch.
+    pub(super) fn modal_title(&self) -> &'static str {
+        use super::super::ModalKind as K;
+        match self.active_modal {
+            Some(K::About) => "About",
+            Some(K::Shortcuts) => "Keyboard Shortcuts",
+            Some(K::Aliases) => "Command Aliases",
+            Some(K::PluginManager) => "Plugin Manager",
+            Some(K::UpdateNotice) => "Update Available",
+            Some(K::Layers) => "Layer Manager",
+            Some(K::Plot) => "Plot",
+            Some(K::LayoutManager) => "Layout Manager",
+            Some(K::ScaleManager) => "Scale Manager",
+            Some(K::AnnoObjectScale) => "Annotation Object Scale",
+            Some(K::Plotstyle) => "Plot Style Editor",
+            Some(K::TextStyle) => "Text Style Manager",
+            Some(K::MlStyle) => "Multiline Style Manager",
+            Some(K::TableStyle) => "Table Style Manager",
+            Some(K::MLeaderStyle) => "Multileader Style Manager",
+            Some(K::DimStyle) => "Dimension Style Manager",
+            Some(K::AssocPrompt) => "Default Application",
+            Some(K::AecDropWarning) => "Save Warning",
+            Some(K::LayerDeleteWarning) => "Delete Layer",
+            Some(K::Unsaved) => "Unsaved Changes",
+            Some(K::PointStyle) => "Point Style",
+            Some(K::AttributeEditor) => "Attribute Editor",
+            Some(K::SaveDialog) => "Save Drawing As",
+            None => "",
+        }
+    }
+
     /// Build the currently-open modal dialog's content (Plan B), or `None`.
     /// Each former pop-up window is constructed here and given a bounded size
     /// (About shrinks to its content). Rendered as an overlay by `view_main`.

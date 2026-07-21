@@ -224,6 +224,9 @@ impl OpenCADStudio {
                     Ok(doc) => {
                         let i = self.active_tab;
                         self.tabs[i].scene.document = doc;
+                        crate::app::style_ops::ensure_standard_styles(
+                            &mut self.tabs[i].scene.document,
+                        );
                         self.tabs[i].adopt_active_ucs_from_header();
                         self.tabs[i].current_path = Some(PathBuf::from(path));
                         self.tabs[i].is_start = false;

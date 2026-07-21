@@ -702,6 +702,8 @@ pub(super) fn mtext_editor_overlay<'a>(
     // transparent fill lets the dimmed viewport show through beneath.
     crate::ui::modal::modal(
         iced::widget::Space::new().width(Fill).height(Fill),
+        "Text Editor",
+        660.0 + modal_resize.x,
         content,
         Message::MTextCancel,
         modal_offset,

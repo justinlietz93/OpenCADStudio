@@ -22,6 +22,62 @@ use acadrust::objects::{MLineStyle, MultiLeaderStyle, ObjectType, TableStyle};
 use acadrust::tables::{DimStyle, TextStyle};
 use acadrust::types::Handle;
 
+/// Guarantee the built-in "Standard" style of every kind exists in `doc` —
+/// a foreign or damaged file saved without them leaves the style dropdowns
+/// broken with no way to recover, and new text/dimensions have nothing to
+/// reference (#366). Missing entries are re-seeded with the app defaults.
+/// Called on every file open; a no-op for healthy documents.
+pub(crate) fn ensure_standard_styles(doc: &mut acadrust::CadDocument) {
+    if !doc
+        .text_styles
+        .iter()
+        .any(|s| s.name.eq_ignore_ascii_case("Standard"))
+    {
+        let mut s = TextStyle::new("Standard");
+        s.handle = doc.allocate_handle();
+        let _ = doc.text_styles.add(s);
+    }
+    if !doc
+        .dim_styles
+        .iter()
+        .any(|s| s.name.eq_ignore_ascii_case("Standard"))
+    {
+        let mut s = DimStyle::new("Standard");
+        s.handle = doc.allocate_handle();
+        let _ = doc.dim_styles.add(s);
+    }
+    let has = |doc: &acadrust::CadDocument, pred: fn(&ObjectType) -> Option<&str>| {
+        doc.objects
+            .values()
+            .filter_map(pred)
+            .any(|n| n.eq_ignore_ascii_case("Standard"))
+    };
+    if !has(doc, |o| match o {
+        ObjectType::TableStyle(s) => Some(&s.name),
+        _ => None,
+    }) {
+        let mut s = TableStyle::standard();
+        s.handle = doc.allocate_handle();
+        doc.objects.insert(s.handle, ObjectType::TableStyle(s));
+    }
+    if !has(doc, |o| match o {
+        ObjectType::MultiLeaderStyle(s) => Some(&s.name),
+        _ => None,
+    }) {
+        let mut s = MultiLeaderStyle::standard();
+        s.handle = doc.allocate_handle();
+        doc.objects.insert(s.handle, ObjectType::MultiLeaderStyle(s));
+    }
+    if !has(doc, |o| match o {
+        ObjectType::MLineStyle(s) => Some(&s.name),
+        _ => None,
+    }) {
+        let mut s = MLineStyle::standard();
+        s.handle = doc.allocate_handle();
+        doc.objects.insert(s.handle, ObjectType::MLineStyle(s));
+    }
+}
+
 /// Which style manager an operation targets. Carried by the shared rename
 /// messages so one handler can dispatch to the right storage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -435,6 +435,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
 
                 self.tabs[i].current_path = Some(path.clone());
                 self.tabs[i].scene.document = doc;
+                // A file saved without the built-in Standard styles (foreign
+                // or damaged) gets them re-seeded so nothing dangles (#366).
+                crate::app::style_ops::ensure_standard_styles(
+                    &mut self.tabs[i].scene.document,
+                );
                 // Follow the file's saved current UCS from the moment it opens.
                 self.tabs[i].adopt_active_ucs_from_header();
                 // Adopt the drawing's own Ortho ($ORTHOMODE) and running OSNAP

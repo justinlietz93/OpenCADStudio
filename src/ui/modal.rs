@@ -45,6 +45,8 @@ const GRIP_C: Color = Color {
 /// title bar; pass `Vector::ZERO` to keep it centred.
 pub fn modal<'a>(
     base: impl Into<Element<'a, Message>>,
+    title: &'a str,
+    title_width: f32,
     content: impl Into<Element<'a, Message>>,
     on_close: Message,
     offset: Vector,
@@ -83,7 +85,28 @@ pub fn modal<'a>(
     .on_press(Message::ModalGrab)
     .interaction(iced::mouse::Interaction::Grab);
 
-    let title_bar = row![grip, close].spacing(6).align_y(iced::Center);
+    // The dialog name is centred across the dialog width with the grip + ✕
+    // overlaid at the right edge. The bar takes an explicit `title_width`
+    // (the caller's content width) instead of `Fill` — a Fill child inside
+    // the Shrink frame would blow the dialog out to the full screen.
+    let title_text = iced::widget::text(title).size(15).color(Color {
+        r: 0.88,
+        g: 0.88,
+        b: 0.88,
+        a: 1.0,
+    });
+    let title_bar = stack![
+        container(title_text)
+            .width(Length::Fixed(title_width))
+            .height(Length::Fixed(24.0))
+            .align_x(iced::alignment::Horizontal::Center)
+            .align_y(iced::alignment::Vertical::Center),
+        container(row![grip, close].spacing(6).align_y(iced::Center))
+            .width(Length::Fixed(title_width))
+            .height(Length::Fixed(24.0))
+            .align_x(iced::alignment::Horizontal::Right)
+            .align_y(iced::alignment::Vertical::Center),
+    ];
 
     let panel_style = |_: &Theme| container::Style {
         background: Some(Background::Color(PANEL)),

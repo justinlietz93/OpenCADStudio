@@ -1547,6 +1547,9 @@ impl OpenCADStudio {
             Some(content) => {
                 crate::ui::modal::modal(
                     composed,
+                    self.modal_title(),
+                    // Content width — outer size minus the frame padding.
+                    self.modal_outer_size().map(|s| s.0 - 20.0).unwrap_or(420.0),
                     content,
                     Message::CloseModal,
                     self.modal_offset,
@@ -1560,6 +1563,8 @@ impl OpenCADStudio {
         if self.color_pick_target.is_some() {
             crate::ui::modal::modal(
                 base,
+                "Select Color",
+                420.0,
                 iced::widget::container(crate::ui::color_select::color_grid_window(
                     Message::ColorWindowPick,
                 ))
