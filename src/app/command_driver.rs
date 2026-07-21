@@ -1578,7 +1578,7 @@ impl OpenCADStudio {
                             // window — the same points the grips expose — then
                             // refresh the stored measurement so the value tracks
                             // the stretched geometry.
-                            let mut mv = |p: &mut acadrust::types::Vector3| {
+                            let mv = |p: &mut acadrust::types::Vector3| {
                                 if in_win(p.x, p.y) {
                                     p.x += dx;
                                     p.y += dy;

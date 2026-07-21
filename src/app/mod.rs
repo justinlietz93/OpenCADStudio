@@ -1625,6 +1625,10 @@ pub enum Message {
     // ── Ribbon ────────────────────────────────────────────────────────────
     /// User selected a layer from the layer combobox in the ribbon.
     RibbonLayerChanged(String),
+    /// Live text of the ribbon layer dropdown's search box (#343).
+    RibbonLayerFilterChanged(String),
+    /// Live text of the Layer Manager's search box (#343).
+    LayerManagerFilterChanged(String),
     /// User changed the active color in the Properties toolbar.
     RibbonColorChanged(AcadColor),
     /// Toggle the full ACI palette inside the ribbon color picker.

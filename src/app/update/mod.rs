@@ -3246,6 +3246,15 @@ impl OpenCADStudio {
                 self.modal_drag_last = None;
                 Task::none()
             }
+            Message::RibbonLayerFilterChanged(f) => {
+                self.ribbon.layer_filter = f;
+                Task::none()
+            }
+            Message::LayerManagerFilterChanged(f) => {
+                let i = self.active_tab;
+                self.tabs[i].layers.filter = f;
+                Task::none()
+            }
             Message::LayerNameColGrab => {
                 // Start a Name-column divider drag; rides ModalDragMove.
                 self.layer_col_dragging = true;

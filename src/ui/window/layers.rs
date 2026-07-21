@@ -106,6 +106,8 @@ pub struct LayerPanel {
     pub sort_col: Option<LayerSortCol>,
     /// Sort direction; `true` = ascending.
     pub sort_asc: bool,
+    /// Live name filter from the search box; empty shows every layer (#343).
+    pub filter: String,
 }
 
 impl Default for LayerPanel {
@@ -135,6 +137,7 @@ impl Default for LayerPanel {
             // click still re-sorts by any other column.
             sort_col: Some(LayerSortCol::Name),
             sort_asc: true,
+            filter: String::new(),
         }
     }
 }
@@ -303,8 +306,43 @@ impl LayerPanel {
                     Message::LayerSetCurrent,
                     has_sel,
                 ),
+                iced::widget::Space::new().width(Fill),
+                // Search box: filters rows by name as the user types (#343).
+                text_input("Search…", &self.filter)
+                    .on_input(Message::LayerManagerFilterChanged)
+                    .size(FONT_SZ)
+                    .padding([3, 6])
+                    .width(Length::Fixed(180.0))
+                    .style(|_: &Theme, _| iced::widget::text_input::Style {
+                        background: Background::Color(Color {
+                            r: 0.10,
+                            g: 0.10,
+                            b: 0.10,
+                            a: 1.0,
+                        }),
+                        border: Border {
+                            color: BORDER_COLOR,
+                            width: 1.0,
+                            radius: 2.0.into(),
+                        },
+                        icon: Color::WHITE,
+                        placeholder: Color {
+                            r: 0.45,
+                            g: 0.45,
+                            b: 0.45,
+                            a: 1.0,
+                        },
+                        value: Color::WHITE,
+                        selection: Color {
+                            r: 0.20,
+                            g: 0.44,
+                            b: 0.72,
+                            a: 0.5,
+                        },
+                    }),
             ]
-            .spacing(2),
+            .spacing(2)
+            .align_y(iced::Center),
         )
         .style(|_: &Theme| container::Style {
             background: Some(Background::Color(TOOLBAR_BG)),
@@ -372,7 +410,11 @@ impl LayerPanel {
 
         // ── Layer rows ────────────────────────────────────────────────────
         let mut rows_col = column![].spacing(0);
+        let filter = self.filter.to_lowercase();
         for (i, layer) in self.layers.iter().enumerate() {
+            if !filter.is_empty() && !layer.name.to_lowercase().contains(&filter) {
+                continue;
+            }
             // Highlight every selected row; show the editable combos only on the
             // anchor (a single shared combo state can't drive several rows).
             let is_anchor = self.selected == Some(i);

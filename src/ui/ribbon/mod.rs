@@ -55,6 +55,9 @@ pub struct Ribbon {
     pub layer_names: Vec<String>,
     pub active_layer: String,
     pub layer_infos: Vec<LayerInfo>,
+    /// Live filter for the layer dropdown's search box (#343). Cleared on
+    /// close so the next open starts unfiltered.
+    pub layer_filter: String,
     /// Active object color — ACI / ByLayer / ByBlock.
     pub active_color: AcadColor,
     /// Active linetype override ("ByLayer", "Continuous", …).
@@ -156,6 +159,7 @@ impl Ribbon {
             layer_names: vec![],
             active_layer: String::new(),
             layer_infos: vec![],
+            layer_filter: String::new(),
             active_color: AcadColor::ByLayer,
             active_linetype: "ByLayer".to_string(),
             active_lineweight: LineWeight::ByLayer,
@@ -328,6 +332,7 @@ impl Ribbon {
     pub fn close_dropdown(&mut self) {
         self.open_dropdown = None;
         self.collapsed_open = None;
+        self.layer_filter.clear();
     }
 
     /// Toggle the flyout of a collapsed ribbon panel (identified by its title).
@@ -927,10 +932,14 @@ impl Ribbon {
                 .padding([2, 4])
                 .into()
         };
+        let filter = self.layer_filter.to_lowercase();
         let rows: Vec<Element<Message>> = self
             .layer_infos
             .iter()
             .enumerate()
+            .filter(|(_, info)| {
+                filter.is_empty() || info.name.to_lowercase().contains(&filter)
+            })
             .map(|(index, info)| {
                 let is_active = info.name == self.active_layer;
                 let lc = info.color;
@@ -1003,9 +1012,47 @@ impl Ribbon {
         // Cap the panel height and make the list scrollable so a long layer
         // list stays reachable instead of running off the bottom of the
         // screen (#227). Short lists shrink to fit; longer ones scroll.
-        let row_count = self.layer_infos.len().max(1);
+        let row_count = rows.len().max(1);
         let list_h = (row_count as f32 * 26.0).min(420.0);
-        let panel = container(scrollable(column(rows)).height(Length::Fixed(list_h)))
+        // Search box (#343): filters the list live as the user types.
+        let search = iced::widget::text_input("Search layers…", &self.layer_filter)
+            .on_input(Message::RibbonLayerFilterChanged)
+            .size(11)
+            .padding([4, 6])
+            .style(|_: &Theme, _| iced::widget::text_input::Style {
+                background: Background::Color(Color {
+                    r: 0.10,
+                    g: 0.10,
+                    b: 0.10,
+                    a: 1.0,
+                }),
+                border: Border {
+                    color: PANEL_BORDER,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                icon: Color::WHITE,
+                placeholder: Color {
+                    r: 0.45,
+                    g: 0.45,
+                    b: 0.45,
+                    a: 1.0,
+                },
+                value: Color::WHITE,
+                selection: Color {
+                    r: 0.20,
+                    g: 0.44,
+                    b: 0.72,
+                    a: 0.5,
+                },
+            });
+        let panel = container(
+            column![
+                container(search).padding([4, 4]),
+                scrollable(column(rows)).height(Length::Fixed(list_h)),
+            ]
+            .spacing(2),
+        )
             .style(|_: &Theme| container::Style {
                 background: Some(Background::Color(PANEL_BG)),
                 border: Border {
