@@ -581,6 +581,15 @@ impl OpenCADStudio {
         if self.tabs[i].active_cmd.is_none() {
             return;
         }
+        // Re-resolve through the locked dyn fields first so a freshly typed
+        // value reshapes the preview immediately, without waiting for the
+        // next mouse move (#356). Idempotent for the polar/cartesian arms, so
+        // feeding the already-resolved cursor back in is stable.
+        if self.tabs[i].dyn_fields.iter().any(|f| f.buffer.is_some()) {
+            if let Some(r) = self.dyn_resolve_point() {
+                self.tabs[i].last_cursor_world = r;
+            }
+        }
         let cur = self.tabs[i].last_cursor_world;
         let previews = self.tabs[i]
             .active_cmd

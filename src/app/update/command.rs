@@ -83,6 +83,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     if s == "," && self.dyn_input && !self.tabs[i].dyn_fields.is_empty() {
                         self.dyn_comma_advance();
                         self.command_line.autocomplete_cursor = None;
+                        self.refresh_active_cmd_preview(i);
                         return self.focus_cmd_input();
                     }
                     // While dynamic input is showing fields, numeric and

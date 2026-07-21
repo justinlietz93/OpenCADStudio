@@ -1060,6 +1060,21 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                         }
                         pt
                     };
+                    // Dynamic-input locked fields constrain the preview point
+                    // (#356): a typed angle pins the direction, a typed
+                    // distance pins the radius — the same resolution the Enter
+                    // commit uses, so preview and commit agree. The lock wins
+                    // over osnap/ortho/polar.
+                    let effective = {
+                        let locked = self.tabs[i].active_cmd.is_some()
+                            && self.tabs[i].dyn_fields.iter().any(|f| f.buffer.is_some());
+                        if locked {
+                            self.tabs[i].last_cursor_world = effective;
+                            self.dyn_resolve_point().unwrap_or(effective)
+                        } else {
+                            effective
+                        }
+                    };
                     self.tabs[i].last_cursor_world = effective;
                     self.tabs[i].last_cursor_screen = p_full;
                     // Project the step anchor (an explicit `dyn_anchor` or the
@@ -1968,6 +1983,17 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                         &ucs_xf,
                                     );
                                 }
+                            }
+                        }
+                        // A click while dynamic-input fields hold typed values
+                        // commits the CONSTRAINED point — the same resolution
+                        // the preview shows and Enter would commit (#356).
+                        if self.tabs[i].active_cmd.is_some()
+                            && self.tabs[i].dyn_fields.iter().any(|f| f.buffer.is_some())
+                        {
+                            self.tabs[i].last_cursor_world = pt;
+                            if let Some(r) = self.dyn_resolve_point() {
+                                pt = r;
                             }
                         }
                         pt

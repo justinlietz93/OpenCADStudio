@@ -799,6 +799,9 @@ impl OpenCADStudio {
                 let n = self.tabs[i].dyn_fields.len();
                 if n > 0 {
                     self.tabs[i].dyn_active = (self.tabs[i].dyn_active + 1) % n;
+                    // TAB locks the value just typed — reshape the rubber-band
+                    // to the constrained point now (#356).
+                    self.refresh_active_cmd_preview(i);
                 }
                 self.focus_cmd_input()
             }
