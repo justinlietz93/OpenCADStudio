@@ -136,6 +136,13 @@ web-sys = { version = "0.3", features = [
     # Async clipboard read for paste into the text/MText editors (iced's own
     # clipboard read is a no-op on the web).
     "Clipboard",
+    # Web copy/paste in plain text_input fields (#346): Ctrl+C writes the
+    # focused field's text; Ctrl+V replays the clipboard as synthetic
+    # KeyboardEvents on the canvas (the only route into a focused text_input).
+    "KeyboardEvent",
+    "KeyboardEventInit",
+    "EventInit",
+    "EventTarget",
     # Error banner (web_diag): forward wgpu/naga errors to the browser console
     # and inject a copyable DOM overlay (document.body → append_child).
     "console",

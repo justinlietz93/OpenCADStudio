@@ -31,6 +31,44 @@ pub async fn read_clipboard_text() -> Option<String> {
     value.as_string()
 }
 
+/// Web: write text to the system clipboard (fire-and-forget). Backs Ctrl+C in
+/// plain text_input fields, whose iced-internal copy is a no-op on the web
+/// (#346). The triggering keypress is a user gesture, so the write is allowed.
+#[cfg(target_arch = "wasm32")]
+pub fn write_clipboard_text(text: &str) {
+    if let Some(window) = web_sys::window() {
+        let _ = window.navigator().clipboard().write_text(text);
+    }
+}
+
+/// Web: replay `text` into the focused iced widget as synthetic KeyboardEvents
+/// dispatched on the winit canvas. This is the only route INTO a focused
+/// text_input on the web — iced's clipboard read is a no-op there and it
+/// exposes no insert-text operation (#346). Control characters are dropped
+/// and the length capped so a runaway clipboard can't wedge the event loop.
+#[cfg(target_arch = "wasm32")]
+pub fn synthesize_typing(text: &str) {
+    let Some(canvas) = web_sys::window()
+        .and_then(|w| w.document())
+        .and_then(|d| d.query_selector("canvas").ok().flatten())
+    else {
+        return;
+    };
+    for ch in text.chars().filter(|c| !c.is_control()).take(1024) {
+        let init = web_sys::KeyboardEventInit::new();
+        init.set_key(&ch.to_string());
+        init.set_bubbles(true);
+        init.set_cancelable(true);
+        for kind in ["keydown", "keyup"] {
+            if let Ok(ev) =
+                web_sys::KeyboardEvent::new_with_keyboard_event_init_dict(kind, &init)
+            {
+                let _ = canvas.dispatch_event(&ev);
+            }
+        }
+    }
+}
+
 /// Turn an `rfd` file handle into a `PathBuf` the rest of the app keys on.
 ///
 /// Desktop returns the real filesystem path. The browser has no path, so we

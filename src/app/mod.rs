@@ -1265,6 +1265,17 @@ pub enum Message {
     OpenPathPicked(Option<(PathBuf, u64)>),
     /// A file was dragged from the desktop and dropped on the window (#344).
     FileDropped(PathBuf),
+    /// Web only: Ctrl+V captured by a focused text field, whose iced-internal
+    /// paste is inert there — read the async clipboard instead (#346).
+    WebFieldPaste,
+    /// Web only: clipboard text arrived for a focused field — replay it as
+    /// synthetic keystrokes on the canvas.
+    WebFieldPasteText(Option<String>),
+    /// Web only: Ctrl+C captured by a focused text field — collect the
+    /// focused input's text via a widget operation.
+    WebFieldCopy,
+    /// Web only: the focused field's text — write it to the clipboard.
+    WebFieldCopyText(Option<String>),
     /// Pick from the one-shot snap override menu (Shift+RMB): only this snap
     /// applies to the next point pick, then the configuration restores (#337).
     SnapOverridePick(crate::snap::SnapType),

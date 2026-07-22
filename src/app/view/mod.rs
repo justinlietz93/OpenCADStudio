@@ -1901,6 +1901,13 @@ impl OpenCADStudio {
                                     Some(Message::Command("CUTCLIP".to_string()))
                                 }
                                 "v" if status == Status::Ignored => Some(Message::PasteShortcut),
+                                // Web: a focused text field captured Ctrl+C/V,
+                                // but iced's clipboard is a no-op there — route
+                                // through the async browser clipboard (#346).
+                                #[cfg(target_arch = "wasm32")]
+                                "v" => Some(Message::WebFieldPaste),
+                                #[cfg(target_arch = "wasm32")]
+                                "c" => Some(Message::WebFieldCopy),
                                 _ => None,
                             },
                             // Printable glyphs are already handled by the

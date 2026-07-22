@@ -292,6 +292,90 @@ impl OpenCADStudio {
                 }
             }
 
+            Message::WebFieldPaste => {
+                // The MText / inline-TEXT editors have their own web paste
+                // paths — don't double-feed them.
+                if self.mtext_editor.is_some() || self.text_inline.is_some() {
+                    return self.on_paste_shortcut();
+                }
+                #[cfg(target_arch = "wasm32")]
+                return Task::perform(
+                    crate::sys::read_clipboard_text(),
+                    Message::WebFieldPasteText,
+                );
+                #[cfg(not(target_arch = "wasm32"))]
+                Task::none()
+            }
+
+            Message::WebFieldPasteText(text) => {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(t) = &text {
+                    crate::sys::synthesize_typing(t);
+                }
+                let _ = text;
+                Task::none()
+            }
+
+            Message::WebFieldCopy => {
+                // Walk the widget tree for the focused text input's visible
+                // text. iced calls `text_input` then `focusable` back-to-back
+                // on the same widget, so remembering the last text seen pairs
+                // it with the focus check. (An empty field reports its
+                // placeholder — that's iced's "visible text" contract.)
+                use iced::advanced::widget::operation::{
+                    Focusable, Outcome, TextInput,
+                };
+                use iced::advanced::widget::{Id, Operation};
+                #[derive(Default)]
+                struct FocusedText {
+                    last_text: Option<String>,
+                    found: Option<String>,
+                }
+                impl Operation<Option<String>> for FocusedText {
+                    fn text_input(
+                        &mut self,
+                        _id: Option<&Id>,
+                        _bounds: iced::Rectangle,
+                        state: &mut dyn TextInput,
+                    ) {
+                        self.last_text = Some(state.text().to_owned());
+                    }
+                    fn focusable(
+                        &mut self,
+                        _id: Option<&Id>,
+                        _bounds: iced::Rectangle,
+                        state: &mut dyn Focusable,
+                    ) {
+                        let text = self.last_text.take();
+                        if state.is_focused() && self.found.is_none() {
+                            self.found = text;
+                        }
+                    }
+                    fn traverse(
+                        &mut self,
+                        operate: &mut dyn FnMut(&mut dyn Operation<Option<String>>),
+                    ) {
+                        operate(self);
+                    }
+                    fn finish(&self) -> Outcome<Option<String>> {
+                        Outcome::Some(self.found.clone())
+                    }
+                }
+                iced::advanced::widget::operate(FocusedText::default())
+                    .map(Message::WebFieldCopyText)
+            }
+
+            Message::WebFieldCopyText(text) => {
+                #[cfg(target_arch = "wasm32")]
+                if let Some(t) = &text {
+                    if !t.is_empty() {
+                        crate::sys::write_clipboard_text(t);
+                    }
+                }
+                let _ = text;
+                Task::none()
+            }
+
             Message::SnapOverridePick(t) => {
                 self.snap_override_popup = None;
                 self.snapper.set_override(t);
