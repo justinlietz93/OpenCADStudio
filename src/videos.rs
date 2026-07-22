@@ -158,6 +158,11 @@ pub fn fetch_playlist() -> Result<Vec<VideoEntry>, String> {
         return Err("no video titles resolved".into());
     }
 
+    // The playlist page lists oldest-first; the Start page wants the newest
+    // tutorials on top. Reversed before persisting, so the cached listing
+    // (and every later offline launch) shares the same order.
+    out.reverse();
+
     // Persist the listing so the next launch starts from it.
     if let Some(d) = &dir {
         let listing: String = out
