@@ -29,6 +29,29 @@ pub(crate) fn mleader_v_anchor(attach: TextAttachmentType) -> MTextVAnchor {
 }
 use glam::DVec3;
 
+/// The attachment that governs the text's flow axis: the top/bottom pair for
+/// vertically-attached leaders (picked by which side the leader comes from),
+/// the left attachment otherwise. Shared by the render and the grips.
+pub(crate) fn active_vertical_attachment(ml: &MultiLeader) -> TextAttachmentType {
+    use acadrust::entities::multileader::TextAttachmentDirectionType;
+    match ml.text_attachment_direction {
+        TextAttachmentDirectionType::Vertical => {
+            let from_top = ml
+                .context
+                .leader_roots
+                .first()
+                .map(|r| r.direction.y < 0.0)
+                .unwrap_or(true);
+            if from_top {
+                ml.text_top_attachment
+            } else {
+                ml.text_bottom_attachment
+            }
+        }
+        TextAttachmentDirectionType::Horizontal => ml.context.text_left_attachment,
+    }
+}
+
 use crate::command::EntityTransform;
 use crate::entities::common::{
     center_grip, edit_angle_prop as edit_angle, edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
@@ -318,52 +341,87 @@ fn to_truck(ml: &MultiLeader, document: &acadrust::CadDocument) -> Option<TruckE
 /// Side the text reads toward (+1 right / -1 left) and the text box's far
 /// edge (the wrap-width grip position). The box width is the explicit wrap
 /// width when set, else the natural laid-out width.
-fn text_box_geom(ml: &MultiLeader) -> (f64, [f64; 3]) {
-    let tl = ml.context.text_location;
-    let leader_ref = ml
-        .context
-        .leader_roots
-        .first()
-        .and_then(|r| r.lines.first())
-        .and_then(|l| l.points.last())
-        .copied()
-        .or_else(|| ml.context.leader_roots.first().map(|r| r.connection_point))
-        .unwrap_or(tl);
-    let sign = if tl.x >= leader_ref.x { 1.0 } else { -1.0 };
-    let height = if ml.context.text_height > 0.0 {
-        ml.context.text_height as f32
+fn text_box_geom(ml: &MultiLeader) -> ([f64; 2], [f64; 3]) {
+    // Flow axis + far-edge grip point of the MText box: along the rotated
+    // baseline for horizontal flow, DOWN the column for vertical — matches
+    // the render, so the wrap-width grip rides (and drags) the same limit
+    // the layout wraps at.
+    let ctx = &ml.context;
+    let tl = ctx.text_location;
+    let td = ctx.text_direction;
+    let mut rot = if td.x.abs() > 1e-9 || td.y.abs() > 1e-9 {
+        td.y.atan2(td.x)
     } else {
-        ml.text_height as f32 * ml.scale_factor as f32
+        ctx.text_rotation
     };
-    let style = ResolvedTextStyle {
-        font_name: "STANDARD".to_string(),
-        width_factor: 1.0,
-        oblique_angle: 0.0,
-        is_backward: false,
-        is_upside_down: false,
+    if ml.text_direction_negative {
+        rot += std::f64::consts::PI;
+    }
+    let vertical = matches!(
+        ctx.text_flow_direction,
+        acadrust::entities::multileader::FlowDirectionType::Vertical
+    );
+    let h_anchor: f32 = match ml.text_attachment_point {
+        acadrust::entities::multileader::TextAttachmentPointType::Left => 0.0,
+        acadrust::entities::multileader::TextAttachmentPointType::Center => 0.5,
+        acadrust::entities::multileader::TextAttachmentPointType::Right => 1.0,
     };
-    let layout = layout_mtext(&MTextRenderOpts {
-        // Not an MTEXT: text in a fixed box, never columnar.
-        columns: Default::default(),
-        value: &ml.context.text_string,
-        insertion: [0.0, 0.0, 0.0],
-        height,
-        rect_w: ml.context.text_width as f32,
-        rotation: 0.0,
-        style: &style,
-        attach_h_anchor: if sign >= 0.0 { 0.0 } else { 1.0 },
-        v_anchor: MTextVAnchor::Middle,
-        line_spacing_factor: ml.context.line_spacing_factor as f32,
-        vertical_text: false,
-        want_glyph_boxes: false,
-    });
-    let nat_w = layout.line_widths.iter().cloned().fold(0.0_f32, f32::max) as f64;
-    let box_w = if ml.context.text_width > 1e-6 {
-        ml.context.text_width
+    let (dir_v, k) = crate::entities::text_support::flow_grip_axis(
+        rot,
+        vertical,
+        h_anchor,
+        mleader_v_anchor(active_vertical_attachment(ml)),
+    );
+    let dir = [dir_v.x, dir_v.y];
+    let height = if ctx.text_height > 0.0 {
+        ctx.text_height
     } else {
-        nat_w.max(height as f64)
+        ml.text_height * ml.scale_factor
     };
-    (sign, [tl.x + sign * box_w, tl.y, tl.z])
+    let extent = if ctx.text_width > 1e-6 {
+        ctx.text_width
+    } else {
+        let style = ResolvedTextStyle {
+            font_name: "STANDARD".to_string(),
+            width_factor: 1.0,
+            oblique_angle: 0.0,
+            is_backward: false,
+            is_upside_down: false,
+        };
+        let layout = layout_mtext(&MTextRenderOpts {
+            columns: Default::default(),
+            value: &ctx.text_string,
+            insertion: [0.0, 0.0, 0.0],
+            height: height as f32,
+            rect_w: 0.0,
+            rotation: 0.0,
+            style: &style,
+            attach_h_anchor: 0.0,
+            v_anchor: MTextVAnchor::Top,
+            line_spacing_factor: ctx.line_spacing_factor as f32,
+            vertical_text: vertical,
+            want_glyph_boxes: false,
+        });
+        let lb = layout.local_bounds;
+        let nat = if lb[0] <= lb[2] {
+            if vertical {
+                (lb[3] - lb[1]) as f64
+            } else {
+                (lb[2] - lb[0]) as f64
+            }
+        } else {
+            height
+        };
+        nat.max(height)
+    };
+    (
+        [dir[0] * k, dir[1] * k],
+        [
+            tl.x + dir[0] * k * extent,
+            tl.y + dir[1] * k * extent,
+            tl.z,
+        ],
+    )
 }
 
 fn grips(ml: &MultiLeader) -> Vec<GripDef> {
@@ -468,14 +526,21 @@ fn apply_grip(ml: &mut MultiLeader, grip_id: usize, apply: GripApply) {
         }
         idx += 1;
         if idx == grip_id {
-            // Dragging the box edge sets the MText wrap width.
-            let (sign, far) = text_box_geom(ml);
-            let new_far_x = match apply {
-                GripApply::Absolute(a) => a.x as f64,
-                GripApply::Translate(d) => far[0] + d.x as f64,
+            // Dragging the box edge sets the MText wrap limit, projected on
+            // the box's flow axis (rotated baseline, or down the column for
+            // vertical flow).
+            let (dir, far) = text_box_geom(ml);
+            let (nx, ny) = match apply {
+                GripApply::Absolute(a) => (a.x as f64, a.y as f64),
+                GripApply::Translate(d) => (far[0] + d.x as f64, far[1] + d.y as f64),
             };
+            let tl = &ml.context.text_location;
+            // `dir` carries the attachment-side factor (may be ±half), so
+            // normalise by its squared length: width = proj(flow)/k.
+            let d2 = (dir[0] * dir[0] + dir[1] * dir[1]).max(1e-12);
+            let proj = ((nx - tl.x) * dir[0] + (ny - tl.y) * dir[1]) / d2;
             let min_w = ml.text_height.max(1.0) * 0.5;
-            ml.context.text_width = (sign * (new_far_x - ml.context.text_location.x)).max(min_w);
+            ml.context.text_width = proj.max(min_w);
         }
     }
 }
@@ -1380,7 +1445,15 @@ impl MultiLeaderTess for MultiLeader {
                 }
             }
 
-            if ml.enable_landing && ml.enable_dogleg && ml.dogleg_length > 0.0 {
+            // Vertically-attached leaders (text above/below) have no dogleg:
+            // the leader meets the text edge directly, so the short horizontal
+            // dash would be a stray mark AutoCAD never draws.
+            let vertical_attach = matches!(
+                ml.text_attachment_direction,
+                acadrust::entities::multileader::TextAttachmentDirectionType::Vertical
+            );
+            if ml.enable_landing && ml.enable_dogleg && ml.dogleg_length > 0.0 && !vertical_attach
+            {
                 // Horizontal landing (dogleg) from the leader elbow (connection
                 // point) toward the text side. The stored geometry places the
                 // text so its near-bottom edge sits one landing_gap past this
@@ -1388,9 +1461,24 @@ impl MultiLeaderTess for MultiLeader {
                 // text_location (the block's top-left insertion) would streak a
                 // stray line up the side of the text.
                 let d = ml.dogleg_length * effective_scale as f64;
+                // The dogleg runs along the leader root's stored direction —
+                // for a rotated leader that is the angled baseline, not world
+                // X. Roots without a usable direction keep the legacy
+                // horizontal toward the text side.
+                let (ux, uy) = ml
+                    .context
+                    .leader_roots
+                    .first()
+                    .map(|r| (r.direction.x, r.direction.y))
+                    .filter(|(x, y)| (x * x + y * y).sqrt() > 1e-9)
+                    .map(|(x, y)| {
+                        let l = (x * x + y * y).sqrt();
+                        (x / l, y / l)
+                    })
+                    .unwrap_or((text_sign_w, 0.0));
                 let landing_end = [
-                    (cp.x + text_sign_w * d) as f32,
-                    (cp.y) as f32,
+                    (cp.x + ux * d) as f32,
+                    (cp.y + uy * d) as f32,
                     cp_f[2],
                 ];
                 points.push(nan);
@@ -1524,51 +1612,41 @@ impl MultiLeaderTess for MultiLeader {
             // sit at large absolute coordinates and casting first then subtracting
             // throws away the precision needed for the rotated sub-glyph offsets.
             let local_ins_x = (ins.x) as f32;
-            // Horizontal leaders attach at the connection point: the dogleg runs
-            // horizontally at connection_point.y, and the text's attachment line
-            // (bottom/middle/top per text_left_attachment) sits there. Anchor the
-            // insertion Y to that connection instead of the stored text_location.y
-            // so the text meets the landing exactly — the two can disagree by a
-            // few percent because our MText line height need not match the writer's.
-            let local_ins_y = match ml.text_attachment_direction {
-                TextAttachmentDirectionType::Horizontal => ml
-                    .context
-                    .leader_roots
-                    .first()
-                    .map(|r| r.connection_point.y as f32)
-                    .unwrap_or(ins.y as f32),
-                TextAttachmentDirectionType::Vertical => ins.y as f32,
-            };
             let z = (ins.z) as f32;
 
-            // Rotation: prefer text_direction (transforms survive rotations /
-            // mirrors when acadrust updates it) and fall back to text_rotation.
-            // ml.text_angle_type then constrains the final angle:
-            //   - Horizontal:        always 0
-            //   - ParallelToLastLeaderLine: keep stored direction
-            //   - Optimized:        clamp to (-π/2, π/2] (flip upside-down)
-            // text_direction_negative finally adds π so reading goes the other way.
+            // Rotation: the annotation context is AutoCAD's BAKED display
+            // state — text_direction / text_rotation already reflect whatever
+            // the style's angle setting produced at edit time. Re-deriving
+            // from ml.text_angle_type here (e.g. forcing Horizontal to 0)
+            // un-rotated leaders whose stored context is angled; the angle
+            // type only guides recomputation during edits, not display.
             let td = ctx.text_direction;
             let mut rot = if td.x.abs() > 1e-9 || td.y.abs() > 1e-9 {
                 (td.y as f32).atan2(td.x as f32)
             } else {
                 ctx.text_rotation as f32
             };
-            match ml.text_angle_type {
-                acadrust::entities::multileader::TextAngleType::Horizontal => rot = 0.0,
-                acadrust::entities::multileader::TextAngleType::Optimized => {
-                    let pi = std::f32::consts::PI;
-                    if rot > pi / 2.0 {
-                        rot -= pi;
-                    } else if rot <= -pi / 2.0 {
-                        rot += pi;
-                    }
-                }
-                acadrust::entities::multileader::TextAngleType::ParallelToLastLeaderLine => {}
-            }
             if ml.text_direction_negative {
                 rot += std::f32::consts::PI;
             }
+
+            // Horizontal leaders attach at the connection point: the dogleg runs
+            // horizontally at connection_point.y, and the text's attachment line
+            // (bottom/middle/top per text_left_attachment) sits there. Anchor the
+            // insertion Y to that connection instead of the stored text_location.y
+            // so the text meets the landing exactly — the two can disagree by a
+            // few percent because our MText line height need not match the writer's.
+            // Only for UNROTATED text: an angled context stores its true anchor in
+            // text_location, and snapping Y alone would shear it off its baseline.
+            let local_ins_y = match ml.text_attachment_direction {
+                TextAttachmentDirectionType::Horizontal if rot.abs() < 1e-3 => ml
+                    .context
+                    .leader_roots
+                    .first()
+                    .map(|r| r.connection_point.y as f32)
+                    .unwrap_or(ins.y as f32),
+                _ => ins.y as f32,
+            };
 
             // Resolve text style via handle when available, falling back to STANDARD.
             let style_name = ctx
@@ -1589,10 +1667,17 @@ impl MultiLeaderTess for MultiLeader {
             }
             let (cos_r, sin_r) = (rot.cos(), rot.sin());
 
-            // Side-anchored on the leader-facing edge so the text reads
-            // outward; flips live with the leader/text side.
-            use acadrust::entities::multileader::TextAttachmentDirectionType;
-            let h_anchor: f32 = if text_sign_w >= 0.0 { 0.0 } else { 1.0 };
+            // The stored text attachment point is the insertion's horizontal
+            // anchor within the text block (Left/Center/Right) — honour it
+            // instead of guessing from the leader side.
+            use acadrust::entities::multileader::{
+                TextAttachmentDirectionType, TextAttachmentPointType,
+            };
+            let h_anchor: f32 = match ml.text_attachment_point {
+                TextAttachmentPointType::Left => 0.0,
+                TextAttachmentPointType::Center => 0.5,
+                TextAttachmentPointType::Right => 1.0,
+            };
             // Pick the vertical-anchor attachment based on text_attachment_direction:
             //   Horizontal — leader attaches left/right; use ml.text_left_attachment
             //                (matches the file's stored ctx.text_left_attachment).
@@ -1600,22 +1685,7 @@ impl MultiLeaderTess for MultiLeader {
             //                or ml.text_bottom_attachment depending on which side
             //                the leader is coming from (chosen via the first
             //                root.direction.y sign).
-            let leader_from_top = ml
-                .context
-                .leader_roots
-                .first()
-                .map(|r| r.direction.y < 0.0)
-                .unwrap_or(true);
-            let vertical_attach = match ml.text_attachment_direction {
-                TextAttachmentDirectionType::Vertical => {
-                    if leader_from_top {
-                        ml.text_top_attachment
-                    } else {
-                        ml.text_bottom_attachment
-                    }
-                }
-                TextAttachmentDirectionType::Horizontal => ctx.text_left_attachment,
-            };
+            let vertical_attach = active_vertical_attachment(ml);
             let v_anchor = mleader_v_anchor(vertical_attach);
 
             // Shared MText pipeline — every inline format code (`\f`, `\C`/`\c`,
@@ -1634,7 +1704,11 @@ impl MultiLeaderTess for MultiLeader {
                 attach_h_anchor: h_anchor,
                 v_anchor,
                 line_spacing_factor: ctx.line_spacing_factor as f32,
-                vertical_text: false,
+                // Vertical flow (top-to-bottom) is stored per-context.
+                vertical_text: matches!(
+                    ctx.text_flow_direction,
+                    acadrust::entities::multileader::FlowDirectionType::Vertical
+                ),
                 want_glyph_boxes: false,
             });
             let line_widths = &layout.line_widths;
@@ -1659,9 +1733,38 @@ impl MultiLeaderTess for MultiLeader {
                 // done by the text-highlight overlay.
                 let neutral = color_or_inherit(&ctx.text_color, entity_color);
                 let mut sdf_verts: Vec<crate::scene::pipeline::text_gpu::TextVertex> = Vec::new();
+                // Run-less stroke groups are decoration geometry (underline /
+                // overline / strike-through, stacked-fraction bars) — they have
+                // no glyphs to replace them, so they must be drawn as lines.
+                let mut deco_pts: Vec<[f32; 3]> = Vec::new();
+                let mut deco_fill: Vec<[f32; 3]> = Vec::new();
                 if let Ok(mut atlas) = crate::scene::text::sdf_atlas::text_atlas().lock() {
                     for ts in &layout.strokes {
-                        let Some(run) = &ts.run else { continue };
+                        let Some(run) = &ts.run else {
+                            for stroke in &ts.strokes {
+                                if stroke.len() < 2 {
+                                    continue;
+                                }
+                                if !deco_pts.is_empty() {
+                                    deco_pts.push([f32::NAN; 3]);
+                                }
+                                for &[x, y] in stroke {
+                                    deco_pts.push([
+                                        ts.origin[0] as f32 + x,
+                                        ts.origin[1] as f32 + y,
+                                        z,
+                                    ]);
+                                }
+                            }
+                            for &[x, y] in &ts.fill_tris {
+                                deco_fill.push([
+                                    ts.origin[0] as f32 + x,
+                                    ts.origin[1] as f32 + y,
+                                    z,
+                                ]);
+                            }
+                            continue;
+                        };
                         let quads = crate::scene::text::glyph_quads::layout_glyph_quads(
                             &mut atlas,
                             run.height,
@@ -1673,17 +1776,23 @@ impl MultiLeaderTess for MultiLeader {
                             run.bold,
                             &run.text,
                         );
+                        // Inline `\C` / `\c` colour wins over the entity text
+                        // colour, matching the top-level Text arm.
+                        let gcolor = ts
+                            .color
+                            .map(|c| [c[0], c[1], c[2], neutral[3]])
+                            .unwrap_or(neutral);
                         crate::scene::pipeline::text_gpu::push_glyph_vertices(
                             &mut sdf_verts,
                             &quads,
                             [ts.origin[0], ts.origin[1], z as f64],
                             1.0,
-                            neutral,
+                            gcolor,
                             0.0,
                         );
                     }
                 }
-                if !sdf_verts.is_empty() {
+                if !sdf_verts.is_empty() || !deco_pts.is_empty() {
                     // Pick box from the glyph quads (f64 accumulate → f32).
                     let (mut nx, mut ny, mut xx, mut xy) =
                         (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
@@ -1694,6 +1803,12 @@ impl MultiLeaderTess for MultiLeader {
                         xx = xx.max(x);
                         ny = ny.min(y);
                         xy = xy.max(y);
+                    }
+                    for p in deco_pts.iter().filter(|p| p[0].is_finite()) {
+                        nx = nx.min(p[0] as f64);
+                        xx = xx.max(p[0] as f64);
+                        ny = ny.min(p[1] as f64);
+                        xy = xy.max(p[1] as f64);
                     }
                     wires.push(WireModel {
                         taper_widths: Vec::new(),
@@ -1706,7 +1821,7 @@ impl MultiLeaderTess for MultiLeader {
                         dash_align_end: None,
                         text_verts: sdf_verts,
                         name: name.clone(),
-                        points: vec![],
+                        points: deco_pts,
                         points_low: Vec::new(),
                         color: neutral,
                         selected,
@@ -1722,6 +1837,71 @@ impl MultiLeaderTess for MultiLeader {
                         key_vertices: vec![],
                         aabb: [nx as f32, ny as f32, xx as f32, xy as f32],
                         plinegen: true,
+                        fill_tris: deco_fill,
+                        fill_tris_low: Vec::new(),
+                    });
+                }
+            }
+
+            // Underline attachments (BottomLine / BottomOfTopLineUnderline…):
+            // the leader visually continues under the text, so draw a rule the
+            // full text width at the attached line, in the leader's colour.
+            {
+                use acadrust::entities::multileader::TextAttachmentType as TA;
+                let ul_lines: Option<Vec<usize>> = match vertical_attach {
+                    TA::BottomOfTopLineUnderlineTopLine => Some(vec![0]),
+                    TA::BottomOfTopLineUnderlineAll => {
+                        Some((0..layout.line_count).collect())
+                    }
+                    TA::BottomLine | TA::BottomOfTopLineUnderlineBottomLine => {
+                        Some(vec![layout.line_count.saturating_sub(1)])
+                    }
+                    _ => None,
+                };
+                if let Some(lines) = ul_lines {
+                    let mut pts: Vec<[f32; 3]> = Vec::new();
+                    let (x0, x1) =
+                        (-max_line_w * h_anchor, max_line_w * (1.0 - h_anchor));
+                    for li in lines {
+                        let y = v_offset - li as f32 * line_h - height * 0.15;
+                        let (ax, ay) = (
+                            local_ins_x + x0 * cos_r - y * sin_r,
+                            local_ins_y + x0 * sin_r + y * cos_r,
+                        );
+                        let (bx, by) = (
+                            local_ins_x + x1 * cos_r - y * sin_r,
+                            local_ins_y + x1 * sin_r + y * cos_r,
+                        );
+                        if !pts.is_empty() {
+                            pts.push([f32::NAN; 3]);
+                        }
+                        pts.push([ax, ay, z]);
+                        pts.push([bx, by, z]);
+                    }
+                    wires.push(WireModel {
+                        taper_widths: Vec::new(),
+                        world_width: 0.0,
+                        depth_override: None,
+                        fill_is_3d: false,
+                        pick_tris: Vec::new(),
+                        pick_tris_low: Vec::new(),
+                        dash_from_start: false,
+                        dash_align_end: None,
+                        text_verts: Vec::new(),
+                        name: name.clone(),
+                        points: pts,
+                        points_low: Vec::new(),
+                        color: line_color,
+                        selected,
+                        aci: 0,
+                        pattern_length: 0.0,
+                        pattern: [0.0; 8],
+                        line_weight_px,
+                        snap_pts: vec![],
+                        tangent_geoms: vec![],
+                        key_vertices: vec![],
+                        aabb: WireModel::UNBOUNDED_AABB,
+                        plinegen: true,
                         fill_tris: vec![],
                         fill_tris_low: Vec::new(),
                     });
@@ -1730,12 +1910,28 @@ impl MultiLeaderTess for MultiLeader {
 
             // Text frame / background-fill rectangle in local frame, then rotated to WCS.
             if ml.text_frame || ctx.background_fill_enabled {
-                // Visual gap so the frame/fill doesn't touch glyph caps.
-                let pad = height * 0.25;
-                let block_top = v_offset + height + pad;
-                let block_bottom = v_offset - (n_lines - 1.0) * line_h - pad;
-                let block_left = -max_line_w * h_anchor - pad;
-                let block_right = max_line_w * (1.0 - h_anchor) + pad;
+                // Frame/fill offset from the glyphs: the context's landing gap
+                // (AutoCAD spaces the box by exactly that), with the old
+                // quarter-height heuristic as the no-gap fallback.
+                let pad = if ctx.landing_gap > 0.0 {
+                    ctx.landing_gap as f32
+                } else {
+                    height * 0.25
+                };
+                // Box the glyphs that were actually laid out (valid for
+                // vertical flow too); the metric-derived box is only the
+                // no-glyph fallback.
+                let lb = layout.local_bounds;
+                let (block_left, block_bottom, block_right, block_top) = if lb[0] <= lb[2] {
+                    (lb[0] - pad, lb[1] - pad, lb[2] + pad, lb[3] + pad)
+                } else {
+                    (
+                        -max_line_w * h_anchor - pad,
+                        v_offset - (n_lines - 1.0) * line_h - pad,
+                        max_line_w * (1.0 - h_anchor) + pad,
+                        v_offset + height + pad,
+                    )
+                };
                 let local_corners: [[f32; 2]; 4] = [
                     [block_left, block_bottom],
                     [block_right, block_bottom],
