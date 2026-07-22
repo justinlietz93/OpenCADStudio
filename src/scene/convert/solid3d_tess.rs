@@ -16,8 +16,8 @@ use std::f64::consts::TAU;
 use acadrust::entities::acis::types::Sense;
 use acadrust::entities::acis::{
     SabReader, SatCoedge, SatConeSurface, SatDocument, SatEdge, SatEllipseCurve, SatFace,
-    SatIntCurve, SatLoop, SatPlaneSurface, SatPoint, SatPointer, SatSphereSurface, SatTorusSurface,
-    SatVertex,
+    SatIntCurve, SatLoop, SatPlaneSurface, SatPoint, SatPointer, SatSphereSurface, SatToken,
+    SatTorusSurface, SatVertex,
 };
 use acadrust::entities::{Body, Region, Solid3D};
 
@@ -896,17 +896,27 @@ fn tessellate_sat_lods(
 /// document has no transform (treated as identity).
 pub(crate) fn body_transform(sat: &SatDocument) -> Option<([f64; 9], [f64; 3], f64)> {
     let t = sat.records.iter().find(|r| r.entity_type == "transform")?;
-    // The transform record's numeric payload is its first 13 float-valued
-    // tokens: 3×3 matrix, translation, scale. A leading book-keeping pointer
-    // (`$-1`) and the trailing rotate/reflect/shear flags aren't floats, so
-    // collecting float tokens skips them — reading by raw token index would
-    // be thrown off by the leading pointer.
-    let v: Vec<f64> = t
-        .tokens
-        .iter()
-        .filter_map(|tok| tok.as_float())
-        .take(13)
-        .collect();
+    // The transform record's numeric payload is its first 13 numeric values:
+    // 3×3 matrix, translation, scale. A leading book-keeping pointer (`$-1`)
+    // and the trailing rotate/reflect/shear flags aren't numeric, so
+    // collecting numeric tokens skips them — reading by raw token index would
+    // be thrown off by the leading pointer. SAT text tokenizes the payload as
+    // 13 individual floats, but the SAB reader groups the matrix rows and the
+    // translation into `Position` triplets, so those must be flattened too.
+    let mut v: Vec<f64> = Vec::with_capacity(13);
+    for tok in &t.tokens {
+        if v.len() >= 13 {
+            break;
+        }
+        match tok {
+            SatToken::Position(x, y, z) => v.extend([*x, *y, *z]),
+            _ => {
+                if let Some(f) = tok.as_float() {
+                    v.push(f);
+                }
+            }
+        }
+    }
     if v.len() < 13 {
         return None;
     }
