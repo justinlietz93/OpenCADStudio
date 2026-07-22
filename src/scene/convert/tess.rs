@@ -1052,6 +1052,17 @@ pub(crate) fn tessellate_entity(
                 if let Some(sf) = pick::xclip::insert_spatial_filter(document, ins) {
                     let poly = pick::xclip::world_clip_polygon_f64(sf, ins);
                     pick::xclip::clip_wires(&mut wires, &poly);
+                    // XCLIPFRAME 1/2 shows the boundary itself on screen
+                    // (2 = shown but not plotted).
+                    if document.header.xclip_frame != 0 && poly.len() >= 3 {
+                        wires.push(pick::xclip::frame_wire(
+                            &poly,
+                            format!("{}_xclipframe", h.value()),
+                            ins_color,
+                            sel,
+                            ins_lw_px,
+                        ));
+                    }
                 }
 
                 // Per-INSERT attribute values. The block defn carries the

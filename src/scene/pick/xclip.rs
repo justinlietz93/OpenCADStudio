@@ -239,6 +239,54 @@ fn split_ds(v: f64) -> (f32, f32) {
     (high, (v - high as f64) as f32)
 }
 
+/// Build the visible clip-boundary frame (XCLIPFRAME 1/2) as a closed ring
+/// over the world-space boundary polygon. The frame is display chrome for the
+/// clipped INSERT: it rides the insert's resolved colour / line weight and is
+/// deliberately NOT clipped — it *is* the boundary.
+pub fn frame_wire(
+    poly: &[[f64; 2]],
+    name: String,
+    color: [f32; 4],
+    selected: bool,
+    line_weight_px: f32,
+) -> WireModel {
+    let mut hi = Vec::with_capacity(poly.len() + 1);
+    let mut lo = Vec::with_capacity(poly.len() + 1);
+    for &[x, y] in poly.iter().chain(std::iter::once(&poly[0])) {
+        let (hx, lx) = split_ds(x);
+        let (hy, ly) = split_ds(y);
+        hi.push([hx, hy, 0.0]);
+        lo.push([lx, ly, 0.0]);
+    }
+    WireModel {
+        taper_widths: Vec::new(),
+        world_width: 0.0,
+        depth_override: None,
+        fill_is_3d: false,
+        pick_tris: Vec::new(),
+        pick_tris_low: Vec::new(),
+        dash_from_start: false,
+        dash_align_end: None,
+        text_verts: Vec::new(),
+        name,
+        points: hi,
+        points_low: lo,
+        color,
+        selected,
+        aci: 0,
+        pattern_length: 0.0,
+        pattern: [0.0; 8],
+        line_weight_px,
+        snap_pts: vec![],
+        tangent_geoms: vec![],
+        key_vertices: vec![],
+        aabb: WireModel::UNBOUNDED_AABB,
+        plinegen: true,
+        fill_tris: vec![],
+        fill_tris_low: Vec::new(),
+    }
+}
+
 /// Clip a hatch fill boundary to `poly`.
 ///
 /// `boundary` is a hatch's NaN-separated loops in f32 offsets from
