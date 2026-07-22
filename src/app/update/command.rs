@@ -1416,6 +1416,40 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                                 _ => {}
                             }
                         }
+                    } else if field == "block" {
+                        // Name dropdown on a block reference: re-point the
+                        // selected inserts to the picked definition. A stale
+                        // typed value in the text buffer would mask the pick,
+                        // so drop it; the pick also closes the list.
+                        self.tabs[i].properties.edit_buf.remove("block");
+                        self.tabs[i].properties.edit_choice_open = false;
+                        let canon = self.tabs[i]
+                            .scene
+                            .document
+                            .block_records
+                            .get(&value)
+                            .map(|br| br.name.clone());
+                        if let Some(canon) = canon {
+                            let mut changed = false;
+                            for &handle in &handles {
+                                if self.tabs[i].scene.is_layer_locked(handle) {
+                                    continue;
+                                }
+                                if let Some(acadrust::EntityType::Insert(ins)) =
+                                    self.tabs[i].scene.document.get_entity_mut(handle)
+                                {
+                                    if ins.block_name != canon {
+                                        ins.block_name = canon.clone();
+                                        changed = true;
+                                    }
+                                }
+                            }
+                            if changed {
+                                // The picked block may not be in the defn cache
+                                // yet — rebuild block definitions too.
+                                self.tabs[i].scene.bump_geometry();
+                            }
+                        }
                     } else if field == "plot_style" {
                         // Named plot-style pick: ByLayer / ByBlock clear the
                         // handle; a named style resolves through the drawing's
@@ -1515,9 +1549,21 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                 let handles = self.property_target_handles(i);
                 if !handles.is_empty() {
                     if let Some(raw_val) = self.tabs[i].properties.edit_buf.remove(field) {
-                        let val = crate::app::expr_eval::eval_to_string(&raw_val);
+                        // Block names are free-form text — a name like "10-5"
+                        // must not be arithmetic-evaluated.
+                        let val = if field == "block" {
+                            raw_val
+                        } else {
+                            crate::app::expr_eval::eval_to_string(&raw_val)
+                        };
                         self.push_undo_snapshot(i, "CHPROP");
-                        if field == "frozen_layers" {
+                        if field == "block" {
+                            // Name row on a block reference: an existing name
+                            // re-points the selected inserts; a new one renames
+                            // the definition they share. Commit closes the list.
+                            self.tabs[i].properties.edit_choice_open = false;
+                            self.apply_block_name_commit(i, &handles, val.trim());
+                        } else if field == "frozen_layers" {
                             // Resolve layer names → handles, then apply to viewports.
                             let layer_handles: Vec<acadrust::Handle> = val
                                 .split(',')
@@ -1631,6 +1677,65 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     }
                 }
                 Task::none()
+    }
+
+    /// Properties-panel Name commit for block references. A `new` matching an
+    /// existing regular block re-points the selected inserts to it; otherwise
+    /// the definition the (single-block) selection references is renamed and
+    /// every insert of it follows. Anonymous/xref definitions never get here —
+    /// their Name row stays read-only.
+    fn apply_block_name_commit(&mut self, i: usize, handles: &[acadrust::Handle], new: &str) {
+        if new.is_empty() {
+            return;
+        }
+        // Existing target → swap the selected references to it. Anonymous,
+        // xref and xref-dependent definitions are not valid targets.
+        let target = self.tabs[i].scene.document.block_records.get(new).map(|br| {
+            (
+                br.name.clone(),
+                br.is_anonymous() || br.flags.is_xref || br.name.contains('|'),
+            )
+        });
+        if let Some((canon, protected)) = target {
+            if protected {
+                return;
+            }
+            let mut changed = false;
+            for &handle in handles {
+                if self.tabs[i].scene.is_layer_locked(handle) {
+                    continue;
+                }
+                if let Some(acadrust::EntityType::Insert(ins)) =
+                    self.tabs[i].scene.document.get_entity_mut(handle)
+                {
+                    if ins.block_name != canon {
+                        ins.block_name = canon.clone();
+                        changed = true;
+                    }
+                }
+            }
+            if changed {
+                self.tabs[i].scene.bump_geometry();
+            }
+            return;
+        }
+        // New name → rename. Only when every selected insert references the
+        // same definition; a mixed selection makes the rename target ambiguous.
+        let mut old: Option<String> = None;
+        for &handle in handles {
+            if let Some(acadrust::EntityType::Insert(ins)) =
+                self.tabs[i].scene.document.get_entity(handle)
+            {
+                match &old {
+                    None => old = Some(ins.block_name.clone()),
+                    Some(o) if o.eq_ignore_ascii_case(&ins.block_name) => {}
+                    _ => return,
+                }
+            }
+        }
+        if let Some(old) = old {
+            self.tabs[i].scene.rename_block(&old, new);
+        }
     }
 
     /// Commit an edited block-attribute value from the Properties panel.

@@ -1671,6 +1671,11 @@ pub enum Message {
     },
     /// User committed a geometry/common field edit (Enter pressed).
     PropGeomCommit(&'static str),
+    /// Toggle a collapsed coordinate group ("Position", "Scale", …) open or
+    /// closed in the Properties panel, keyed `section:base`.
+    PropGroupToggle(String),
+    /// Toggle the editable-dropdown (block Name) option list open/closed.
+    PropEditChoiceToggle,
     /// User is typing in a block-attribute value field (live buffer update),
     /// keyed by the attribute tag.
     PropAttrInput { tag: String, value: String },

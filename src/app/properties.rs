@@ -20,6 +20,9 @@ impl OpenCADStudio {
         // closes, matching the deselect / reselect / click-away expectation.
         let color_palette_open = self.tabs[i].properties.color_palette_open;
         let edit_buf = std::mem::take(&mut self.tabs[i].properties.edit_buf);
+        // Expanded coordinate groups persist across rebuilds AND selection
+        // changes — it's a per-user view preference, not per-entity state.
+        let expanded_groups = std::mem::take(&mut self.tabs[i].properties.expanded_groups);
         // Which entities the previous panel was built for — an uncommitted
         // edit buffer only survives a rebuild for the *same* selection.
         let prev_handles = std::mem::take(&mut self.tabs[i].properties.source_handles);
@@ -497,6 +500,41 @@ impl OpenCADStudio {
                             let src_mm = if src == 0 { 1.0 } else { insunits_to_mm(src) };
                             let factor = if host_mm.abs() > 1e-12 { src_mm / host_mm } else { 1.0 };
                             set_row(&mut sections, "unit_factor", format!("{factor:.4}"));
+
+                            // Name row: editable for regular blocks — pick an
+                            // existing definition to re-point this reference, or
+                            // type a new name to rename the definition (every
+                            // insert of it follows). Anonymous (*) and
+                            // xref(-dependent) blocks keep the read-only row.
+                            let regular = |br: &acadrust::tables::BlockRecord| {
+                                !br.is_anonymous()
+                                    && !br.flags.is_xref
+                                    && !br.name.contains('|')
+                            };
+                            let editable = doc
+                                .block_records
+                                .get(&ins.block_name)
+                                .map(&regular)
+                                .unwrap_or(false);
+                            if editable {
+                                let mut options: Vec<String> = doc
+                                    .block_records
+                                    .iter()
+                                    .filter(|br| regular(br))
+                                    .map(|br| br.name.clone())
+                                    .collect();
+                                options.sort_by(|a, b| {
+                                    a.to_lowercase().cmp(&b.to_lowercase())
+                                });
+                                set_row_value(
+                                    &mut sections,
+                                    "block",
+                                    crate::scene::model::object::PropValue::EditChoice {
+                                        value: ins.block_name.clone(),
+                                        options,
+                                    },
+                                );
+                            }
                         }
                         // Underlay: name + path from the referenced definition.
                         acadrust::EntityType::Underlay(ul) => {
@@ -919,6 +957,7 @@ impl OpenCADStudio {
             } else {
                 Default::default()
             };
+            panel.expanded_groups = expanded_groups;
             panel.source_handles = new_handles;
             panel.prop_vertex = prop_vertex;
             panel
@@ -1453,6 +1492,16 @@ fn merge_prop_value(
             },
         ) if options == other_options => PropValue::Choice {
             selected: VARIES_LABEL.into(),
+            options: options.clone(),
+        },
+        (
+            PropValue::EditChoice { options, .. },
+            PropValue::EditChoice {
+                options: other_options,
+                ..
+            },
+        ) if options == other_options => PropValue::EditChoice {
+            value: VARIES_LABEL.into(),
             options: options.clone(),
         },
         (PropValue::EditText(_), PropValue::EditText(_)) => {

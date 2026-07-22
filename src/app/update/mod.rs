@@ -2695,6 +2695,20 @@ impl OpenCADStudio {
 
             Message::PropGeomCommit(field) => self.on_prop_geom_commit(field),
 
+            Message::PropGroupToggle(key) => {
+                let groups = &mut self.tabs[self.active_tab].properties.expanded_groups;
+                if !groups.remove(&key) {
+                    groups.insert(key);
+                }
+                Task::none()
+            }
+
+            Message::PropEditChoiceToggle => {
+                let panel = &mut self.tabs[self.active_tab].properties;
+                panel.edit_choice_open = !panel.edit_choice_open;
+                Task::none()
+            }
+
             Message::PropAttrInput { tag, value } => {
                 self.tabs[self.active_tab]
                     .properties
@@ -2896,7 +2910,14 @@ impl OpenCADStudio {
             }
 
             Message::LayoutContextMenu(name) => {
-                if name != "Model" {
+                // No menu on the transient BEDIT block tab: Rename/Delete are
+                // layout operations and don't apply to it.
+                let is_block_tab = self.tabs[self.active_tab]
+                    .block_edit
+                    .as_ref()
+                    .map(|be| be.block_name == name)
+                    .unwrap_or(false);
+                if name != "Model" && !is_block_tab {
                     self.layout_context_menu = Some(name);
                 }
                 Task::none()

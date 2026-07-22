@@ -17,6 +17,13 @@ pub enum PropValue {
         selected: String,
         options: Vec<String>,
     },
+    /// Editable text plus a dropdown of existing options (block reference
+    /// Name row): picking an option re-points the reference, submitting a
+    /// new name renames the definition.
+    EditChoice {
+        value: String,
+        options: Vec<String>,
+    },
     /// ACI/RGB/ByLayer/ByBlock color — rendered as a color picker.
     ColorChoice(AcadColor),
     /// Color varies across the current multi-selection.

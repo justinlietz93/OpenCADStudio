@@ -7,7 +7,7 @@
 //! • Linetype   → read-only for now
 //! • Geometry   → text_input per coordinate / dimension field
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::fmt;
 
 use crate::ui::ROW_H;
@@ -155,6 +155,13 @@ pub struct PropertiesPanel {
     /// Which vertex a multi-vertex entity (polyline) is focused on — driven by
     /// the Current Vertex ◀ / ▶ stepper. Reset to 0 when the selection changes.
     pub prop_vertex: usize,
+    /// Coordinate groups ("Position", "Scale", …) the user expanded into their
+    /// component X/Y/Z rows. Collapsed by default; keyed `section:base` and
+    /// carried across panel rebuilds so the state survives edits and selection
+    /// changes.
+    pub expanded_groups: HashSet<String>,
+    /// Whether the editable-dropdown (block Name) option list is open.
+    pub edit_choice_open: bool,
 }
 
 impl Default for PropertiesPanel {
@@ -178,6 +185,8 @@ impl Default for PropertiesPanel {
             bg_color_picker_open: false,
             open_color_field: None,
             prop_vertex: 0,
+            expanded_groups: HashSet::default(),
+            edit_choice_open: false,
         }
     }
 }
@@ -330,56 +339,66 @@ impl PropertiesPanel {
 
         let mut col = column![hdr].spacing(0);
 
-        for prop in &section.props {
-            match &prop.value {
-                PropValue::ColorChoice(color) => {
-                    col = col.push(self.render_color_row(&prop.label, prop.field, *color));
+        // Consecutive "<Base> X / <Base> Y [/ <Base> Z]" text rows collapse
+        // into one clickable summary row; clicking expands the components.
+        let mut idx = 0;
+        while idx < section.props.len() {
+            let group_len = coord_group_len(&section.props, idx);
+            if group_len >= 2 {
+                let base = coord_base(&section.props[idx].label);
+                let key = format!("{}:{}", section.title, base);
+                let expanded = self.expanded_groups.contains(&key);
+                let joined = section.props[idx..idx + group_len]
+                    .iter()
+                    .map(prop_text_value)
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                col = col.push(render_group_row(base, key, expanded, joined));
+                if expanded {
+                    for prop in &section.props[idx..idx + group_len] {
+                        col = col.push(self.render_prop_row(prop, coord_component(&prop.label)));
+                    }
                 }
-                PropValue::ColorVaries => {
-                    col = col.push(self.render_color_varies_row(&prop.label));
-                }
-                PropValue::LayerChoice(layer) => {
-                    col = col.push(self.render_layer_row(&prop.label, layer));
-                }
-                PropValue::LwChoice(lw) => {
-                    col = col.push(self.render_lw_row(&prop.label, *lw));
-                }
-                PropValue::LwVaries => {
-                    col = col.push(self.render_lw_varies_row(&prop.label));
-                }
-                PropValue::LinetypeChoice(lt) => {
-                    col = col.push(self.render_linetype_row(&prop.label, lt));
-                }
-                PropValue::Choice { selected, options } => {
-                    col = col.push(self.render_choice_row(
-                        &prop.label,
-                        prop.field,
-                        selected,
-                        options,
-                    ));
-                }
-                PropValue::BoolToggle { field, value } => {
-                    col = col.push(render_bool_row(&prop.label, *field, *value));
-                }
-                PropValue::Stepper { display, .. } => {
-                    col = col.push(render_stepper_row(&prop.label, display));
-                }
-                PropValue::EditText(val) => {
-                    col = col.push(self.render_edit_row(&prop.label, prop.field, val));
-                }
-                PropValue::ReadOnly(val) => {
-                    col = col.push(render_ro_row(&prop.label, val));
-                }
-                PropValue::HatchPatternChoice(current) => {
-                    col = col.push(self.render_hatch_pattern_row(&prop.label, current));
-                }
-                PropValue::AttrText { tag, value } => {
-                    col = col.push(self.render_attr_row(tag, value));
-                }
+                idx += group_len;
+            } else {
+                let prop = &section.props[idx];
+                col = col.push(self.render_prop_row(prop, &prop.label));
+                idx += 1;
             }
         }
 
         col.into()
+    }
+
+    /// Render one property row with an explicit display label (the grouped
+    /// coordinate rows shorten "Position X" to "X").
+    fn render_prop_row<'a>(
+        &'a self,
+        prop: &'a crate::scene::model::object::Property,
+        label: &'a str,
+    ) -> Element<'a, Message> {
+        match &prop.value {
+            PropValue::ColorChoice(color) => self.render_color_row(label, prop.field, *color),
+            PropValue::ColorVaries => self.render_color_varies_row(label),
+            PropValue::LayerChoice(layer) => self.render_layer_row(label, layer),
+            PropValue::LwChoice(lw) => self.render_lw_row(label, *lw),
+            PropValue::LwVaries => self.render_lw_varies_row(label),
+            PropValue::LinetypeChoice(lt) => self.render_linetype_row(label, lt),
+            PropValue::Choice { selected, options } => {
+                self.render_choice_row(label, prop.field, selected, options)
+            }
+            PropValue::EditChoice { value, options } => {
+                self.render_edit_choice_row(label, prop.field, value, options)
+            }
+            PropValue::BoolToggle { field, value } => render_bool_row(label, *field, *value),
+            PropValue::Stepper { display, .. } => render_stepper_row(label, display),
+            PropValue::EditText(val) => self.render_edit_row(label, prop.field, val),
+            PropValue::ReadOnly(val) => render_ro_row(label, val),
+            PropValue::HatchPatternChoice(current) => {
+                self.render_hatch_pattern_row(label, current)
+            }
+            PropValue::AttrText { tag, value } => self.render_attr_row(tag, value),
+        }
     }
 
     // ── Layer row (combo_box) ─────────────────────────────────────────────
@@ -681,6 +700,139 @@ impl PropertiesPanel {
         prop_row_widget(label, ti.into())
     }
 
+    /// Editable dropdown row (block reference Name): a text field with a caret
+    /// button in one bordered control. Typing + Enter commits through the
+    /// normal PropGeomCommit path (existing name → re-point, new name →
+    /// rename); the caret opens a floating list of the definitions (always
+    /// downward, via the shared `floating_below` mechanic) and picking one
+    /// applies through PropGeomChoiceChanged. Typed text filters the list.
+    fn render_edit_choice_row<'a>(
+        &'a self,
+        label: &'a str,
+        field: &'static str,
+        entity_val: &'a str,
+        options: &'a [String],
+    ) -> Element<'a, Message> {
+        let typed = self.edit_buf.get(field);
+        let display = typed.map(|s| s.as_str()).unwrap_or(entity_val);
+
+        let input = text_input("", display)
+            .on_input(move |v| Message::PropGeomInput { field, value: v })
+            .on_submit(Message::PropGeomCommit(field))
+            .size(FONT_SZ)
+            .style(|_: &Theme, status| text_input::Style {
+                // The wrapping container draws the border; keep the input flat
+                // so field + caret read as one control.
+                border: Border {
+                    color: Color::TRANSPARENT,
+                    width: 0.0,
+                    radius: 0.0.into(),
+                },
+                ..text_input_style(&Theme::Dark, status)
+            })
+            .padding([3, 6])
+            .width(Length::Fill);
+        let caret = button(
+            container(crate::ui::icons::arrow_toggle(
+                self.edit_choice_open,
+                FONT_SZ,
+                VALUE_COLOR,
+            ))
+            .height(Length::Fill)
+            .align_y(iced::Center),
+        )
+        .on_press(Message::PropEditChoiceToggle)
+        .style(|_: &Theme, status| button::Style {
+            background: Some(Background::Color(match status {
+                button::Status::Hovered | button::Status::Pressed => Color {
+                    r: 0.28,
+                    g: 0.28,
+                    b: 0.28,
+                    a: 1.0,
+                },
+                _ => VALUE_BG,
+            })),
+            text_color: VALUE_COLOR,
+            border: Border::default(),
+            ..Default::default()
+        })
+        .padding(Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: 3.0,
+            right: 3.0,
+        })
+        .height(Length::Fixed(ROW_H - 6.0));
+        let head = container(row![input, caret].align_y(iced::Center))
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(VALUE_BG)),
+                border: Border {
+                    color: BORDER,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..Default::default()
+            })
+            .width(Length::Fill);
+
+        if !self.edit_choice_open {
+            return prop_row_widget(label, head.into());
+        }
+
+        // Open list: all definitions, filtered by any typed text.
+        let filter = typed.map(|s| s.to_lowercase());
+        let mut list = column![].spacing(1);
+        for opt in options {
+            if let Some(f) = &filter {
+                if !opt.to_lowercase().contains(f.as_str()) {
+                    continue;
+                }
+            }
+            let value = opt.clone();
+            list = list.push(
+                button(text(opt.as_str()).size(FONT_SZ).color(VALUE_COLOR))
+                    .on_press(Message::PropGeomChoiceChanged { field, value })
+                    .style(|_: &Theme, status| button::Style {
+                        background: matches!(status, button::Status::Hovered).then_some(
+                            Background::Color(Color {
+                                r: 0.25,
+                                g: 0.45,
+                                b: 0.70,
+                                a: 1.0,
+                            }),
+                        ),
+                        text_color: VALUE_COLOR,
+                        ..Default::default()
+                    })
+                    .padding([2, 6])
+                    .width(Length::Fill),
+            );
+        }
+        let popup = container(scrollable(list).height(Length::Shrink))
+            .style(|_: &Theme| container::Style {
+                background: Some(Background::Color(Color {
+                    r: 0.17,
+                    g: 0.17,
+                    b: 0.17,
+                    a: 1.0,
+                })),
+                border: Border {
+                    color: BORDER,
+                    width: 1.0,
+                    radius: 2.0.into(),
+                },
+                ..Default::default()
+            })
+            .padding(2)
+            .width(200)
+            .max_height(220.0);
+
+        prop_row_widget(
+            label,
+            crate::ui::color_select::floating_below(head.into(), popup.into()),
+        )
+    }
+
     /// One editable row for a block attribute: the tag is the row label and the
     /// text box edits the value. Routing rides the tag (a runtime string), so
     /// this uses the dedicated `PropAttr*` messages instead of the geometry
@@ -969,6 +1121,159 @@ fn render_bool_row<'a>(label: &'a str, field: &'static str, value: bool) -> Elem
         .width(Length::Fill);
 
     prop_row_widget(label, btn.into())
+}
+
+// ── Collapsible coordinate groups (Position / Start / Scale …) ────────────
+
+/// The X/Y/Z suffix rank of a coordinate row label, with its base ("Position
+/// X" → ("Position", 0)). `None` for non-coordinate labels.
+fn coord_suffix(label: &str) -> Option<(&str, usize)> {
+    for (rank, suf) in [" X", " Y", " Z"].iter().enumerate() {
+        if let Some(base) = label.strip_suffix(suf) {
+            if !base.is_empty() {
+                return Some((base, rank));
+            }
+        }
+    }
+    None
+}
+
+/// Length of the coordinate group starting at `idx`: consecutive text rows
+/// labelled "<Base> X", "<Base> Y" and optionally "<Base> Z". 0/1 = no group.
+fn coord_group_len(props: &[crate::scene::model::object::Property], idx: usize) -> usize {
+    let groupable = |p: &crate::scene::model::object::Property| {
+        matches!(p.value, PropValue::EditText(_) | PropValue::ReadOnly(_))
+    };
+    let Some((base, 0)) = coord_suffix(&props[idx].label) else {
+        return 0;
+    };
+    if !groupable(&props[idx]) {
+        return 0;
+    }
+    let mut len = 1;
+    while idx + len < props.len() && len < 3 {
+        match coord_suffix(&props[idx + len].label) {
+            Some((b, r)) if b == base && r == len && groupable(&props[idx + len]) => len += 1,
+            _ => break,
+        }
+    }
+    if len >= 2 {
+        len
+    } else {
+        0
+    }
+}
+
+fn coord_base(label: &str) -> &str {
+    coord_suffix(label).map(|(b, _)| b).unwrap_or(label)
+}
+
+/// Short component label for an expanded row ("Position X" → indented "X").
+fn coord_component(label: &str) -> &'static str {
+    match coord_suffix(label) {
+        Some((_, 0)) => "    X",
+        Some((_, 1)) => "    Y",
+        _ => "    Z",
+    }
+}
+
+/// Display string of a text-valued property (grouped rows are always
+/// EditText / ReadOnly — see `coord_group_len`).
+fn prop_text_value(prop: &crate::scene::model::object::Property) -> String {
+    match &prop.value {
+        PropValue::EditText(s) | PropValue::ReadOnly(s) => s.clone(),
+        _ => String::new(),
+    }
+}
+
+/// The collapsed summary row of a coordinate group. The expand arrow leads
+/// the label cell (clicking the cell toggles); the value cell is the same
+/// read-only selectable field every other read-only row uses.
+fn render_group_row(
+    base: &str,
+    key: String,
+    expanded: bool,
+    joined: String,
+) -> Element<'_, Message> {
+    let label_btn = button(
+        container(
+            row![
+                crate::ui::icons::arrow_toggle(expanded, FONT_SZ, LABEL_COLOR),
+                text(crate::ui::text_util::elide(base, 16))
+                    .size(FONT_SZ)
+                    .color(LABEL_COLOR),
+            ]
+            .spacing(4)
+            .align_y(iced::Center),
+        )
+        .height(Length::Fill)
+        .align_y(iced::Center),
+    )
+    .on_press(Message::PropGroupToggle(key))
+    .style(|_: &Theme, status| button::Style {
+        background: Some(Background::Color(match status {
+            button::Status::Hovered | button::Status::Pressed => Color {
+                r: 0.24,
+                g: 0.24,
+                b: 0.24,
+                a: 1.0,
+            },
+            _ => LABEL_BG,
+        })),
+        text_color: LABEL_COLOR,
+        border: Border::default(),
+        ..Default::default()
+    })
+    .padding(Padding {
+        top: 0.0,
+        bottom: 0.0,
+        left: 4.0,
+        right: 6.0,
+    })
+    .width(Length::Fill)
+    .height(Length::Fixed(ROW_H));
+    let label_col = container(label_btn)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(LABEL_BG)),
+            ..Default::default()
+        })
+        .width(Length::FillPortion(5))
+        .height(Length::Fixed(ROW_H))
+        .align_y(iced::Center);
+
+    // text_input copies the value, so the locally-built `joined` is fine here.
+    let value_field = text_input("", &joined)
+        .on_input(|_| Message::Noop)
+        .size(FONT_SZ)
+        .style(ro_input_style)
+        .padding([3, 6])
+        .width(Length::Fill);
+    let value_col = container(value_field)
+        .style(|_: &Theme| container::Style {
+            background: Some(Background::Color(VALUE_BG)),
+            ..Default::default()
+        })
+        .width(Length::FillPortion(6))
+        .height(Length::Fixed(ROW_H))
+        .align_y(iced::Center)
+        .padding(Padding {
+            top: 0.0,
+            bottom: 0.0,
+            left: 2.0,
+            right: 2.0,
+        });
+
+    container(row![label_col, value_col])
+        .height(Length::Fixed(ROW_H))
+        .style(|_: &Theme| container::Style {
+            border: Border {
+                color: BORDER,
+                width: 1.0,
+                radius: 0.0.into(),
+            },
+            ..Default::default()
+        })
+        .into()
 }
 
 fn render_ro_row<'a>(label: &'a str, value: &'a str) -> Element<'a, Message> {

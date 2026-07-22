@@ -204,6 +204,20 @@ pub fn vp_effective_scale(custom_scale: f64, view_height: f64, vp_height: f64) -
     1.0
 }
 
+/// A block name a user may assign: non-empty, no control characters, none of
+/// the symbol-table-reserved characters (`*` marks anonymous blocks, `|`
+/// xref-dependent ones; the rest are the DXF symbol-name exclusions).
+pub(crate) fn valid_block_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '<' | '>' | '/' | '\\' | '"' | ':' | ';' | '?' | '*' | '|' | ',' | '=' | '`'
+                )
+        })
+}
+
 /// Pre-built entity caches returned by [`build_derived_caches`].
 /// Produced in the file-load background task so the UI thread only assigns.
 #[derive(Debug, Clone)]

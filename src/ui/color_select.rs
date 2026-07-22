@@ -295,6 +295,16 @@ pub fn color_grid_window(on_pick: impl Fn(AcadColor) -> Message) -> Element<'sta
     .into()
 }
 
+/// Render `base` inline with `popup` floating just below it — the shared
+/// dropdown mechanic for the panel's custom dropdowns (colour picker, block
+/// Name). Unlike iced's menu overlay it always opens downward.
+pub fn floating_below<'a>(
+    base: Element<'a, Message>,
+    popup: Element<'a, Message>,
+) -> Element<'a, Message> {
+    Element::new(Floating { base, popup })
+}
+
 /// A widget that renders `base` inline and `popup` as a floating overlay
 /// anchored just below it.
 struct Floating<'a> {

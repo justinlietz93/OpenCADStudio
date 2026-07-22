@@ -229,13 +229,28 @@ impl Scene {
 
     /// Rename a block definition: re-key its record, update the Block marker's
     /// name, and repoint every INSERT that referenced the old name so all
-    /// instances keep resolving. Returns false if `old` is missing, `new` is
-    /// already taken, or the names are equal (case-insensitive). (#261)
+    /// instances keep resolving. Returns false if `old` is missing or
+    /// anonymous/xref, `new` is invalid or already taken, or the names are
+    /// equal (case-insensitive). (#261)
     pub fn rename_block(&mut self, old: &str, new: &str) -> bool {
+        if !crate::scene::valid_block_name(new) {
+            return false;
+        }
         if old.eq_ignore_ascii_case(new) {
             return false;
         }
         if self.document.block_records.get(new).is_some() {
+            return false;
+        }
+        // Anonymous (*) names are program-owned and re-numbered on save; an
+        // xref('|') symbol name is bound to the referenced file.
+        if self
+            .document
+            .block_records
+            .get(old)
+            .map(|br| br.is_anonymous() || br.flags.is_xref || br.name.contains('|'))
+            .unwrap_or(true)
+        {
             return false;
         }
         let Some(mut br) = self.document.block_records.remove(old) else {

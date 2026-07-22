@@ -293,6 +293,7 @@ impl Scene {
                     PropValue::ReadOnly(s) | PropValue::EditText(s) => s,
                     PropValue::LayerChoice(s) => s,
                     PropValue::Choice { selected, .. } => selected,
+                    PropValue::EditChoice { value, .. } => value,
                     PropValue::ColorChoice(c) => Self::format_color(c),
                     PropValue::LwChoice(lw) => Self::format_lineweight(lw),
                     PropValue::LinetypeChoice(s) => s,
