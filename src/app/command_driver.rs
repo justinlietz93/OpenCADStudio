@@ -20,11 +20,13 @@ impl OpenCADStudio {
         }
         let i = self.active_tab;
         let ctrl = self.ctrl_down;
+        let shift = self.shift_down;
         let result: Option<CmdResult> = {
             let Some(cmd) = self.tabs[i].active_cmd.as_mut() else {
                 return Task::none();
             };
             cmd.set_ctrl(ctrl);
+            cmd.set_shift(shift);
             match input {
                 StepInput::Point(p) => Some(cmd.on_point(p)),
                 StepInput::Text(s) => cmd.on_text_input(&s),
@@ -176,6 +178,18 @@ impl OpenCADStudio {
             .as_ref()
             .is_some_and(|c| c.needs_entity_pick())
         {
+            // Option keywords take precedence over the handle reading —
+            // "F"/"C"/"E" are valid hex, but during TRIM/EXTEND they are the
+            // Fence/Crossing/Edge options (#336). Only an unconsumed token
+            // falls through to the handle interpretation.
+            let consumed = self.tabs[i]
+                .active_cmd
+                .as_mut()
+                .and_then(|c| c.on_text_input(token));
+            if let Some(r) = consumed {
+                let _ = self.apply_cmd_result(r);
+                return;
+            }
             if let Ok(v) = u64::from_str_radix(token.trim_start_matches("0x"), 16) {
                 let handle = Handle::new(v);
                 let pt = self.tabs[i]

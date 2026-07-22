@@ -1213,6 +1213,11 @@ pub trait CadCommand: Send {
     /// `ARC_CONT`) store it; most commands ignore it. Default no-op.
     fn set_ctrl(&mut self, _ctrl: bool) {}
 
+    /// Push the live Shift-key state into the command before each dispatch.
+    /// TRIM/EXTEND use it for the shift-select swap (Shift+click extends
+    /// during TRIM and trims during EXTEND, #336). Default no-op.
+    fn set_shift(&mut self, _shift: bool) {}
+
     /// Called when the user left-clicks in the viewport (point pick).
     fn on_point(&mut self, pt: DVec3) -> CmdResult;
 

@@ -1190,10 +1190,16 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             scene::pick::hit_test::click_hit(p, &all_wires[..], view_rot, eye, bounds, self.tabs[i].scene.document.header.lineweight_display)
                                 .and_then(|s| Scene::handle_from_wire_name(s))
                                 .unwrap_or(acadrust::Handle::NULL);
+                        let shift = self.shift_down;
                         let mut p = self.tabs[i]
                             .active_cmd
                             .as_mut()
-                            .map(|c| c.on_hover_entity(hover_handle, effective_wcs))
+                            .map(|c| {
+                                // Live shift state drives TRIM/EXTEND's
+                                // shift-swap preview (#336).
+                                c.set_shift(shift);
+                                c.on_hover_entity(hover_handle, effective_wcs)
+                            })
                             .unwrap_or_default();
                         // on_hover_entity returns WCS wires; shift to the
                         // offset-relative frame so the preview lands on the
@@ -2073,10 +2079,15 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                 }
                             }
 
+                            let shift = self.shift_down;
                             let result = self.tabs[i]
                                 .active_cmd
                                 .as_mut()
-                                .map(|c| c.on_entity_pick(handle, pick_wcs));
+                                .map(|c| {
+                                    // Shift-swap state for TRIM/EXTEND (#336).
+                                    c.set_shift(shift);
+                                    c.on_entity_pick(handle, pick_wcs)
+                                });
                             // HATCHEDIT: after pick, inject hatch model data into the command.
                             if self.tabs[i]
                                 .active_cmd
