@@ -394,10 +394,69 @@ impl OpenCADStudio {
             // PLAN — look straight down at the drawing (top view). The optional
             // World/Ucs/Current keyword is accepted; all map to the world top
             // view for now.
-            cmd if cmd == "PLAN" || cmd.starts_with("PLAN ") => {
-                return Some(Task::done(Message::ViewCubeSnapWorld(
-                    crate::scene::CubeRegion::Face(crate::scene::pipeline::viewcube::FACE_TOP),
-                )));
+            // PLAN — plan view of a UCS (#326). Shows its options right on
+            // activation instead of flipping the view like a cube click; the
+            // view only changes once an option (or the Current default) runs.
+            "PLAN" => {
+                use crate::command::KeywordCommand;
+                let c = KeywordCommand::new(
+                    "PLAN",
+                    "PLAN  [Current ucs / Ucs / World] <Current>:",
+                    vec![
+                        ("Current ucs", "CURRENT", None),
+                        ("Ucs", "UCS", Some("PLAN UCS  ucs name:")),
+                        ("World", "WORLD", None),
+                    ],
+                )
+                .with_default("CURRENT");
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("PLAN ") => {
+                let parts: Vec<&str> = cmd.splitn(3, ' ').collect();
+                let sub = parts.get(1).map(|s| s.to_uppercase()).unwrap_or_default();
+                match sub.as_str() {
+                    "" | "CURRENT" | "C" => {
+                        let r = self.tabs[i].scene.viewcube_ucs_mat();
+                        self.plan_snap(i, r);
+                        self.command_line.push_output("PLAN: current UCS plan view.");
+                    }
+                    "WORLD" | "W" => {
+                        self.plan_snap(i, glam::Mat4::IDENTITY);
+                        self.command_line.push_output("PLAN: world plan view.");
+                    }
+                    "UCS" | "U" => {
+                        let name = parts.get(2).map(|s| s.trim()).unwrap_or("");
+                        if name.is_empty() {
+                            self.command_line.push_info("Usage: PLAN UCS <name>");
+                        } else {
+                            let ucs = self.tabs[i]
+                                .scene
+                                .document
+                                .ucss
+                                .iter()
+                                .find(|u| u.name.eq_ignore_ascii_case(name))
+                                .cloned();
+                            match ucs {
+                                Some(u) => {
+                                    let r = crate::app::helpers::UcsXform::from_ucs(&u)
+                                        .rotation_mat();
+                                    self.plan_snap(i, r);
+                                    self.command_line.push_output(&format!(
+                                        "PLAN: plan view of UCS '{}'.",
+                                        u.name
+                                    ));
+                                }
+                                None => self
+                                    .command_line
+                                    .push_error(&format!("UCS '{name}' not found.")),
+                            }
+                        }
+                    }
+                    _ => self
+                        .command_line
+                        .push_info("Usage: PLAN [CURRENT / UCS <name> / WORLD]"),
+                }
             }
 
             "VIEW" => {
@@ -1151,5 +1210,26 @@ impl OpenCADStudio {
             _ => return None,
         }
         Some(self.finish_dispatch(cmd))
+    }
+
+    /// Snap to the plan view of the UCS whose rotation is `r_ucs`, straight —
+    /// no "already there → flip to the opposite face" cube behaviour (#326).
+    fn plan_snap(&mut self, i: usize, r_ucs: glam::Mat4) {
+        let eye_dir = r_ucs.transform_vector3(
+            crate::scene::CubeRegion::Face(crate::scene::pipeline::viewcube::FACE_TOP)
+                .snap_direction(),
+        );
+        if self.tabs[i].scene.active_viewport.is_some() {
+            self.tabs[i]
+                .scene
+                .mutate_active_viewport_camera(|c| c.snap_to_face(eye_dir, r_ucs));
+        } else {
+            self.tabs[i]
+                .scene
+                .camera
+                .borrow_mut()
+                .snap_to_face(eye_dir, r_ucs);
+        }
+        self.tabs[i].scene.camera_generation += 1;
     }
 }

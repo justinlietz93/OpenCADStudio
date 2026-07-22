@@ -332,9 +332,18 @@ pub struct KeywordCommand {
     options: Vec<(&'static str, &'static str, Option<&'static str>)>,
     /// Set once a value-taking verb is chosen: `(keyword, value prompt)`.
     pending: Option<(&'static str, &'static str)>,
+    /// Keyword a bare Enter dispatches at the verb step (`<Default>` prompts,
+    /// e.g. PLAN's `<Current>`). `None` = Enter cancels, as before.
+    default: Option<&'static str>,
 }
 
 impl KeywordCommand {
+    /// Set the verb a bare Enter dispatches (shown as `<Default>` in prompts).
+    pub fn with_default(mut self, kw: &'static str) -> Self {
+        self.default = Some(kw);
+        self
+    }
+
     pub fn new(
         name: &'static str,
         prompt: &'static str,
@@ -345,6 +354,7 @@ impl KeywordCommand {
             prompt,
             options,
             pending: None,
+            default: None,
         }
     }
 }
@@ -411,6 +421,12 @@ impl CadCommand for KeywordCommand {
     }
 
     fn on_enter(&mut self) -> CmdResult {
+        // Bare Enter at the verb step runs the default verb when one is set.
+        if self.pending.is_none() {
+            if let Some(kw) = self.default {
+                return CmdResult::Dispatch(format!("{} {kw}", self.name));
+            }
+        }
         CmdResult::Cancel
     }
 }
