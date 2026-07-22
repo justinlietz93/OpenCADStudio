@@ -200,8 +200,7 @@ fn catmull_rom_polyline(pts: &[acadrust::types::Vector3], closed: bool) -> Vec<[
 fn fit_spline_polyline(spl: &Spline) -> Vec<[f64; 3]> {
     let p: Vec<[f64; 3]> = spl.fit_points.iter().map(|q| [q.x, q.y, q.z]).collect();
     let n = p.len();
-    if n < 3 {
-        // A single segment can't be C²-fit; a straight chord is the honest draw.
+    if n < 2 {
         return p;
     }
 
