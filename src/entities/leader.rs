@@ -13,6 +13,36 @@ use crate::scene::model::wire_model::TangentGeom;
 
 // ── TruckConvertible (used for snap/grip key-vertices) ─────────────────────
 
+/// Whether a leader draws a horizontal hookline. DWG stores no "hookline
+/// exists" flag (only the direction bit), so the stored flag alone would drop
+/// every hookline on DWG-loaded leaders: a text-annotated leader gets a
+/// horizontal hook whenever its final segment leaves the horizontal by more
+/// than 15°.
+fn draws_hookline(leader: &Leader) -> bool {
+    if leader.hookline_enabled {
+        return true;
+    }
+    let verts = &leader.vertices;
+    if leader.creation_type != LeaderCreationType::WithText
+        || leader.annotation_handle.is_null()
+        || verts.len() < 2
+    {
+        return false;
+    }
+    let last = &verts[verts.len() - 1];
+    let prev = &verts[verts.len() - 2];
+    let (dx, dy) = (last.x - prev.x, last.y - prev.y);
+    let len = (dx * dx + dy * dy).sqrt();
+    let h = leader.horizontal_direction;
+    let hl = (h.x * h.x + h.y * h.y).sqrt();
+    let cos = if len > 1e-9 && hl > 1e-9 {
+        ((dx * h.x + dy * h.y) / (len * hl)).abs()
+    } else {
+        1.0
+    };
+    cos < (15.0f64).to_radians().cos()
+}
+
 fn to_truck(leader: &Leader) -> TruckEntity {
     let verts = &leader.vertices;
     let nan = [f64::NAN; 3];
@@ -64,7 +94,7 @@ fn to_truck(leader: &Leader) -> TruckEntity {
     }
 
     // Landing line at last vertex
-    if leader.hookline_enabled && verts.len() >= 2 {
+    if draws_hookline(leader) && verts.len() >= 2 {
         let last = verts.last().unwrap();
         let prev = &verts[verts.len() - 2];
         // Landing runs along the leader's horizontal direction (UCS X for
@@ -683,19 +713,56 @@ impl LeaderTess for Leader {
             fill_tris.extend(arrow_geom.arrow_fill);
         }
 
-        if self.hookline_enabled {
+        if draws_hookline(self) {
             let last = verts.last().unwrap();
             let prev = &verts[verts.len() - 2];
             let sign = if (last.x - prev.x) >= 0.0 {
-                1.0_f32
+                1.0_f64
             } else {
-                -1.0_f32
+                -1.0_f64
             };
-            let land_len = self.text_height as f32 * 1.5 * anno_scale;
+            let style = document.dim_styles.iter().find(|s| {
+                s.name.eq_ignore_ascii_case(&self.dimension_style)
+                    || (self.dimension_style.trim().is_empty()
+                        && s.name.eq_ignore_ascii_case("Standard"))
+            });
+            let dim_scale = dov::real(xd, dov::DIMSCALE)
+                .filter(|v| *v > 1e-6)
+                .or_else(|| style.map(|s| s.dimscale).filter(|v| *v > 1e-6))
+                .unwrap_or(anno_scale as f64);
+            // Hook length: DIMASZ, like the arrowhead, when a style resolves;
+            // the legacy text-height heuristic otherwise.
+            let mut land_len = match dov::real(xd, dov::DIMASZ)
+                .or_else(|| style.map(|s| s.dimasz))
+            {
+                Some(a) => a * dim_scale,
+                None => self.text_height * 1.5 * anno_scale as f64,
+            };
+            // With DIMTAD "text above", the annotation sits on top of the hook
+            // and the hook underlines it: extend to the far edge of the MTEXT's
+            // laid-out extents.
+            let dimtad = dov::int(xd, dov::DIMTAD)
+                .or_else(|| style.map(|s| s.dimtad))
+                .unwrap_or(0);
+            if dimtad != 0 {
+                if let Some(acadrust::entities::EntityType::MText(mt)) =
+                    document.get_entity(self.annotation_handle)
+                {
+                    if mt.extents_width > 0.0 {
+                        let to_far_edge =
+                            sign * (mt.insertion_point.x - last.x) + mt.extents_width;
+                        land_len = land_len.max(to_far_edge);
+                    }
+                }
+            }
             let last_f = p3(last);
             points.push(nan);
             points.push(last_f);
-            points.push([last_f[0] + sign * land_len, last_f[1], last_f[2]]);
+            points.push([
+                last_f[0] + (sign * land_len) as f32,
+                last_f[1],
+                last_f[2],
+            ]);
         }
 
         WireModel {
