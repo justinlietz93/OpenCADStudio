@@ -310,12 +310,14 @@ impl WipeoutGpu {
             .take(MAX_HATCH_BOUNDARY_VERTS)
             .enumerate()
         {
-            // Preserve NaN separators — they signal path breaks to the
-            // in_polygon ray-cast, must not be shifted into finite numbers.
+            // Path-break separators go up as the finite GPU sentinel, not
+            // NaN — the shader NaN self-compare is folded to `true` on some
+            // drivers (#386, #416) — and must not be shifted by `drift`.
             if x.is_finite() && y.is_finite() {
                 boundary_data.verts[i] = [x + drift[0], y + drift[1], 0.0, 0.0];
             } else {
-                boundary_data.verts[i] = [f32::NAN, f32::NAN, 0.0, 0.0];
+                let s = crate::scene::model::hatch_model::GPU_BOUNDARY_SEP;
+                boundary_data.verts[i] = [s, s, 0.0, 0.0];
             }
         }
 

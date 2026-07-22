@@ -216,7 +216,16 @@ impl HatchGpu {
         for h in hatches {
             let boundary_offset = boundary.len() as u32;
             for &[x, y] in h.boundary.iter() {
-                boundary.push([x, y, 0.0, 0.0]);
+                // NaN sub-loop separators become the finite sentinel on the
+                // GPU: Intel drivers fold the shader NaN self-compare to
+                // `true`, turning separators into vertices and bleeding the
+                // fill outside its boundary (#386, #416).
+                if x.is_finite() && y.is_finite() {
+                    boundary.push([x, y, 0.0, 0.0]);
+                } else {
+                    let s = crate::scene::model::hatch_model::GPU_BOUNDARY_SEP;
+                    boundary.push([s, s, 0.0, 0.0]);
+                }
             }
             let boundary_count = boundary.len() as u32 - boundary_offset;
 

@@ -133,6 +133,13 @@ pub enum HatchPattern {
     },
 }
 
+/// GPU-side separator between disconnected boundary sub-loops. A finite
+/// magnitude sentinel instead of NaN: shaders detect it with a plain
+/// `abs(x) < 1e29` compare, which every driver evaluates identically,
+/// unlike NaN self-comparison (#386, #416). Boundary verts are local
+/// (anchor-relative), so real coordinates never approach it.
+pub const GPU_BOUNDARY_SEP: f32 = 1.0e30;
+
 /// A hatched region defined by a closed polygon boundary.
 #[derive(Clone, Debug)]
 pub struct HatchModel {
@@ -152,6 +159,10 @@ pub struct HatchModel {
     /// World-XY coordinates of the boundary polygon vertices, stored as
     /// f32 offsets from `world_origin`. NaN-NaN sentinels separate
     /// disconnected paths and must be preserved un-shifted by consumers.
+    /// GPU uploads rewrite them to [`GPU_BOUNDARY_SEP`] — some drivers
+    /// (Intel Mesa) fold the shader-side `x == x` NaN test to `true`
+    /// under fast math, which turned separators into real vertices and
+    /// bled fills outside their boundary (#386, #416).
     pub boundary: Arc<Vec<[f32; 2]>>,
     /// Exact absolute-WCS boundary in f64, set only by the draw commands so a
     /// typed boundary vertex is persisted without the f32 quantization the

@@ -118,7 +118,11 @@ struct VOut {
 // ── Point-in-polygon (ray casting) ────────────────────────────────────────
 
 fn valid_vertex(p: vec2<f32>) -> bool {
-    return p.x == p.x && p.y == p.y;
+    // Sub-loop separators are a huge finite sentinel (1e30, see
+    // GPU_BOUNDARY_SEP), not NaN: `x == x` NaN detection gets folded to
+    // `true` by some drivers (Intel Mesa fast math), which made separators
+    // read as real vertices and bleed fills past their boundary (#386, #416).
+    return abs(p.x) < 1.0e29 && abs(p.y) < 1.0e29;
 }
 
 fn edge_crosses(p: vec2<f32>, a: vec2<f32>, c: vec2<f32>) -> bool {

@@ -203,13 +203,15 @@ impl HatchWebGpu {
 
         // ── Pack the data texture: boundary | families | dashes ───────────
         let mut texels: Vec<[f32; 4]> = Vec::new();
-        // Boundary section (texels 0..vcount). NaN separators preserved (they
-        // survive the RGBA32F fetch byte-for-byte).
+        // Boundary section (texels 0..vcount). NaN separators become the
+        // finite GPU sentinel — the shader NaN self-compare is folded to
+        // `true` on some drivers (#386, #416).
         for &[x, y] in model.boundary.iter() {
             if x.is_finite() && y.is_finite() {
                 texels.push([x + drift[0], y + drift[1], 0.0, 0.0]);
             } else {
-                texels.push([f32::NAN, f32::NAN, 0.0, 0.0]);
+                let s = crate::scene::model::hatch_model::GPU_BOUNDARY_SEP;
+                texels.push([s, s, 0.0, 0.0]);
             }
         }
         let vcount = texels.len() as u32;
