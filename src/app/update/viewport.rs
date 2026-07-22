@@ -547,11 +547,20 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                         .unwrap_or(u128::MAX);
                     if !sel.left_dragging && elapsed_ms >= POLY_START_DELAY_MS && dist2 > 9.0 {
                         sel.left_dragging = true;
-                        sel.poly_active = true;
-                        sel.poly_crossing = p.x < press.x;
-                        sel.poly_points.clear();
-                        sel.poly_points.push(press);
-                        sel.poly_points.push(p);
+                        if self.pick_drag_rect {
+                            // PICKDRAG 1 (#226): press-drag spans a RECTANGLE
+                            // marquee — drive the existing box machinery (its
+                            // overlay and completion) instead of the lasso.
+                            sel.box_anchor = Some(press);
+                            sel.box_current = Some(p);
+                            sel.box_crossing = p.x < press.x;
+                        } else {
+                            sel.poly_active = true;
+                            sel.poly_crossing = p.x < press.x;
+                            sel.poly_points.clear();
+                            sel.poly_points.push(press);
+                            sel.poly_points.push(p);
+                        }
                     } else if sel.left_dragging && sel.poly_active {
                         if sel.poly_points.last().map_or(true, |lp| {
                             let ddx = p.x - lp.x;
@@ -559,6 +568,11 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             ddx * ddx + ddy * ddy > 16.0
                         }) {
                             sel.poly_points.push(p);
+                        }
+                    } else if sel.left_dragging {
+                        if let Some(a) = sel.box_anchor {
+                            sel.box_current = Some(p);
+                            sel.box_crossing = p.x < a.x;
                         }
                     }
                 } else if sel.box_anchor.is_some() {
@@ -2322,19 +2336,15 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     return Task::none();
                 }
 
-                let (is_down2, is_dragging, box_anchor, box_crossing, _vp_size, elapsed_ms) = {
+                let (is_down2, is_dragging, box_anchor, box_crossing, _vp_size, poly_drag) = {
                     let sel = self.tabs[i].scene.selection.borrow();
-                    let elapsed = sel
-                        .left_press_time
-                        .map(|t| Instant::now().duration_since(t).as_millis())
-                        .unwrap_or(u128::MAX);
                     (
                         sel.left_down,
                         sel.left_dragging,
                         sel.box_anchor,
                         sel.box_crossing,
                         sel.vp_size,
-                        elapsed,
+                        sel.poly_active,
                     )
                 };
 
@@ -2358,7 +2368,10 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     };
 
                     if is_dragging {
-                        if elapsed_ms < POLY_START_DELAY_MS {
+                        if !poly_drag {
+                            // PICKDRAG 1 (#226): the press-drag spanned a
+                            // rectangle through the box machinery — complete
+                            // it here on release.
                             if let Some(a) = box_anchor {
                                 let crossing = box_crossing;
                                 let (view_rot, eye, all_wires) = self.pick_view(i, &edit_cam, bounds);
@@ -2395,11 +2408,15 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                 // (issue #83): a plain box adds to the current
                                 // selection, Shift+box removes the boxed
                                 // entities. Esc / empty-space click still clears.
+                                // PICKADD 0 (#226): a plain box REPLACES.
                                 if self.shift_down {
                                     for h in &handles {
                                         self.tabs[i].scene.deselect_entity(*h);
                                     }
                                 } else {
+                                    if !self.pick_add && !handles.is_empty() {
+                                        self.tabs[i].scene.deselect_all();
+                                    }
                                     for h in &handles {
                                         self.tabs[i].scene.select_entity(*h, false);
                                     }
@@ -2462,6 +2479,12 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                     self.tabs[i].scene.deselect_entity(*h);
                                 }
                             } else {
+                                // PICKADD 0 (#226): a plain marquee REPLACES
+                                // the selection (empty results still leave it
+                                // alone, matching the box rule).
+                                if !self.pick_add && !handles.is_empty() {
+                                    self.tabs[i].scene.deselect_all();
+                                }
                                 for h in &handles {
                                     self.tabs[i].scene.select_entity(*h, false);
                                 }
@@ -2560,10 +2583,24 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                         // Individual picks accumulate (issue #47):
                                         // each plain click adds to the selection,
                                         // Shift+click removes the picked entity.
+                                        // PICKADD 0 (#226): a plain click
+                                        // REPLACES the selection instead and
+                                        // Shift+click toggles membership.
                                         if self.shift_down {
-                                            self.tabs[i].scene.deselect_entity(handle);
+                                            if !self.pick_add
+                                                && !self.tabs[i].scene.selected.contains(&handle)
+                                            {
+                                                self.tabs[i].scene.select_entity(handle, false);
+                                                self.tabs[i]
+                                                    .scene
+                                                    .expand_selection_for_groups(&[handle]);
+                                            } else {
+                                                self.tabs[i].scene.deselect_entity(handle);
+                                            }
                                         } else {
-                                            self.tabs[i].scene.select_entity(handle, false);
+                                            self.tabs[i]
+                                                .scene
+                                                .select_entity(handle, !self.pick_add);
                                             self.tabs[i].scene.expand_selection_for_groups(&[handle]);
                                         }
                                         self.refresh_properties();
@@ -2575,6 +2612,12 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                                     // add to it (issue #83). The box completion
                                     // (or Esc) decides what happens to the
                                     // selection.
+                                    // PICKADD 0 (#226): OS convention — the
+                                    // empty click also drops the selection.
+                                    if !self.pick_add && !self.shift_down {
+                                        self.tabs[i].scene.deselect_all();
+                                        self.refresh_properties();
+                                    }
                                     // Pin the anchor to the world point under it
                                     // so a zoom/pan mid-drag re-projects it
                                     // instead of leaving it frozen in pixels
@@ -2631,11 +2674,15 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             // current selection, Shift+box removes the boxed
                             // entities. An empty box leaves the selection alone
                             // so an accidental empty drag never discards it.
+                            // PICKADD 0 (#226): a plain box REPLACES instead.
                             if self.shift_down {
                                 for h in &handles {
                                     self.tabs[i].scene.deselect_entity(*h);
                                 }
                             } else {
+                                if !self.pick_add && !handles.is_empty() {
+                                    self.tabs[i].scene.deselect_all();
+                                }
                                 for h in &handles {
                                     self.tabs[i].scene.select_entity(*h, false);
                                 }

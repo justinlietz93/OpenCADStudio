@@ -290,6 +290,8 @@ inventory::submit!(crate::command::CommandRegistration {
         // Restore the last-erased objects.
         "OOPS",
         // Plan (top) view.
+        "PICKADD",
+        "PICKDRAG",
         "PLAN",
         // Current object colour (CECOLOR).
         "COLOR",

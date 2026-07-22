@@ -135,6 +135,13 @@ pub struct UserSettings {
     /// Minutes between autosaves to a `.sv$` recovery file (SAVETIME command).
     /// 0 disables autosave.
     pub savetime_min: i32,
+    /// PICKADD (#226): `true` (default) = a plain click ADDS to the selection
+    /// (Shift removes); `false` = OS-style — a click REPLACES the selection
+    /// and Shift+click toggles membership.
+    pub pick_add: bool,
+    /// PICKDRAG (#226): `false` (default) = press-drag draws the freeform
+    /// lasso; `true` = press-drag draws a rectangle marquee instead.
+    pub pick_drag_rect: bool,
     /// Persisted viewport background colours (0–255 RGB); `None` = app default
     /// (dark grey model / off-white paper). Applied to every drawing tab on
     /// launch and to tabs opened later, so a chosen background survives restarts
@@ -162,6 +169,8 @@ impl Default for UserSettings {
             backup_on_save: true,
             file_assoc_enabled: true,
             savetime_min: 10,
+            pick_add: true,
+            pick_drag_rect: false,
             bg_color: None,
             paper_bg_color: None,
         }

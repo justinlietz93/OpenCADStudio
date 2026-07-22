@@ -85,6 +85,8 @@ impl OpenCADStudio {
             backup_on_save: self.backup_on_save,
             file_assoc_enabled: self.file_assoc_enabled,
             savetime_min: self.savetime_min,
+            pick_add: self.pick_add,
+            pick_drag_rect: self.pick_drag_rect,
             bg_color: self.default_bg_color.map(f4_to_u3),
             paper_bg_color: self.default_paper_bg_color.map(f4_to_u3),
         }
@@ -110,6 +112,8 @@ impl OpenCADStudio {
         self.backup_on_save = s.backup_on_save;
         self.file_assoc_enabled = s.file_assoc_enabled;
         self.savetime_min = s.savetime_min;
+        self.pick_add = s.pick_add;
+        self.pick_drag_rect = s.pick_drag_rect;
         self.default_bg_color = s.bg_color.map(u3_to_f4);
         self.default_paper_bg_color = s.paper_bg_color.map(u3_to_f4);
         // Push the restored background onto every drawing tab that exists now

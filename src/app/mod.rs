@@ -293,6 +293,12 @@ pub(super) struct OpenCADStudio {
     /// Selection cycling: clicking where objects overlap opens a list box
     /// to pick which one; the pick is added to the current selection.
     selection_cycling: bool,
+    /// PICKADD (#226): true (default) = clicks accumulate; false = OS-style
+    /// replace-on-click with Shift toggling.
+    pick_add: bool,
+    /// PICKDRAG (#226): false (default) = press-drag lassoes; true =
+    /// press-drag draws a rectangle marquee.
+    pick_drag_rect: bool,
     /// Frame-budget HUD (Phase 5.3): overlays the last wire re-tessellation
     /// cost on the active viewport. Toggled by the `PERF` command.
     perf_hud: bool,
@@ -2277,6 +2283,8 @@ impl OpenCADStudio {
             clean_screen: false,
             quick_properties: false,
             selection_cycling: false,
+            pick_add: true,
+            pick_drag_rect: false,
             perf_hud: false,
             cycle_candidates: None,
             pre_cmd_tangent: None,

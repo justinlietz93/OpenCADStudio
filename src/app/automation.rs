@@ -620,11 +620,13 @@ mod tests {
         // rather than by dispatching: DONATE / REPORT / WEBVERSION shell out to
         // a real browser, which a test must not do.
         let dispatch_src = include_str!("commands/mod.rs");
+        // The gate's allow-list lives in the `start_allowed` fn (#388/389);
+        // its first `}` closes the `matches!` body, past every name.
         let gate = dispatch_src
-            .split("is_start")
+            .split("pub fn start_allowed")
             .nth(1)
-            .and_then(|s| s.split('{').next())
-            .expect("the is_start gate moved — re-point this test");
+            .and_then(|s| s.split('}').next())
+            .expect("the start_allowed gate moved — re-point this test");
         // DONATE/REPORT/WEBVERSION are the welcome page's own buttons; the rest
         // are ribbon tools that configure the application, not a drawing.
         let standalone = [
@@ -652,6 +654,103 @@ mod tests {
                 "{cmd} has no dispatch arm"
             );
         }
+    }
+
+    /// PICKADD / PICKDRAG (#226): the command flips the live flag both via the
+    /// inline form and the two-step ValuePrompt flow.
+    #[test]
+    fn lasso_press_drag_selects() {
+        // Press-drag lasso must select crossed entities — regression probe
+        // for the #226 PICKDRAG work (both PICKDRAG modes complete through
+        // the poly path).
+        use crate::app::Message;
+        for (add, rect) in [(true, false), (true, true), (false, false), (false, true)] {
+            let mut app = OpenCADStudio::new_for_test();
+            app.automation_op(r#"{"op":"new"}"#);
+            let i = app.active_tab;
+            app.pick_add = add;
+            app.pick_drag_rect = rect;
+            let _ = app.run_command_line("LINE 0,0 10,10");
+            app.tabs[i].scene.selection.borrow_mut().vp_size = (800.0, 600.0);
+            let _ = app.run_command_line("ZOOM EXTENTS");
+            // Both directions. Crossing = a right → left diagonal sweep (the
+            // freeform path may be degenerate — crossing counts hits).
+            // Window = a left → right perimeter walk so the freeform ring
+            // actually ENCLOSES the line (a diagonal has no area).
+            let path: Vec<(f32, f32)> = if !add && rect {
+                // Rectangle window: a simple left → right diagonal spans it.
+                (0..=10)
+                    .map(|k| {
+                        let t = k as f32 / 10.0;
+                        (20.0 + t * 760.0, 20.0 + t * 560.0)
+                    })
+                    .collect()
+            } else if add {
+                let (sx, sy, ex, ey) = (780.0f32, 580.0f32, 20.0f32, 20.0f32);
+                (0..=10)
+                    .map(|k| {
+                        let t = k as f32 / 10.0;
+                        (sx + t * (ex - sx), sy + t * (ey - sy))
+                    })
+                    .collect()
+            } else {
+                vec![
+                    (20.0, 20.0),
+                    (400.0, 20.0),
+                    (780.0, 20.0),
+                    (780.0, 300.0),
+                    (780.0, 580.0),
+                    (400.0, 580.0),
+                    (20.0, 580.0),
+                    (20.0, 300.0),
+                ]
+            };
+            let _ = app.update(Message::ViewportMove(iced::Point::new(path[0].0, path[0].1)));
+            let _ = app.update(Message::ViewportLeftPress);
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            for &(x, y) in &path {
+                let _ = app.update(Message::ViewportMove(iced::Point::new(x, y)));
+            }
+            {
+                let sel = app.tabs[i].scene.selection.borrow();
+                assert!(sel.left_dragging, "drag must start (add={add} rect={rect})");
+                if rect {
+                    // Rectangle mode drives the box machinery, not the lasso.
+                    assert!(
+                        sel.box_anchor.is_some() && sel.box_current.is_some() && !sel.poly_active,
+                        "rect marquee must arm the box (add={add})"
+                    );
+                } else {
+                    assert!(sel.poly_active, "lasso must start (add={add})");
+                    assert!(sel.poly_points.len() >= 3, "lasso points (add={add})");
+                }
+            }
+            let _ = app.update(Message::ViewportLeftRelease);
+            assert!(
+                !app.tabs[i].scene.selected.is_empty(),
+                "marquee must select the line (add={add} rect={rect})"
+            );
+        }
+    }
+
+    #[test]
+    fn pickadd_command_flips_flag() {
+        let mut app = OpenCADStudio::new_for_test();
+        // The Start tab blocks drawing commands — open a drawing first.
+        app.automation_op(r#"{"op":"new"}"#);
+        // The boot path may have restored a persisted value — normalize.
+        app.pick_add = true;
+        app.pick_drag_rect = false;
+        let _ = app.run_command_line("PICKADD 0");
+        assert!(!app.pick_add, "PICKADD 0 must switch to replace mode");
+        let _ = app.run_command_line("PICKADD 1");
+        assert!(app.pick_add);
+        // Two-step: bare command then the value, like typing 1 + Enter
+        // (feed_active_cmd is the same path the GUI submit offers first).
+        let _ = app.run_command_line("PICKDRAG");
+        assert!(app.tabs[app.active_tab].active_cmd.is_some(), "prompt must open");
+        app.feed_active_cmd("1");
+        assert!(app.pick_drag_rect, "PICKDRAG 1 via the prompt must switch");
     }
 
     #[test]

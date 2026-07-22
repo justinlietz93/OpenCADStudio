@@ -652,6 +652,70 @@ impl OpenCADStudio {
                 }
             }
 
+            // ── PICKADD / PICKDRAG — selection UX (#226, app settings) ───
+            // Bare form reports; `<name> 0|1` sets and persists. Defaults keep
+            // today's behaviour (PICKADD 1, PICKDRAG 0).
+            "PICKADD" | "PICKDRAG" => {
+                use crate::command::ValuePromptCommand;
+                let (name, prompt) = if cmd == "PICKADD" {
+                    ("PICKADD", "PICKADD  1 = click adds to selection (default), 0 = click replaces  <Enter reports>:")
+                } else {
+                    ("PICKDRAG", "PICKDRAG  0 = press-drag lassoes (default), 1 = press-drag draws a rectangle  <Enter reports>:")
+                };
+                let c = ValuePromptCommand::new(name, prompt);
+                self.command_line.push_info(&c.prompt());
+                self.tabs[i].active_cmd = Some(Box::new(c));
+            }
+            cmd if cmd.starts_with("PICKADD ") || cmd.starts_with("PICKDRAG ") => {
+                let is_add = cmd.starts_with("PICKADD");
+                let arg = cmd.splitn(2, ' ').nth(1).unwrap_or("").trim();
+                if arg.is_empty() {
+                    let v = if is_add {
+                        u8::from(self.pick_add)
+                    } else {
+                        u8::from(self.pick_drag_rect)
+                    };
+                    self.command_line.push_output(&format!(
+                        "{} = {v}",
+                        if is_add { "PICKADD" } else { "PICKDRAG" }
+                    ));
+                } else {
+                    match arg {
+                        "0" | "1" => {
+                            let on = arg == "1";
+                            if is_add {
+                                self.pick_add = on;
+                                self.command_line.push_output(&format!(
+                                    "PICKADD = {} ({})",
+                                    arg,
+                                    if on {
+                                        "click adds to selection"
+                                    } else {
+                                        "click replaces selection, Shift toggles"
+                                    }
+                                ));
+                            } else {
+                                self.pick_drag_rect = on;
+                                self.command_line.push_output(&format!(
+                                    "PICKDRAG = {} ({})",
+                                    arg,
+                                    if on {
+                                        "press-drag draws a rectangle"
+                                    } else {
+                                        "press-drag lassoes"
+                                    }
+                                ));
+                            }
+                            self.persist_settings_if_changed();
+                        }
+                        _ => self.command_line.push_error(&format!(
+                            "{}: expected 0 or 1.",
+                            if is_add { "PICKADD" } else { "PICKDRAG" }
+                        )),
+                    }
+                }
+            }
+
             // ── SETVAR — read / write system variables ───────────────────
             // SETVAR <name>          → report the value
             // SETVAR <name> <value>  → set it
