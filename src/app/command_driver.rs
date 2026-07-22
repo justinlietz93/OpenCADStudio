@@ -903,22 +903,30 @@ impl OpenCADStudio {
                         c.line_weight,
                     )
                 });
-                // Text-specific properties travel between text-like objects
-                // (TEXT ↔ MTEXT, both directions), like AutoCAD's "Text"
-                // special property (#361).
-                let text_props =
-                    self.tabs[i]
-                        .scene
-                        .document
-                        .get_entity(src)
-                        .and_then(|e| match e {
-                            acadrust::EntityType::Text(t) => Some((t.style.clone(), t.height)),
-                            acadrust::EntityType::MText(m) => Some((m.style.clone(), m.height)),
-                            _ => None,
-                        });
+                // Special (type-specific) properties travel like AutoCAD's
+                // Special Properties: each is captured from the source when it
+                // carries it and applied only to destinations that support it
+                // (#281). Text formatting crosses TEXT ↔ MTEXT (#361); the dim
+                // style crosses Dimension / Leader / Tolerance.
+                let src_clone = self.tabs[i].scene.document.get_entity(src).cloned();
+                let transparency = src_clone.as_ref().map(|e| e.common().transparency.clone());
+                // Dimension-style OVERRIDES ride the ACAD_DSTYLE xdata record;
+                // matching replicates the source's record (or clears the
+                // destination's when the source has none).
+                let dstyle_xdata: Option<Vec<acadrust::xdata::XDataValue>> = src_clone
+                    .as_ref()
+                    .filter(|e| {
+                        matches!(
+                            e,
+                            acadrust::EntityType::Dimension(_) | acadrust::EntityType::Leader(_)
+                        )
+                    })
+                    .and_then(|e| e.common().extended_data.get_record("ACAD_DSTYLE"))
+                    .map(|r| r.values.clone());
 
                 if let Some((layer, color, linetype, lt_scale, lw)) = props {
                     self.push_undo_snapshot(i, "MATCHPROP");
+                    let mut any_dim = false;
                     for h in &dest {
                         if let Some(e) = self.tabs[i].scene.document.get_entity_mut(*h) {
                             e.as_entity_mut().set_layer(layer.clone());
@@ -926,20 +934,59 @@ impl OpenCADStudio {
                             crate::scene::view::dispatch::apply_line_weight(e, lw);
                             e.common_mut().linetype = linetype.clone();
                             e.common_mut().linetype_scale = lt_scale;
-                            if let Some((style, height)) = &text_props {
-                                match e {
-                                    acadrust::EntityType::Text(t) => {
-                                        t.style = style.clone();
-                                        t.height = *height;
-                                    }
-                                    acadrust::EntityType::MText(m) => {
-                                        m.style = style.clone();
-                                        m.height = *height;
-                                    }
-                                    _ => {}
+                            if let Some(t) = &transparency {
+                                e.common_mut().transparency = t.clone();
+                            }
+                            if let Some(se) = &src_clone {
+                                if matches!(e, acadrust::EntityType::Dimension(_)) {
+                                    any_dim = true;
                                 }
+                                match_special_props(se, e);
                             }
                         }
+                        // Dim-style overrides (ACAD_DSTYLE) follow the style
+                        // for dimension / leader destinations — through
+                        // set_entity_xdata so no stale raw record survives.
+                        if dstyle_xdata.is_some()
+                            || matches!(
+                                self.tabs[i].scene.document.get_entity(*h),
+                                Some(
+                                    acadrust::EntityType::Dimension(_)
+                                        | acadrust::EntityType::Leader(_)
+                                )
+                            )
+                        {
+                            if matches!(
+                                self.tabs[i].scene.document.get_entity(*h),
+                                Some(
+                                    acadrust::EntityType::Dimension(_)
+                                        | acadrust::EntityType::Leader(_)
+                                )
+                            ) && matches!(
+                                src_clone,
+                                Some(
+                                    acadrust::EntityType::Dimension(_)
+                                        | acadrust::EntityType::Leader(_)
+                                )
+                            ) {
+                                crate::scene::view::dispatch::set_entity_xdata(
+                                    &mut self.tabs[i].scene.document,
+                                    *h,
+                                    "ACAD_DSTYLE",
+                                    dstyle_xdata.clone(),
+                                );
+                            }
+                        }
+                        // A restyled dimension renders from its baked *D block —
+                        // drop the stale block so the new style shows (#398).
+                        if any_dim {
+                            crate::modules::draw::modify::explode::invalidate_dim_block(
+                                &mut self.tabs[i].scene.document,
+                                *h,
+                            );
+                        }
+                        // Hatch fills render from a prebuilt model (#415).
+                        self.tabs[i].scene.refresh_fill_model(*h);
                     }
                     self.tabs[i].dirty = true;
                     // Color / linetype / lineweight are baked into the cached
@@ -2768,3 +2815,104 @@ fn apply_mleader_collect(scene: &mut crate::scene::Scene, encoded: &str) {
     // Erase the secondary multileaders.
     scene.erase_entities(&handles[1..]);
 }
+
+/// MATCHPROP special properties (#281): copy every STYLE-affecting field from
+/// `src` to `dst` when the destination supports it — never content (text
+/// strings, block names) or placement (positions, rotations of the object
+/// itself). Text formatting crosses TEXT ↔ MTEXT; the dimension style crosses
+/// Dimension / Leader / Tolerance.
+fn match_special_props(src: &acadrust::EntityType, dst: &mut acadrust::EntityType) {
+    use acadrust::EntityType as E;
+
+    // Text-ish source formatting.
+    let text_fmt = match src {
+        E::Text(t) => Some((t.style.clone(), t.height, t.width_factor, t.oblique_angle)),
+        E::MText(m) => Some((m.style.clone(), m.height, 1.0, 0.0)),
+        _ => None,
+    };
+    if let Some((style, height, wf, ob)) = text_fmt {
+        match dst {
+            E::Text(t) => {
+                t.style = style;
+                t.height = height;
+                if matches!(src, E::Text(_)) {
+                    t.width_factor = wf;
+                    t.oblique_angle = ob;
+                }
+            }
+            E::MText(m) => {
+                m.style = style;
+                m.height = height;
+            }
+            _ => {}
+        }
+    }
+    // MText-only extras (line spacing, background fill).
+    if let (E::MText(sm), E::MText(dm)) = (src, dst as &mut E) {
+        dm.drawing_direction = sm.drawing_direction;
+        dm.line_spacing_factor = sm.line_spacing_factor;
+        dm.line_spacing_style = sm.line_spacing_style;
+        dm.background_fill_flags = sm.background_fill_flags;
+        dm.background_scale = sm.background_scale;
+        dm.background_color = sm.background_color;
+        dm.background_transparency = sm.background_transparency;
+    }
+
+    // Dimension style name crosses the three dim-styled families.
+    let dim_style = match src {
+        E::Dimension(d) => Some(d.base().style_name.clone()),
+        E::Leader(l) => Some(l.dimension_style.clone()),
+        E::Tolerance(t) => Some(t.dimension_style_name.clone()),
+        _ => None,
+    };
+    if let Some(ds) = dim_style {
+        match dst {
+            E::Dimension(d) => d.base_mut().style_name = ds,
+            E::Leader(l) => l.dimension_style = ds,
+            E::Tolerance(t) => t.dimension_style_name = ds,
+            _ => {}
+        }
+    }
+
+    // Hatch pattern / gradient — everything but the boundary.
+    if let (E::Hatch(sh), E::Hatch(dh)) = (src, dst as &mut E) {
+        dh.pattern = sh.pattern.clone();
+        dh.pattern_type = sh.pattern_type;
+        dh.pattern_angle = sh.pattern_angle;
+        dh.pattern_scale = sh.pattern_scale;
+        dh.is_solid = sh.is_solid;
+        dh.gradient_color = sh.gradient_color.clone();
+    }
+
+    // Polyline display style: width + linetype generation.
+    if let (E::LwPolyline(sp), E::LwPolyline(dp)) = (src, dst as &mut E) {
+        dp.constant_width = sp.constant_width;
+        dp.plinegen = sp.plinegen;
+        for v in &mut dp.vertices {
+            v.start_width = sp.constant_width;
+            v.end_width = sp.constant_width;
+        }
+    }
+
+    // MultiLeader style + every style-affecting override; content and
+    // geometry (leader points, text, block handle) stay.
+    if let (E::MultiLeader(sm), E::MultiLeader(dm)) = (src, dst as &mut E) {
+        dm.style_handle = sm.style_handle;
+        dm.path_type = sm.path_type;
+        dm.line_color = sm.line_color;
+        dm.line_type_handle = sm.line_type_handle;
+        dm.line_weight = sm.line_weight;
+        dm.enable_landing = sm.enable_landing;
+        dm.enable_dogleg = sm.enable_dogleg;
+        dm.dogleg_length = sm.dogleg_length;
+        dm.arrowhead_handle = sm.arrowhead_handle;
+        dm.arrowhead_size = sm.arrowhead_size;
+        dm.text_style_handle = sm.text_style_handle;
+        dm.text_color = sm.text_color;
+        dm.text_frame = sm.text_frame;
+        dm.text_height = sm.text_height;
+        dm.scale_factor = sm.scale_factor;
+        dm.property_override_flags = sm.property_override_flags;
+    }
+}
+
