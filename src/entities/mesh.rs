@@ -685,12 +685,23 @@ impl TruckConvertible for Mesh {
             }
         }
 
-        let snap_pts: Vec<(glam::DVec3, SnapHint)> = self
-            .vertices
-            .iter()
-            .map(|v| (glam::DVec3::new(v.x, v.y, v.z), SnapHint::Node))
-            .collect();
-        let key_vertices: Vec<[f64; 3]> = self.vertices.iter().map(|v| [v.x, v.y, v.z]).collect();
+        // Per-vertex snap tables cost ~56 B/vertex and are retained in every
+        // copy of the wire set. On NWD-scale imports (#358: tens of millions
+        // of mesh vertices) that is GBs for snap targets far too dense to
+        // pick apart on screen — so past this size ship none, which is what
+        // PolyfaceMesh / PolygonMesh already do at any size.
+        const SNAP_TABLE_MAX_VERTICES: usize = 50_000;
+        let (snap_pts, key_vertices) = if self.vertices.len() > SNAP_TABLE_MAX_VERTICES {
+            (Vec::new(), Vec::new())
+        } else {
+            (
+                self.vertices
+                    .iter()
+                    .map(|v| (glam::DVec3::new(v.x, v.y, v.z), SnapHint::Node))
+                    .collect(),
+                self.vertices.iter().map(|v| [v.x, v.y, v.z]).collect(),
+            )
+        };
 
         Some(TruckEntity {
             pick_tris: Vec::new(),
