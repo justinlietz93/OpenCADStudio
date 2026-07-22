@@ -1732,6 +1732,9 @@ impl OpenCADStudio {
                     iced::Event::Window(window::Event::Resized(sz)) => {
                         Some(Message::WindowResized(sz.width as f32, sz.height as f32))
                     }
+                    iced::Event::Window(window::Event::FileDropped(path)) => {
+                        Some(Message::FileDropped(path))
+                    }
                     iced::Event::Keyboard(keyboard::Event::ModifiersChanged(m)) => {
                         // `command()` is Cmd on macOS, Ctrl elsewhere — the
                         // platform multi-select modifier for the layer list.

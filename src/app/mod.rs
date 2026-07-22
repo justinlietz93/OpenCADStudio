@@ -1260,6 +1260,8 @@ pub enum Message {
     /// File picker returned. `Some((path, size_in_bytes))` → start loading;
     /// `None` → user cancelled the dialog (no overlay shown).
     OpenPathPicked(Option<(PathBuf, u64)>),
+    /// A file was dragged from the desktop and dropped on the window (#344).
+    FileDropped(PathBuf),
     /// Open a path from the Start tab's recent-documents list (skips the
     /// file picker; the path is already known).
     OpenRecent(PathBuf),

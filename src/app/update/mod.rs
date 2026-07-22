@@ -292,6 +292,34 @@ impl OpenCADStudio {
                 }
             }
 
+            Message::FileDropped(path) => {
+                // Desktop drag & drop (#344): accept the formats the Open
+                // dialog accepts — a drop has no picker filter, so anything
+                // else reports instead of failing silently in the parser.
+                let ext = path
+                    .extension()
+                    .map(|e| e.to_string_lossy().to_lowercase())
+                    .unwrap_or_default();
+                if !matches!(ext.as_str(), "dwg" | "dxf" | "bak" | "sv$") {
+                    self.command_line.push_error(&format!(
+                        "Unsupported file type: {}",
+                        path.display()
+                    ));
+                    return Task::none();
+                }
+                // Already open → switch to its tab; a load in progress →
+                // queue behind it (multi-file drops arrive one event each).
+                if let Some(idx) = self.tab_showing(&path) {
+                    return self.update(Message::TabSwitch(idx));
+                }
+                if self.opening.is_some() {
+                    self.pending_opens.push_back(path);
+                    Task::none()
+                } else {
+                    self.update(Message::OpenRecent(path))
+                }
+            }
+
             Message::RecentRemove(path) => {
                 self.remove_recent(&path);
                 Task::none()
