@@ -922,6 +922,49 @@ pub enum MTextVAnchor {
     BottomOfTopLine,
 }
 
+/// Flow axis + signed attachment-side factor for a text box's width/wrap
+/// grip. ONE place for every text-bearing entity (MTEXT, MLEADER, …):
+///
+/// - `dir`: the flow axis — the rotated baseline for horizontal text, DOWN
+///   the column for top-to-bottom text.
+/// - `k`: which side of the insertion the box actually forms on, from the
+///   attachment that governs the flow axis: start-attached `+1`, centre
+///   `±half`, end-attached `-1` (a right-attached horizontal text forms LEFT
+///   of its insertion; a bottom-anchored vertical text forms UP).
+///
+/// Grip position = `insertion + dir · (k · width)`; a drag re-derives
+/// `width = proj(dir) / k`, so pulling the grip on either side widens the
+/// same box.
+pub fn flow_grip_axis(
+    rotation: f64,
+    vertical: bool,
+    h_anchor: f32,
+    v_anchor: MTextVAnchor,
+) -> (glam::DVec3, f64) {
+    let (c, s) = (rotation.cos(), rotation.sin());
+    let dir = if vertical {
+        glam::DVec3::new(s, -c, 0.0)
+    } else {
+        glam::DVec3::new(c, s, 0.0)
+    };
+    let k = if vertical {
+        match v_anchor {
+            MTextVAnchor::Top
+            | MTextVAnchor::MiddleOfTopLine
+            | MTextVAnchor::BottomOfTopLine => 1.0,
+            MTextVAnchor::Middle => 0.5,
+            MTextVAnchor::Bottom | MTextVAnchor::MiddleOfBottomLine => -1.0,
+        }
+    } else if h_anchor >= 0.75 {
+        -1.0
+    } else if h_anchor >= 0.25 {
+        0.5
+    } else {
+        1.0
+    };
+    (dir, k)
+}
+
 /// Render inputs for [`layout_mtext`]. The caller resolves the text style
 /// once and feeds the entity's geometry; the helper handles the entire
 /// parse → wrap → render pipeline and returns both the rendered strokes and
@@ -1021,6 +1064,11 @@ pub struct MTextLayout {
     /// One world-space AABB per visible character — only populated when
     /// `MTextRenderOpts::want_glyph_boxes` is set.
     pub glyph_boxes: Vec<GlyphBox>,
+    /// Pre-rotation glyph bounds in entity-local coordinates relative to the
+    /// insertion point: [min_x, min_y, max_x, max_y]. Inverted (min > max)
+    /// when the layout produced no glyphs. Valid for horizontal AND vertical
+    /// flow, so frame/background boxes can wrap what was actually drawn.
+    pub local_bounds: [f32; 4],
 }
 
 /// Lay out and render an MText-formatted value, returning the stroke
@@ -1156,8 +1204,16 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
 
         // Wrap to the column the text actually flows down, not to the block:
         // measuring against the full width would let a line run across the
-        // gutter and over its neighbour.
-        let wrap_w = if cols.active() { cols.width } else { rect_w };
+        // gutter and over its neighbour. Vertical flow never pre-wraps
+        // horizontally — there rect_w is the COLUMN length, applied by the
+        // render's own down-the-column word wrap.
+        let wrap_w = if opts.vertical_text {
+            0.0
+        } else if cols.active() {
+            cols.width
+        } else {
+            rect_w
+        };
         let wrapped = wrap_paragraph(
             atoms,
             wrap_w,
@@ -1386,6 +1442,74 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
 
     // ── 4. Render each sub-line ──────────────────────────────────────────
     let mut all_strokes: Vec<TextStroke> = Vec::new();
+    let mut local_bounds = [f32::MAX, f32::MAX, f32::MIN, f32::MIN];
+    // Vertical-flow block metrics: each sub-line is a COLUMN (1.2h step), each
+    // atom cell 1.4h tall. The justification anchors place this block the way
+    // the horizontal path places its line stack.
+    // With a defined width (the flow grip, measuring DOWN the column for
+    // vertical text), a column wraps: characters past the limit spill into a
+    // fresh column to the right.
+    let v_cell = entity_h * 1.4;
+    let v_col_limit: usize = if opts.vertical_text && rect_w > 0.0 {
+        ((rect_w / v_cell).floor() as usize).max(1)
+    } else {
+        usize::MAX
+    };
+    let (v_block_w, v_block_h) = if opts.vertical_text {
+        // Mirror the render's WORD-boundary column wrap exactly (a word that
+        // would overrun moves whole to the next column; an over-long word
+        // overflows its own column; a space at a column start/break is
+        // consumed) — a char-count estimate here under-counts columns and
+        // over/under-sizes the block, which drags every non-start-anchored
+        // text away from its attachment.
+        let sim_line = |sub: &SubLine| -> (usize, usize) {
+            let mut cols = 1usize;
+            let mut cur = 0usize;
+            let mut tallest = 0usize;
+            for a in &sub.atoms {
+                match &a.kind {
+                    AtomKind::Word(t) => {
+                        let w = t.chars().count();
+                        if v_col_limit != usize::MAX && cur > 0 && cur + w > v_col_limit {
+                            cols += 1;
+                            cur = 0;
+                        }
+                        cur += w;
+                        tallest = tallest.max(cur);
+                    }
+                    _ => {
+                        if cur == 0 {
+                            continue;
+                        }
+                        if v_col_limit != usize::MAX && cur + 1 > v_col_limit {
+                            cols += 1;
+                            cur = 0;
+                        } else {
+                            cur += 1;
+                            tallest = tallest.max(cur);
+                        }
+                    }
+                }
+            }
+            (cols, tallest.max(1))
+        };
+        let mut total_cols = 0usize;
+        let mut tallest = 0usize;
+        for sub in &sub_lines {
+            let (c, t) = sim_line(sub);
+            total_cols += c;
+            tallest = tallest.max(t);
+        }
+        (
+            total_cols.max(1) as f32 * entity_h * 1.2,
+            tallest as f32 * v_cell,
+        )
+    } else {
+        (0.0, 0.0)
+    };
+    // Running column index across sub-lines (vertical flow): overflow columns
+    // shift every later paragraph's column right.
+    let mut v_col: usize = 0;
     let mut line_widths: Vec<f32> = Vec::with_capacity(sub_lines.len());
     let mut glyph_boxes: Vec<GlyphBox> = Vec::new();
     let mut vis: usize = 0;
@@ -1408,16 +1532,32 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         } else {
             (box_left, rect_w)
         };
-        let (line_base_x, line_base_y) = if opts.vertical_text {
-            let col_offset = li * entity_h * 1.2;
+        if opts.vertical_text && i > 0 {
+            // Each paragraph starts a fresh column after the previous
+            // paragraph's (possibly wrapped) columns.
+            v_col += 1;
+        }
+        let v_col_start = v_col;
+        let (line_lx, line_ly) = if opts.vertical_text {
+            // Anchor the column block: X by the attachment's horizontal
+            // anchor over the block width, Y so the block hangs below /
+            // straddles / sits above the insertion per the vertical anchor
+            // (columns run DOWN from their line_ly).
+            let top_y = match opts.v_anchor {
+                MTextVAnchor::Top | MTextVAnchor::MiddleOfTopLine => 0.0,
+                MTextVAnchor::BottomOfTopLine => entity_h * 1.4,
+                MTextVAnchor::Middle => v_block_h * 0.5,
+                MTextVAnchor::Bottom | MTextVAnchor::MiddleOfBottomLine => v_block_h,
+            };
             (
-                col_offset * cos_r + v_offset * (-sin_r),
-                col_offset * sin_r + v_offset * cos_r,
+                -attach_h_anchor * v_block_w + v_col as f32 * entity_h * 1.2,
+                top_y,
             )
         } else {
-            let ly = line_y_offset[i] + v_offset;
-            (ly * (-sin_r), ly * cos_r)
+            (0.0, line_y_offset[i] + v_offset)
         };
+        let line_base_x = line_lx * cos_r - line_ly * sin_r;
+        let line_base_y = line_lx * sin_r + line_ly * cos_r;
 
         let content_left = if rect_w > 0.0 {
             box_left
@@ -1530,7 +1670,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
             }
         };
 
-        let mut cursor_x = cursor_start;
+        let mut cursor_x = if opts.vertical_text { 0.0 } else { cursor_start };
         for (ai, atom) in sub.atoms.iter().enumerate() {
             match &atom.kind {
                 AtomKind::Word(text) => {
@@ -1539,6 +1679,76 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         base_wf.signum() * atom.state.width_mul * base_wf.abs();
                     let oblique = base_oblique + atom.state.oblique_rad;
                     let font_name = resolve_font(&atom.state, &base_font_name);
+                    if opts.vertical_text {
+                        // Vertical (top-to-bottom) text: every character sits
+                        // in its own cell stacked DOWN the column — the line
+                        // cursor runs down, not across. Each char becomes its
+                        // own single-glyph run so the SDF path draws it at its
+                        // cell origin; 1.4×height is the classic vertical cell
+                        // advance.
+                        let color =
+                            atom.state.color.as_ref().and_then(resolve_inline_color);
+                        let cell = run_h * 1.4;
+                        // Word wrap, vertically: a word that would overrun the
+                        // column limit moves WHOLE to the next column (the
+                        // vertical analogue of space-boundary wrapping). A word
+                        // longer than the limit overflows its own column, like
+                        // a long word overflows a narrow horizontal box.
+                        let word_len = text.chars().count() as f32 * cell;
+                        if v_col_limit != usize::MAX
+                            && cursor_x > 0.0
+                            && cursor_x + word_len > v_col_limit as f32 * v_cell + 1e-3
+                        {
+                            v_col += 1;
+                            cursor_x = 0.0;
+                        }
+                        for ch in text.chars() {
+                            let col_dx = (v_col - v_col_start) as f32 * entity_h * 1.2;
+                            let s = ch.to_string();
+                            let (strokes, fill_tris) = lff::tessellate_text_run(
+                                [0.0, 0.0],
+                                run_h,
+                                rot,
+                                signed_wf,
+                                oblique,
+                                atom.state.tracking,
+                                &font_name,
+                                &s,
+                            );
+                            let ly = -(cursor_x + cell);
+                            let world_dx = col_dx * cos_r - ly * sin_r;
+                            let world_dy = col_dx * sin_r + ly * cos_r;
+                            let origin: [f64; 2] = [
+                                ins_x + (line_base_x + world_dx) as f64,
+                                ins_y + (line_base_y + world_dy) as f64,
+                            ];
+                            all_strokes.push(TextStroke {
+                                strokes,
+                                origin,
+                                color,
+                                fill_tris,
+                                run: Some(GlyphRun {
+                                    text: s,
+                                    font: font_name.to_string(),
+                                    height: run_h,
+                                    rotation: rot,
+                                    width_factor: signed_wf,
+                                    oblique,
+                                    tracking: atom.state.tracking,
+                                    bold: atom.state.bold,
+                                }),
+                            });
+                            let gx = line_lx + col_dx;
+                            let (gy0, gy1) = (line_ly + ly, line_ly + ly + run_h);
+                            local_bounds[0] = local_bounds[0].min(gx);
+                            local_bounds[1] = local_bounds[1].min(gy0);
+                            local_bounds[2] = local_bounds[2].max(gx + run_h);
+                            local_bounds[3] = local_bounds[3].max(gy1);
+                            vis += 1;
+                            cursor_x += cell;
+                        }
+                        continue;
+                    }
                     // Distribute widens letter tracking so each glyph advances an
                     // extra `gap`; `tracking` scales the font's letter_spacing, so
                     // invert that to land the exact world gap. A zero-spacing font
@@ -1655,6 +1865,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                     }
                     // Advance by the same tracking the glyphs drew with, so a
                     // distributed word's letters and the atoms after it stay put.
+                    let word_x0 = lx;
                     if tracking != atom.state.tracking {
                         let mut st = atom.state.clone();
                         st.tracking = tracking;
@@ -1663,6 +1874,10 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                         cursor_x +=
                             measure_word(text, &atom.state, entity_h, base_wf, &base_font_name);
                     }
+                    local_bounds[0] = local_bounds[0].min(word_x0);
+                    local_bounds[1] = local_bounds[1].min(line_ly + ly);
+                    local_bounds[2] = local_bounds[2].max(cursor_x);
+                    local_bounds[3] = local_bounds[3].max(line_ly + ly + run_h);
                 }
                 AtomKind::Stack {
                     numerator,
@@ -1756,6 +1971,24 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
                     cursor_x += slot_w;
                 }
                 AtomKind::Space => {
+                    if opts.vertical_text {
+                        // One empty cell down the column; a space that lands
+                        // on a column break is consumed by it (no leading
+                        // blank cell at the top of a column).
+                        let cell = atom.state.height_mul * entity_h * 1.4;
+                        if cursor_x <= 1e-6 {
+                            continue;
+                        }
+                        if v_col_limit != usize::MAX
+                            && cursor_x + cell > v_col_limit as f32 * v_cell + 1e-3
+                        {
+                            v_col += 1;
+                            cursor_x = 0.0;
+                        } else {
+                            cursor_x += cell;
+                        }
+                        continue;
+                    }
                     // Justify / distribute widen every word gap by `gap`.
                     let adv =
                         measure_space(&atom.state, entity_h, base_wf, &base_font_name) + gap;
@@ -1914,6 +2147,7 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         line_height: line_h,
         v_offset,
         glyph_boxes,
+        local_bounds,
     }
 }
 

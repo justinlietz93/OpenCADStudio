@@ -187,14 +187,50 @@ fn to_truck(t: &MText, document: &acadrust::CadDocument) -> TruckEntity {
     }
 }
 
+/// The MTEXT's attachment anchors in the shared layout vocabulary.
+fn attach_anchors(t: &MText) -> (f32, MTextVAnchor) {
+    let h: f32 = match t.attachment_point {
+        AttachmentPoint::TopCenter
+        | AttachmentPoint::MiddleCenter
+        | AttachmentPoint::BottomCenter => 0.5,
+        AttachmentPoint::TopRight | AttachmentPoint::MiddleRight | AttachmentPoint::BottomRight => {
+            1.0
+        }
+        _ => 0.0,
+    };
+    let v = match t.attachment_point {
+        AttachmentPoint::TopLeft | AttachmentPoint::TopCenter | AttachmentPoint::TopRight => {
+            MTextVAnchor::Top
+        }
+        AttachmentPoint::MiddleLeft
+        | AttachmentPoint::MiddleCenter
+        | AttachmentPoint::MiddleRight => MTextVAnchor::Middle,
+        AttachmentPoint::BottomLeft
+        | AttachmentPoint::BottomCenter
+        | AttachmentPoint::BottomRight => MTextVAnchor::Bottom,
+    };
+    (h, v)
+}
+
+/// Flow axis + attachment-side factor, from the shared text-grip helper.
+fn width_grip_axis(t: &MText) -> (glam::DVec3, f64) {
+    let (h, v) = attach_anchors(t);
+    crate::entities::text_support::flow_grip_axis(
+        t.rotation,
+        matches!(t.drawing_direction, DrawingDirection::TopToBottom),
+        h,
+        v,
+    )
+}
+
 fn grips(t: &MText) -> Vec<GripDef> {
     let p = glam::DVec3::new(
         t.insertion_point.x,
         t.insertion_point.y,
         t.insertion_point.z,
     );
-    let dir = glam::DVec3::new(t.rotation.cos(), t.rotation.sin(), 0.0);
-    let width_grip = p + dir * t.rectangle_width.max(0.0);
+    let (dir, k) = width_grip_axis(t);
+    let width_grip = p + dir * (k * t.rectangle_width.max(0.0));
     vec![square_grip(0, p), triangle_grip(1, width_grip)]
 }
 
@@ -491,12 +527,14 @@ fn apply_grip(t: &mut MText, grip_id: usize, apply: GripApply) {
             t.insertion_point.z += d.z as f64;
         }
         (1, GripApply::Absolute(p)) => {
-            let dir_x = t.rotation.cos();
-            let dir_y = t.rotation.sin();
+            // Project onto the flow axis the grip is drawn on, undoing the
+            // attachment-side factor so dragging the grip on either side of
+            // the insertion widens the same box.
+            let (dir, k) = width_grip_axis(t);
             let dx = p.x as f64 - t.insertion_point.x;
             let dy = p.y as f64 - t.insertion_point.y;
-            let projected = dx * dir_x + dy * dir_y;
-            t.rectangle_width = projected.max(0.01);
+            let projected = dx * dir.x + dy * dir.y;
+            t.rectangle_width = (projected / k).max(0.01);
         }
         _ => {}
     }
