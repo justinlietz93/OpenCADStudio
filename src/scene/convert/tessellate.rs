@@ -1706,6 +1706,13 @@ fn solid_wire_fallback(entity: &EntityType) -> Vec<[f64; 3]> {
     if wires.is_empty() {
         return vec![];
     }
+    // Parseable ACIS → the mesh pipeline draws the body (placed); the embedded
+    // display-cache wires are body-local and would render unplaced at the
+    // origin (garbage for AcDs-backed solids). Only unreadable ACIS falls
+    // back to them.
+    if crate::entities::solid3d::acis_parses(entity) {
+        return vec![];
+    }
 
     let mut pts: Vec<[f64; 3]> = Vec::new();
     for wire in wires {
