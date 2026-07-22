@@ -2,7 +2,7 @@ use acadrust::entities::{BoundaryEdge, Hatch};
 use glam::Vec3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{center_grip, circle_grip, edit_prop as edit, parse_f64, ro_prop as ro};
+use crate::entities::common::{center_grip, circle_grip, edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro};
 use crate::entities::traits::{FallbackTess, Grippable, PropertyEditable, Transformable};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::convert::tess_util::{arc_segments, arc_signed_span, wire_chord_tol, FallbackGeometry};
@@ -250,7 +250,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
                         field: "gradient_color_2",
                         value: PropValue::ColorChoice(grad_c2),
                     },
-                    edit("Angle", "pattern_angle", g.angle.to_degrees()),
+                    edit_angle("Angle", "pattern_angle", g.angle.to_degrees()),
                     ro("Centered", "gradient_centered", centered),
                 ],
             },
@@ -359,7 +359,7 @@ fn properties(h: &Hatch) -> Vec<PropSection> {
                 type_row,
                 pattern_name_row,
                 ro("Annotative", "annotative", String::new()),
-                edit("Angle", "pattern_angle", h.pattern_angle.to_degrees()),
+                edit_angle("Angle", "pattern_angle", h.pattern_angle.to_degrees()),
                 edit("Scale", "pattern_scale", h.pattern_scale),
                 edit("Origin X", "origin_x", origin_x),
                 edit("Origin Y", "origin_y", origin_y),

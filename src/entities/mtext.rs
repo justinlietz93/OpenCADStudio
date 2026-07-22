@@ -2,7 +2,7 @@ use acadrust::entities::{AttachmentPoint, DrawingDirection, MText};
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
+    edit_angle_prop as edit_angle, edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
 };
 use crate::entities::text_support::{
     layout_mtext, resolve_text_style, GlyphBox, MTextColumns, MTextRenderOpts, MTextVAnchor,
@@ -275,7 +275,7 @@ fn properties(t: &MText, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 edit("Text height", "height", t.height),
-                edit("Rotation", "rotation", t.rotation.to_degrees()),
+                edit_angle("Rotation", "rotation", t.rotation.to_degrees()),
                 edit("Line space factor", "line_spacing", t.line_spacing_factor),
                 edit("Line space distance", "line_space_distance", line_space_distance),
                 Property {

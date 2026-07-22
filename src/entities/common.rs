@@ -94,7 +94,6 @@ pub fn format_length(value: f64) -> String {
 }
 
 /// Format an angle (input in radians) using AUNITS / AUPREC.
-#[allow(dead_code)]
 pub fn format_angle(value_rad: f64) -> String {
     let ctx = unit_context();
     let prec = ctx.auprec.max(0) as usize;
@@ -184,6 +183,18 @@ pub fn triangle_grip(id: usize, world: glam::DVec3) -> GripDef {
     }
 }
 
+/// Editable ANGLE row: displays via AUNITS/AUPREC. Angle rows used the
+/// LINEAR formatter, so LUNITS=Architectural showed a block rotation as
+/// feet-and-inches and the string wouldn't parse back (#297). Value in
+/// DEGREES, matching every angle call site.
+pub fn edit_angle_prop(label: &'static str, field: &'static str, value_deg: f64) -> Property {
+    Property {
+        label: label.into(),
+        field,
+        value: PropValue::EditText(format_angle(value_deg.to_radians())),
+    }
+}
+
 pub fn edit_prop(label: &'static str, field: &'static str, value: f64) -> Property {
     Property {
         label: label.into(),
@@ -230,7 +241,54 @@ pub fn stepper_prop(
 }
 
 pub fn parse_f64(value: &str) -> Option<f64> {
-    value.trim().parse::<f64>().ok()
+    let t = value.trim();
+    // Angle rows display via AUNITS (#297) — accept those formats back.
+    t.parse::<f64>().ok().or_else(|| parse_angle_deg(t))
+}
+
+/// Parse an angle string the panel displayed via AUNITS back to DEGREES:
+/// "30", "30°"/"30d", DMS "30°15'20.5\"", grads "33.33g", radians "0.52r".
+pub fn parse_angle_deg(value: &str) -> Option<f64> {
+    let s = value.trim();
+    if s.is_empty() {
+        return None;
+    }
+    if let Ok(v) = s.parse::<f64>() {
+        return Some(v);
+    }
+    let lower = s.to_ascii_lowercase();
+    if let Some(num) = lower.strip_suffix('g') {
+        return num.trim().parse::<f64>().ok().map(|g| g * 0.9);
+    }
+    if let Some(num) = lower.strip_suffix('r') {
+        return num.trim().parse::<f64>().ok().map(f64::to_degrees);
+    }
+    // Degrees with optional DMS parts: [-]D(°|d)[M'[S"]]
+    let mut rest = s;
+    let neg = rest.starts_with('-');
+    if neg {
+        rest = &rest[1..];
+    }
+    let i = rest.find(['°', 'd', 'D'])?;
+    let d: f64 = rest[..i].trim().parse().ok()?;
+    let mut total = d;
+    let tail = rest[i..]
+        .trim_start_matches(['°', 'd', 'D'])
+        .trim();
+    if !tail.is_empty() {
+        let (mpart, spart) = match tail.find('\'') {
+            Some(j) => (&tail[..j], &tail[j + 1..]),
+            None => (tail, ""),
+        };
+        if !mpart.trim().is_empty() {
+            total += mpart.trim().parse::<f64>().ok()? / 60.0;
+        }
+        let sp = spart.trim().trim_end_matches('"').trim();
+        if !sp.is_empty() {
+            total += sp.parse::<f64>().ok()? / 3600.0;
+        }
+    }
+    Some(if neg { -total } else { total })
 }
 
 /// Bulge → arc geometry for a polyline segment.

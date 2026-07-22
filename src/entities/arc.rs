@@ -3,7 +3,7 @@ use truck_modeling::{builder, Point3};
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    center_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
+    center_grip, edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
 };
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{extrusion_wall_tris, TruckEntity, TruckObject};
@@ -164,8 +164,8 @@ fn properties(arc: &Arc) -> Vec<PropSection> {
             ro("End Y", "end_y", format!("{ey:.4}")),
             ro("End Z", "end_z", format!("{ez:.4}")),
             edit("Radius", "radius", arc.radius),
-            edit("Start angle", "start_angle", sa.to_degrees()),
-            edit("End angle", "end_angle", ea.to_degrees()),
+            edit_angle("Start angle", "start_angle", sa.to_degrees()),
+            edit_angle("End angle", "end_angle", ea.to_degrees()),
             ro("Total angle", "total_angle", format!("{total_angle:.2}")),
             ro("Arc length", "arc_length", format!("{arc_length:.4}")),
             ro("Area", "area", format!("{area:.4}")),

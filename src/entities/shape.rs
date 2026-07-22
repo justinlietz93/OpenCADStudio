@@ -8,7 +8,7 @@
 use acadrust::entities::Shape;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{edit_prop as edit, ro_prop as ro, square_grip};
+use crate::entities::common::{edit_angle_prop as edit_angle, edit_prop as edit, ro_prop as ro, square_grip};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, Property, PropValue};
@@ -149,9 +149,9 @@ impl PropertyEditable for Shape {
                 edit("Insert Y", "shp_iy", self.insertion_point.y),
                 edit("Insert Z", "shp_iz", self.insertion_point.z),
                 edit("Size", "shp_sz", self.size),
-                edit("Rotation", "shp_rot", self.rotation.to_degrees()),
+                edit_angle("Rotation", "shp_rot", self.rotation.to_degrees()),
                 edit("Width Factor", "shp_xs", self.relative_x_scale),
-                edit("Oblique Angle", "shp_ob", self.oblique_angle.to_degrees()),
+                edit_angle("Oblique Angle", "shp_ob", self.oblique_angle.to_degrees()),
                 edit("Normal X", "shp_nx", self.normal.x),
                 edit("Normal Y", "shp_ny", self.normal.y),
                 edit("Normal Z", "shp_nz", self.normal.z),

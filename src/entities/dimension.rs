@@ -7,7 +7,7 @@ use glam::{DVec3, Vec3};
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    center_grip, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
+    center_grip, edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro, square_grip,
 };
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable};
 use crate::scene::model::object::{GripApply, GripDef, PropSection};
@@ -78,7 +78,7 @@ fn properties(dim: &Dimension) -> Vec<PropSection> {
                 d.second_point,
                 d.definition_point,
             ));
-            props.push(edit("Rotation (deg)", "rotation", d.rotation.to_degrees()));
+            props.push(edit_angle("Rotation", "rotation", d.rotation.to_degrees()));
             props.push(edit(
                 "Ext Rotation (deg)",
                 "ext_line_rotation",

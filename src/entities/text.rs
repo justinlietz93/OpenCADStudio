@@ -2,7 +2,7 @@ use acadrust::entities::{Text, TextHorizontalAlignment as HA, TextVerticalAlignm
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    edit_prop as edit, num_prop as num_row, parse_f64, ro_prop as ro, square_grip,
+    edit_angle_prop as edit_angle, edit_prop as edit, num_prop as num_row, parse_f64, ro_prop as ro, square_grip,
 };
 use crate::entities::text_support::{
     resolve_dxf_special_chars, resolve_text_style, text_local_bounds,
@@ -325,9 +325,9 @@ fn properties(t: &Text, text_style_names: &[String]) -> Vec<PropSection> {
                     },
                 },
                 edit("Height", "height", t.height),
-                edit("Rotation", "rotation", t.rotation.to_degrees()),
+                edit_angle("Rotation", "rotation", t.rotation.to_degrees()),
                 edit("Width factor", "width_factor", t.width_factor),
-                edit("Obliquing", "oblique_angle", t.oblique_angle.to_degrees()),
+                edit_angle("Obliquing", "oblique_angle", t.oblique_angle.to_degrees()),
                 num_row("Text alignment X", "align_x", ax, align_editable),
                 num_row("Text alignment Y", "align_y", ay, align_editable),
                 num_row("Text alignment Z", "align_z", az, align_editable),

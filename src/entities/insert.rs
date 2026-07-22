@@ -4,7 +4,7 @@ use acadrust::{EntityType, Handle};
 use glam::Vec3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
+use crate::entities::common::{edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
 
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
 use crate::scene::model::wire_model::WireModel;
@@ -53,7 +53,7 @@ fn properties(ins: &Insert) -> Vec<PropSection> {
             title: "Misc".into(),
             props: vec![
                 ro("Name", "block", ins.block_name.clone()),
-                edit("Rotation", "rotation", ins.rotation.to_degrees()),
+                edit_angle("Rotation", "rotation", ins.rotation.to_degrees()),
                 ro(
                     "Annotative",
                     "annotative",

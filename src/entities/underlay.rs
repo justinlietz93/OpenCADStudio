@@ -7,7 +7,7 @@
 use acadrust::entities::{Underlay, UnderlayDisplayFlags};
 
 use crate::command::EntityTransform;
-use crate::entities::common::{center_grip, edit_prop as edit, ro_prop as ro, square_grip};
+use crate::entities::common::{center_grip, edit_angle_prop as edit_angle, edit_prop as edit, ro_prop as ro, square_grip};
 use crate::entities::traits::{Grippable, PropertyEditable, Transformable, TruckConvertible};
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
 use crate::scene::model::object::{GripApply, GripDef, PropSection, PropValue, Property};
@@ -189,7 +189,7 @@ impl PropertyEditable for Underlay {
                     edit("Scale Z", "ul_sz", self.z_scale),
                     ro("Width", "ul_width", format!("{:.4}", width)),
                     ro("Height", "ul_height", format!("{:.4}", height)),
-                    edit("Rotation", "ul_rot", self.rotation.to_degrees()),
+                    edit_angle("Rotation", "ul_rot", self.rotation.to_degrees()),
                 ],
             },
             PropSection {

@@ -31,7 +31,7 @@ use glam::DVec3;
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
-    center_grip, edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
+    center_grip, edit_angle_prop as edit_angle, edit_prop as edit, num_prop as num_row, ro_prop as ro, square_grip, triangle_grip,
 };
 use crate::entities::traits::TruckConvertible;
 use crate::scene::convert::acad_to_truck::{TruckEntity, TruckObject};
@@ -663,7 +663,7 @@ fn properties(ml: &MultiLeader) -> Vec<PropSection> {
             ),
             edit("Width", "text_width", ctx.text_width),
             edit("Height", "text_height", ml.text_height),
-            edit("Rotation", "text_rotation", ctx.text_rotation.to_degrees()),
+            edit_angle("Rotation", "text_rotation", ctx.text_rotation.to_degrees()),
             edit("Line space factor", "line_spacing", ctx.line_spacing_factor),
             edit(
                 "Line space distance",

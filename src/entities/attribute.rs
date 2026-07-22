@@ -5,7 +5,7 @@ use acadrust::entities::{AttributeDefinition, AttributeEntity};
 use acadrust::types::Vector3;
 
 use crate::command::EntityTransform;
-use crate::entities::common::{edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
+use crate::entities::common::{edit_angle_prop as edit_angle, edit_prop as edit, parse_f64, ro_prop as ro, square_grip};
 use crate::entities::text_support::{
     layout_mtext, resolve_dxf_special_chars, resolve_text_style, text_local_bounds,
     MTextRenderOpts, MTextVAnchor, ResolvedTextStyle,
@@ -468,9 +468,9 @@ impl PropertyEditable for AttributeDefinition {
                 },
             },
             edit("Height", "att_h", self.height),
-            edit("Rotation", "att_rot", self.rotation.to_degrees()),
+            edit_angle("Rotation", "att_rot", self.rotation.to_degrees()),
             edit("Width factor", "att_wf", self.width_factor),
-            edit("Obliquing", "att_ob", self.oblique_angle.to_degrees()),
+            edit_angle("Obliquing", "att_ob", self.oblique_angle.to_degrees()),
             edit("Text alignment X", "att_ax", self.alignment_point.x),
             edit("Text alignment Y", "att_ay", self.alignment_point.y),
             edit("Text alignment Z", "att_az", self.alignment_point.z),
@@ -739,9 +739,9 @@ impl PropertyEditable for AttributeEntity {
                         bool_yn(self.flags.annotative),
                     ),
                     edit("Height", "atte_h", self.height),
-                    edit("Rotation", "atte_rot", self.rotation.to_degrees()),
+                    edit_angle("Rotation", "atte_rot", self.rotation.to_degrees()),
                     edit("Width factor", "atte_wf", self.width_factor),
-                    edit("Obliquing", "atte_ob", self.oblique_angle.to_degrees()),
+                    edit_angle("Obliquing", "atte_ob", self.oblique_angle.to_degrees()),
                     edit("Text alignment X", "atte_ax", self.alignment_point.x),
                     edit("Text alignment Y", "atte_ay", self.alignment_point.y),
                     edit("Text alignment Z", "atte_az", self.alignment_point.z),
