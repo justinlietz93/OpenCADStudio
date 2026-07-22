@@ -144,6 +144,20 @@ fn compute_bulge(a: DVec2, tangent: DVec2, b: DVec2) -> f64 {
     (arc_angle / 4.0).tan()
 }
 
+/// Exit tangent of the segment `a` → `b` with `bulge` (0 = straight line):
+/// the chord direction rotated by half the arc sweep (the chord bisects the
+/// entry/exit tangents of a bulge arc). Used to restore tangent continuity
+/// after Undo pops a segment.
+fn seg_exit_tangent(a: DVec3, b: DVec3, bulge: f64) -> Option<Vec2> {
+    let d = DVec2::new(b.x - a.x, b.y - a.y);
+    if d.length_squared() < 1e-10 {
+        return None;
+    }
+    // Full sweep is 4·atan(bulge); the exit tangent sits half that past the chord.
+    let ang = d.y.atan2(d.x) + 2.0 * bulge.atan();
+    Some(Vec2::new(ang.cos() as f32, ang.sin() as f32))
+}
+
 /// Update `tangent` after an arc segment described by `bulge` from `a` to `b`.
 fn update_tangent_after_arc(tangent: &mut Option<Vec2>, bulge: f64) {
     let Some(t) = *tangent else {
@@ -235,6 +249,7 @@ impl CadCommand for PlineCommand {
                 CmdOption::new("Arc", "A"),
                 CmdOption::new("Line", "L"),
                 CmdOption::new("Close", "C"),
+                CmdOption::new("Undo", "U"),
                 CmdOption::enter("Done"),
             ]
         }
@@ -330,6 +345,35 @@ impl CadCommand for PlineCommand {
                 Some(CmdResult::NeedPoint)
             }
             "C" | "CLOSE" => Some(self.sync_live(true, true)),
+            // Undo: drop the last placed vertex but keep drawing (#352).
+            // Repeatable — each U backs off one more segment, down to (and
+            // including) the start point.
+            "U" | "UNDO" => {
+                if self.vertices.is_empty() {
+                    return Some(CmdResult::NeedPoint);
+                }
+                self.vertices.pop();
+                self.bulges.pop();
+                // Restore the exit tangent of the segment that is now last so
+                // a following Arc segment stays tangent-continuous.
+                let n = self.vertices.len();
+                self.last_tangent = if n >= 2 {
+                    seg_exit_tangent(self.vertices[n - 2], self.vertices[n - 1], self.bulges[n - 2])
+                } else {
+                    None
+                };
+                Some(match n {
+                    // Start point undone too — back to "Specify start point".
+                    0 => CmdResult::NeedPoint,
+                    // One vertex left: the live entity needs two, so it leaves
+                    // the document until the next point re-creates it.
+                    1 => match self.live_handle.take() {
+                        Some(h) => CmdResult::RemoveLiveEntity(h),
+                        None => CmdResult::NeedPoint,
+                    },
+                    _ => self.sync_live(false, false),
+                })
+            }
             _ => None,
         }
     }

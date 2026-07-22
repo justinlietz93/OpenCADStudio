@@ -808,6 +808,19 @@ impl OpenCADStudio {
                     }
                 }
             }
+            CmdResult::RemoveLiveEntity(handle) => {
+                // The command backed off below a valid entity (PLINE Undo at
+                // one remaining vertex): take the live entity out of the
+                // document and keep prompting. No undo bookkeeping — the
+                // create's snapshot already covers the whole in-progress
+                // object as one unit.
+                self.tabs[i].scene.erase_entities(&[handle]);
+                self.tabs[i].dirty = true;
+                let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
+                if let Some(p) = prompt {
+                    self.command_line.push_info(&p);
+                }
+            }
             CmdResult::Cancel => {
                 self.tabs[i].scene.clear_preview_wire();
                 self.tabs[i].active_cmd = None;

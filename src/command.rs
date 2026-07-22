@@ -983,6 +983,9 @@ pub enum CmdResult {
         entity: EntityType,
         finish: bool,
     },
+    /// Remove the live entity from the document but keep the command running —
+    /// PLINE's Undo popping back below the two vertices an entity needs.
+    RemoveLiveEntity(Handle),
     /// Suspends command execution, moves it to suspended_cmd, and opens the text editor for the given handle.
     SuspendForTextEdit { handle: Handle },
     /// Requests a standard document-level undo while keeping the command active.
