@@ -1101,12 +1101,24 @@ impl Scene {
         // pipeline's `wipeout_skip_flags` (compute_wipeout_lod) does
         // the per-frame skip at draw time instead.
         let depth_map = self.draw_depth_map();
+        let layout_block = self.current_layout_block_handle();
         let mut models = Vec::new();
         for entity in self.document.entities() {
             let EntityType::Wipeout(wo) = entity else {
                 continue;
             };
             if entity.common().invisible {
+                continue;
+            }
+            // Reject block-defn-only wipeouts (owned by a BLOCK record that is
+            // neither model nor a paper layout block): those are placed via
+            // insert descent below, in world space. Without this they also draw
+            // once at their raw block-local coordinates. Mirrors the hatch path.
+            if !self.belongs_to_visible_block(
+                wo.common.handle,
+                wo.common.owner_handle,
+                layout_block,
+            ) {
                 continue;
             }
             if self
@@ -1150,7 +1162,132 @@ impl Scene {
                 });
             }
         }
+        // Wipeouts nested inside block inserts: the loop above only sees
+        // top-level wipeouts, so a wipeout defined inside a block never masked
+        // once the block was inserted (it did in block-edit, where it is
+        // top-level). Descend visible inserts and place each block-internal
+        // wipeout in world space. The insert transform is applied here (apply /
+        // apply_rotation) rather than through Insert::explode — the latter
+        // double-scales the u/v basis.
+        for entity in self.document.entities() {
+            let EntityType::Insert(ins) = entity else {
+                continue;
+            };
+            let c = &ins.common;
+            if c.invisible
+                || self
+                    .document
+                    .layers
+                    .get(&c.layer)
+                    .map(|l| l.flags.off || l.flags.frozen)
+                    .unwrap_or(false)
+                || self.layer_frozen_in(&c.layer, frozen)
+            {
+                continue;
+            }
+            if !self.belongs_to_visible_block(c.handle, c.owner_handle, layout_block) {
+                continue;
+            }
+            if frozen.is_none()
+                && crate::scene::annotative::annotative_offscale(&self.document, c)
+            {
+                continue;
+            }
+            self.collect_block_wipeouts(
+                &ins.get_transform(),
+                &ins.block_name,
+                0,
+                frozen,
+                bg_color,
+                &depth_map,
+                &mut models,
+            );
+        }
         models
+    }
+
+    /// Recursively collect wipeout masks defined inside a block, transformed to
+    /// world space by the accumulated insert transform. See `wipeout_models`.
+    #[allow(clippy::too_many_arguments)]
+    fn collect_block_wipeouts(
+        &self,
+        xform: &acadrust::types::Transform,
+        block_name: &str,
+        depth: usize,
+        frozen: Option<&rustc_hash::FxHashSet<Handle>>,
+        bg_color: [f32; 4],
+        depth_map: &HashMap<u64, [f32; 2]>,
+        models: &mut Vec<HatchModel>,
+    ) {
+        if depth > 32 {
+            return;
+        }
+        let Some(br) = self
+            .document
+            .block_records
+            .iter()
+            .find(|b| b.name.eq_ignore_ascii_case(block_name))
+        else {
+            return;
+        };
+        for &eh in &br.entity_handles {
+            let Some(e) = self.document.get_entity(eh) else {
+                continue;
+            };
+            let c = e.common();
+            if c.invisible
+                || self
+                    .document
+                    .layers
+                    .get(&c.layer)
+                    .map(|l| l.flags.off || l.flags.frozen)
+                    .unwrap_or(false)
+                || self.layer_frozen_in(&c.layer, frozen)
+            {
+                continue;
+            }
+            match e {
+                EntityType::Wipeout(wo) => {
+                    let mut w = wo.clone();
+                    w.insertion_point = xform.apply(wo.insertion_point);
+                    w.u_vector = xform.apply_rotation(wo.u_vector);
+                    w.v_vector = xform.apply_rotation(wo.v_vector);
+                    let (fill_origin, boundary) = Self::wipeout_boundary_2d(&w);
+                    if boundary.len() >= 3 {
+                        let mut fill_color = bg_color;
+                        if self.selected.contains(&c.handle) {
+                            fill_color = [0.15, 0.55, 1.00, 0.35];
+                        }
+                        models.push(HatchModel {
+                            boundary: Arc::new(boundary),
+                            boundary_wcs: None,
+                            pattern: model::hatch_model::HatchPattern::Solid,
+                            name: "WIPEOUT_FILL".into(),
+                            color: fill_color,
+                            angle_offset: 0.0,
+                            scale: 1.0,
+                            world_origin: fill_origin,
+                            draw_depth: depth_map.get(&c.handle.value()).map_or(0.0, |d| d[0]),
+                        });
+                    }
+                }
+                EntityType::Insert(ni) => {
+                    // `compose` applies the nested insert's transform first,
+                    // then the accumulated parent transform.
+                    let child = xform.compose(&ni.get_transform());
+                    self.collect_block_wipeouts(
+                        &child,
+                        &ni.block_name,
+                        depth + 1,
+                        frozen,
+                        bg_color,
+                        depth_map,
+                        models,
+                    );
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Compute the 2D (XY) boundary polygon for a Wipeout entity.
