@@ -93,6 +93,11 @@ impl TruckConvertible for RasterImage {
         // place the boundary where AutoCAD draws it. Must match the raster's
         // own clip triangulation in `ImageModel` so outline and pixels align.
         let ih = self.size.y;
+        // Diagonals are the BROKEN-reference placeholder; a resolvable image
+        // draws its pixels inside the frame, so the X would scribble over it.
+        let path_probe = self.file_path.trim();
+        let resolvable = path_probe.is_empty()
+            || crate::scene::model::image_model::resolve_image(path_probe).is_some();
         let pts = if self.clipping_enabled {
             let cb = &self.clip_boundary;
             match cb.clip_type {
@@ -116,10 +121,10 @@ impl TruckConvertible for RasterImage {
                     let c3 = px_to_world(xa, yb);
                     vec![c0, c1, c2, c3, c0]
                 }
-                _ => image_wire(corners, true),
+                _ => image_wire(corners, !resolvable),
             }
         } else {
-            image_wire(corners, true)
+            image_wire(corners, !resolvable)
         };
 
         // A raster OCS can display renders its pixels (built separately) inside
