@@ -246,14 +246,7 @@ impl ImageModel {
             let pts: Vec<[f64; 2]> = u
                 .clip_boundary_vertices
                 .iter()
-                .map(|p| {
-                    (
-                        [
-                            p.x * u.x_scale / w_du,
-                            p.y * u.y_scale / h_du,
-                        ]
-                    )
-                })
+                .map(|p| [p.x * u.x_scale / w_du, p.y * u.y_scale / h_du])
                 .collect();
             let mut tris = Vec::with_capacity((pts.len().saturating_sub(2)) * 3);
             for i in 1..pts.len() - 1 {

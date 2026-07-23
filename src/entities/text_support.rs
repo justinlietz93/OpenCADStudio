@@ -1285,18 +1285,6 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
     }
 
     // ── 3. Block geometry (line spacing, attachment, rotation) ───────────
-    // Row of each sub-line *within its own column* — the flat index only tracks
-    // depth down the page when there is one column. Columns sit side by side, so
-    // each restarts at the top and the block is as deep as its longest one.
-    let mut col_rows = vec![0usize; cols.count.max(1)];
-    let row_in_column: Vec<f32> = sub_lines
-        .iter()
-        .map(|s| {
-            let r = col_rows[s.column];
-            col_rows[s.column] = r + 1;
-            r as f32
-        })
-        .collect();
     let ls_factor = if opts.line_spacing_factor > 0.0 {
         opts.line_spacing_factor
     } else {
@@ -1544,7 +1532,6 @@ pub fn layout_mtext(opts: &MTextRenderOpts) -> MTextLayout {
         )
     };
     for (i, sub) in sub_lines.iter().enumerate() {
-        let li = row_in_column[i];
         // The block anchors on its full width; each column then sits at its own
         // offset inside it and wraps to its own width, not the block's.
         let (box_left, rect_w) = if cols.active() {
