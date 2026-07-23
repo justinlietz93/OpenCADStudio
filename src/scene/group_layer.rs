@@ -36,12 +36,18 @@ impl Scene {
         gh
     }
 
-    /// Recreate every group whose full membership was copied.
+    /// Recreate every *live* group whose full membership was copied.
     ///
     /// Partial group copies intentionally remain ungrouped: copying one member
     /// out of a group should not create a new one-member fragment. When the
     /// whole source group is in `handle_map`, the new handles get their own
     /// Group object so later selection/editing treats the copy as a group too.
+    ///
+    /// The in-drawing COPY / ARRAY path: the source groups still live in this
+    /// document, so gather them here and hand them to [`Scene::recreate_groups`].
+    /// The clipboard paste path snapshots its groups instead (they may come from
+    /// another drawing) and calls `recreate_groups` directly — one shared body
+    /// so all copy routes preserve groups identically.
     pub fn copy_complete_groups(
         &mut self,
         handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
@@ -49,8 +55,6 @@ impl Scene {
         if handle_map.is_empty() {
             return 0;
         }
-
-        let group_dict_handle = self.document.header.acad_group_dict_handle;
         let sources: Vec<_> = self
             .document
             .objects
@@ -65,19 +69,41 @@ impl Scene {
                 _ => None,
             })
             .collect();
+        self.recreate_groups(sources, handle_map)
+    }
 
+    /// Recreate each group in `sources` in this document, remapping its member
+    /// handles through `handle_map` (source → new). Each recreated group gets a
+    /// fresh handle, a unique `NAME_COPYn`, and a group-dictionary entry.
+    /// Members absent from the map are dropped; a group left with no members is
+    /// skipped.
+    ///
+    /// Shared by the in-drawing COPY/ARRAY path ([`Scene::copy_complete_groups`],
+    /// live source groups) and the clipboard paste path (groups snapshotted into
+    /// the clipboard at copy time), so a fully-copied group stays grouped whether
+    /// the copy lands in the same drawing or a different file.
+    pub fn recreate_groups(
+        &mut self,
+        sources: Vec<acadrust::objects::Group>,
+        handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
+    ) -> usize {
+        let group_dict_handle = self.document.header.acad_group_dict_handle;
         let mut copied = 0;
         for source in sources {
+            let entities: Vec<Handle> = source
+                .entities
+                .iter()
+                .filter_map(|h| handle_map.get(h).copied())
+                .collect();
+            if entities.is_empty() {
+                continue;
+            }
             let name = self.unique_group_copy_name(&source.name);
             let mut group = source;
             group.handle = self.document.allocate_handle();
             group.owner = group_dict_handle;
             group.name = name.clone();
-            group.entities = group
-                .entities
-                .iter()
-                .filter_map(|h| handle_map.get(h).copied())
-                .collect();
+            group.entities = entities;
             let gh = group.handle;
             self.document.objects.insert(gh, ObjectType::Group(group));
             if let Some(ObjectType::Dictionary(dict)) =

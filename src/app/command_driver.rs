@@ -2492,6 +2492,22 @@ impl OpenCADStudio {
             })
             .collect();
         self.merge_clipboard_ext_objects(i, &by_index);
+        // Recreate any group whose whole membership was copied, so a pasted
+        // group stays grouped — cross-drawing too, since the groups were
+        // snapshotted into the clipboard at copy time. `by_index` is aligned
+        // with `self.clipboard`, so the source handle of each pasted entity maps
+        // its clipboard clone to its new handle. Same shared `recreate_groups`
+        // the in-drawing COPY path uses. (#440)
+        if !self.clipboard_deps.groups.is_empty() {
+            let mut handle_map = rustc_hash::FxHashMap::default();
+            for (src, &new) in self.clipboard.iter().zip(by_index.iter()) {
+                if !new.is_null() {
+                    handle_map.insert(src.common().handle, new);
+                }
+            }
+            let groups = self.clipboard_deps.groups.clone();
+            self.tabs[i].scene.recreate_groups(groups, &handle_map);
+        }
         // Incremental: `add_entity` already tessellated every pasted top-level
         // solid, and existing document solids are still cached — so only newly
         // introduced block-definition solids need building. The full rebuild

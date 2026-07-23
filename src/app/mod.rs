@@ -886,6 +886,12 @@ pub struct ClipboardDeps {
     /// `xdictionary` graph is snapshotted so a cross-drawing paste recreates it
     /// — without this a pasted clipped block loses its clip and renders whole.
     pub ext_objects: Vec<ClipExtObjects>,
+    /// Groups whose *entire* membership is in the copied selection, snapshotted
+    /// from the source drawing. On paste each is recreated over the pasted
+    /// handles so a copied group stays grouped — cross-drawing too, the same way
+    /// the in-drawing COPY path preserves it. Partly-selected groups are not
+    /// captured (copying one member should not spawn a fragment). See #440.
+    pub groups: Vec<acadrust::objects::Group>,
 }
 
 /// A captured block definition: its base point and the entities it owns
@@ -1001,6 +1007,25 @@ impl ClipboardDeps {
             .filter_map(|n| Self::snapshot_block(doc, n))
             .collect();
 
+        // Groups fully contained in the top-level selection. Groups reference
+        // top-level entities (not block internals), so match against `entities`
+        // only. Mirrors the in-drawing `copy_complete_groups` membership test.
+        let copied_handles: rustc_hash::FxHashSet<acadrust::Handle> =
+            entities.iter().map(|e| e.common().handle).collect();
+        let groups: Vec<acadrust::objects::Group> = doc
+            .objects
+            .values()
+            .filter_map(|obj| match obj {
+                acadrust::objects::ObjectType::Group(g)
+                    if !g.entities.is_empty()
+                        && g.entities.iter().all(|h| copied_handles.contains(h)) =>
+                {
+                    Some(g.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
         ClipboardDeps {
             layers: layers
                 .iter()
@@ -1021,6 +1046,7 @@ impl ClipboardDeps {
             blocks,
             dim_blocks,
             ext_objects,
+            groups,
         }
     }
 
