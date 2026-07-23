@@ -74,7 +74,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.4.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc?branch=main#3c6aaa2bc24c59a6d49f2433925cbf82e6b88b90"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc?branch=main#b538e71510da5b2c4a293442172364adfd4b437a"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
