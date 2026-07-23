@@ -633,9 +633,14 @@ impl Pipeline {
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: content_stencil.clone(),
+                // Bias TOWARD the camera: a wipeout must win against geometry at
+                // its own depth (a block's wipeout + shapes are coincident at
+                // Z=0). A positive bias pushed the mask behind, so LessEqual
+                // rejected it and the geometry showed through. Tiny enough that
+                // meaningfully-nearer geometry still occludes the mask.
                 bias: wgpu::DepthBiasState {
-                    constant: 1,
-                    slope_scale: 1.0,
+                    constant: -8,
+                    slope_scale: -1.0,
                     clamp: 0.0,
                 },
             }),
