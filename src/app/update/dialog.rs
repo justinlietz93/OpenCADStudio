@@ -23,9 +23,12 @@ use iced::{mouse, Point, Task};
 
 impl OpenCADStudio {
     pub(in crate::app) fn open_save_dialog_window(&mut self, tab_idx: usize) -> Task<Message> {
-        // Default the format dropdown to the latest version (DWG/DXF 2018),
-        // regardless of the loaded file's version. The user can pick any older
-        // version explicitly; the selected version is written as-is.
+        // Default the format dropdown to the loaded file's own format — its
+        // DWG-vs-DXF kind (from the extension) and its version (from the parsed
+        // document) — so Save-As round-trips the format instead of silently
+        // re-targeting the latest. A new/unsaved drawing has no path, so it
+        // keeps its document default version and DWG. The user can still pick
+        // any other version explicitly.
         let is_dxf = self.tabs[tab_idx]
             .current_path
             .as_ref()
@@ -33,8 +36,8 @@ impl OpenCADStudio {
             .and_then(|e| e.to_str())
             .map(|e| e.eq_ignore_ascii_case("dxf"))
             .unwrap_or(false);
-        self.save_dialog_format =
-            crate::io::format_for_version(acadrust::DxfVersion::AC1032, is_dxf);
+        let version = self.tabs[tab_idx].scene.document.version;
+        self.save_dialog_format = crate::io::format_for_version(version, is_dxf);
 
         // Pre-fill the default file name from the current path or the tab name;
         // the destination folder comes from the native OS dialog that follows.
