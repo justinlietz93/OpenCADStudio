@@ -313,7 +313,10 @@ fn check_family(
         if (inst.grad_kind & 16u) != 0u {
             t = 1.0 - t;
         }
-        return mix(inst.color, inst.color2, t);
+        // Radial stops run OUTSIDE-IN: colour 1 at the rim, colour 2 at the
+        // centre (AutoCAD's SPHERICAL/HEMISPHERICAL convention; the INV bit
+        // above swaps them back).
+        return mix(inst.color2, inst.color, t);
     }
 
     // 3. Pattern LOD: when the densest family's spacing projects below

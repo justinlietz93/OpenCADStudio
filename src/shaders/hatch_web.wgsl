@@ -268,7 +268,8 @@ fn check_family(
         if ginv {
             t = 1.0 - t;
         }
-        return mix(h.color, h.color2, t);
+        // Radial stops run outside-in (colour 2 at the centre) — see hatch.wgsl.
+        return mix(h.color2, h.color, t);
     }
 
     // Pattern LOD: when the densest family projects below 2 px, lines blur into
