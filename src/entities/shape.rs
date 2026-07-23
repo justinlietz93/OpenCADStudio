@@ -55,6 +55,42 @@ fn shape_marker(
 
 // ── TruckConvertible ──────────────────────────────────────────────────────────
 
+/// The shape's SHX polylines, resolved through its STYLE's shape file: the
+/// style by handle (name fallback), the file with the shared path fallbacks
+/// (as stored → relative to the drawing → basename next to it — foreign
+/// absolute paths are the norm in traded files).
+fn shx_polylines(
+    shape: &Shape,
+    document: &acadrust::CadDocument,
+) -> Option<crate::scene::text::shx::ShapePolylines> {
+    let style = shape
+        .style_handle
+        .and_then(|h| document.text_styles.iter().find(|s| s.handle == h))
+        .or_else(|| {
+            let name = shape.style_name.trim();
+            (!name.is_empty())
+                .then(|| {
+                    document
+                        .text_styles
+                        .iter()
+                        .find(|s| s.name.eq_ignore_ascii_case(name))
+                })
+                .flatten()
+        })?;
+    let font = style.font_file.trim();
+    if font.is_empty() {
+        return None;
+    }
+    let base = document
+        .source_path
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| p.parent());
+    let resolved = crate::io::resolve_image_file(font, base)?;
+    let num = u16::try_from(shape.shape_number).ok()?;
+    crate::scene::text::shx::shape_polylines(&resolved, num)
+}
+
 impl TruckConvertible for Shape {
     fn to_truck(&self, _document: &acadrust::CadDocument) -> Option<TruckEntity> {
         // SHAPE insertion point is OCS (planar entity) — map through the
@@ -70,6 +106,55 @@ impl TruckConvertible for Shape {
         let size = self.size.abs().max(0.5);
 
         let snap_pt = glam::DVec3::new(ox, oy, oz);
+
+        // Real SHX glyph when the style's shape file resolves; the diamond
+        // marker stays as the missing-file placeholder.
+        if let Some(polys) = shx_polylines(self, _document) {
+            let (sin_r, cos_r) = (self.rotation.sin(), self.rotation.cos());
+            let ob = self.oblique_angle.tan();
+            let xs = if self.relative_x_scale.abs() < 1e-9 {
+                1.0
+            } else {
+                self.relative_x_scale
+            };
+            let scale = self.size.abs().max(1e-9);
+            let mut pts: Vec<[f64; 3]> = Vec::new();
+            for poly in polys.iter() {
+                if poly.len() < 2 {
+                    continue;
+                }
+                if !pts.is_empty() {
+                    pts.push([f64::NAN; 3]);
+                }
+                for &[px, py] in poly {
+                    // unit → entity local: size, X-scale, oblique shear, rotation.
+                    let lx = px * scale * xs + py * scale * ob;
+                    let ly = py * scale;
+                    let wx = lx * cos_r - ly * sin_r;
+                    let wy = lx * sin_r + ly * cos_r;
+                    let (gx, gy, gz) = crate::scene::view::transform::ocs_point_to_wcs(
+                        (
+                            self.insertion_point.x + wx,
+                            self.insertion_point.y + wy,
+                            self.insertion_point.z,
+                        ),
+                        (self.normal.x, self.normal.y, self.normal.z),
+                    );
+                    pts.push([gx, gy, gz]);
+                }
+            }
+            if !pts.is_empty() {
+                return Some(TruckEntity {
+                    pick_tris: Vec::new(),
+                    object: TruckObject::Lines(pts),
+                    snap_pts: vec![(snap_pt, SnapHint::Insertion)],
+                    tangent_geoms: vec![],
+                    key_vertices: vec![[ox, oy, oz]],
+                    fill_tris: vec![],
+                });
+            }
+        }
+
         let pts = shape_marker(
             ox,
             oy,

@@ -6,3 +6,4 @@ pub mod sysfont;
 pub mod ttf_glyph;
 pub mod web_font;
 pub mod complex_lt;
+pub mod shx;
