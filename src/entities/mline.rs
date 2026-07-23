@@ -60,7 +60,8 @@ pub fn mline_lines(m: &MLine, document: &acadrust::CadDocument) -> Vec<MLineLine
     };
 
     // Justification shifts every element so the picked path runs along the top /
-    // centre / bottom element of the style.
+    // centre / bottom element of the style. (Only the fallback path needs it —
+    // stored vertex parameters already bake justification in.)
     let mut lo = f64::INFINITY;
     let mut hi = f64::NEG_INFINITY;
     for (o, _, _) in &elems {
@@ -75,9 +76,22 @@ pub fn mline_lines(m: &MLine, document: &acadrust::CadDocument) -> Vec<MLineLine
 
     let scale = m.scale_factor;
     let closed = m.flags.contains(MLineFlags::CLOSED);
+    let n = m.vertices.len();
 
-    // Offset a vertex along its miter direction by `d` drawing units.
-    let off = |vi: usize, d: f64| -> [f64; 3] {
+    // The element's miter-space offset at vertex `vi`: the stored per-vertex
+    // parameter[0] when present — it is measured ALONG THE MITER, so corner
+    // vertices already carry the 1/cos(θ/2) miter lengthening and the
+    // justification shift (using the flat style offset instead pinched the
+    // channel at every corner and made the ends look flared). The style
+    // offset × scale is only the fallback for files without parameters.
+    let elem_off = |vi: usize, ei: usize| -> f64 {
+        m.vertices[vi]
+            .segments
+            .get(ei)
+            .and_then(|sg| sg.parameters.first().copied())
+            .unwrap_or_else(|| (elems[ei].0 + shift) * scale)
+    };
+    let off_pt = |vi: usize, d: f64| -> [f64; 3] {
         let v = &m.vertices[vi];
         [
             v.position.x + v.miter.x * d,
@@ -87,11 +101,67 @@ pub fn mline_lines(m: &MLine, document: &acadrust::CadDocument) -> Vec<MLineLine
     };
 
     let mut out: Vec<MLineLine> = Vec::with_capacity(elems.len() + 2);
-    for (offset, color, linetype) in &elems {
-        let d = (*offset + shift) * scale;
-        let mut pts: Vec<[f64; 3]> = (0..m.vertices.len()).map(|i| off(i, d)).collect();
-        if closed && m.vertices.len() >= 2 {
-            pts.push(off(0, d));
+    for (ei, (_, color, linetype)) in elems.iter().enumerate() {
+        let mut pts: Vec<[f64; 3]> = Vec::new();
+        // Walk each segment (vi → vi+1, wrapping when closed); the vertex's
+        // parameters[1..] are draw-toggle distances along the element line —
+        // this is how crossing/merged multilines store their gaps. An odd
+        // toggle count leaves the final run open to the segment end.
+        let seg_count = if closed { n } else { n.saturating_sub(1) };
+        let mut pen_at_end = false;
+        for k in 0..seg_count {
+            let vi = k;
+            let wi = (k + 1) % n;
+            let a = off_pt(vi, elem_off(vi, ei));
+            let b = off_pt(wi, elem_off(wi, ei));
+            let seg = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
+            let len = (seg[0] * seg[0] + seg[1] * seg[1] + seg[2] * seg[2]).sqrt();
+            if len < 1e-12 {
+                continue;
+            }
+            let dirn = [seg[0] / len, seg[1] / len, seg[2] / len];
+            let at = |t: f64| -> [f64; 3] {
+                [a[0] + dirn[0] * t, a[1] + dirn[1] * t, a[2] + dirn[2] * t]
+            };
+            let toggles: &[f64] = m
+                .vertices[vi]
+                .segments
+                .get(ei)
+                .map(|sg| sg.parameters.get(1..).unwrap_or(&[]))
+                .unwrap_or(&[]);
+            // Build (start, end) runs from the toggle list.
+            let mut runs: Vec<(f64, f64)> = Vec::new();
+            if toggles.is_empty() {
+                runs.push((0.0, len));
+            } else {
+                let mut i = 0;
+                while i < toggles.len() {
+                    let start = toggles[i].clamp(0.0, len);
+                    let end = toggles
+                        .get(i + 1)
+                        .copied()
+                        .unwrap_or(len)
+                        .clamp(0.0, len);
+                    if end - start > 1e-9 {
+                        runs.push((start, end));
+                    }
+                    i += 2;
+                }
+            }
+            for (ri, (t0, t1)) in runs.iter().enumerate() {
+                let continuous = pen_at_end && ri == 0 && *t0 <= 1e-9 && !pts.is_empty();
+                if !continuous {
+                    if !pts.is_empty() {
+                        pts.push([f64::NAN; 3]);
+                    }
+                    pts.push(at(*t0));
+                }
+                pts.push(at(*t1));
+            }
+            pen_at_end = runs.last().is_some_and(|(_, t1)| (len - t1).abs() <= 1e-9);
+        }
+        if pts.len() < 2 {
+            continue;
         }
         out.push(MLineLine {
             points: pts,
@@ -104,21 +174,28 @@ pub fn mline_lines(m: &MLine, document: &acadrust::CadDocument) -> Vec<MLineLine
     // drawn only when the style requests square caps, the style has width, and
     // the multiline is open.
     if let Some(s) = style {
-        let d_lo = (lo + shift) * scale;
-        let d_hi = (hi + shift) * scale;
-        if (d_hi - d_lo).abs() > 1e-9 && !closed {
+        if !closed && n >= 2 {
             let mut cap = |vi: usize| {
-                out.push(MLineLine {
-                    points: vec![off(vi, d_lo), off(vi, d_hi)],
-                    color: Color::ByLayer,
-                    linetype: "ByLayer".to_string(),
-                });
+                let mut dlo = f64::INFINITY;
+                let mut dhi = f64::NEG_INFINITY;
+                for ei in 0..elems.len() {
+                    let d = elem_off(vi, ei);
+                    dlo = dlo.min(d);
+                    dhi = dhi.max(d);
+                }
+                if (dhi - dlo).abs() > 1e-9 {
+                    out.push(MLineLine {
+                        points: vec![off_pt(vi, dlo), off_pt(vi, dhi)],
+                        color: Color::ByLayer,
+                        linetype: "ByLayer".to_string(),
+                    });
+                }
             };
             if s.flags.start_square_cap {
                 cap(0);
             }
             if s.flags.end_square_cap {
-                cap(m.vertices.len() - 1);
+                cap(n - 1);
             }
         }
     }
