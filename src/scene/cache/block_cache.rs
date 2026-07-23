@@ -362,6 +362,110 @@ fn build_defn(
                     nested_ins, doc, bg_color, depth_map,
                 )));
             }
+            // A dimension nested in a block bakes its geometry (extension /
+            // dim lines, arrows, text) into a per-instance `*D` block, exactly
+            // like a top-level dimension. The top-level path expands that block
+            // in `tessellate_entity`; the block-expand path calls the plain
+            // `tessellate::tessellate`, which does NOT, so nested dimensions
+            // drew nothing. Expand the `*D` block's entities here as block-local
+            // subs so they transform with the parent insert. (Empty block_name
+            // — a non-baked dimension — falls through to the default arm.)
+            EntityType::Dimension(dim) if !dim.base().block_name.trim().is_empty() => {
+                let dblk = doc
+                    .block_records
+                    .iter()
+                    .find(|br| br.name.eq_ignore_ascii_case(&dim.base().block_name));
+                if let Some(dblk) = dblk {
+                    // The `*D` block content is baked in the coordinate space it
+                    // occupied when the dimension was created — for a dimension
+                    // inside a block that is often the ORIGINAL WCS, not the
+                    // block-local space. The dimension's insertion_point (DXF
+                    // 12) is the offset that maps the baked content into the
+                    // dimension's own (block-local) space; it is zero for
+                    // dimensions baked in place, so this is a no-op there.
+                    let ins = dim.base().insertion_point;
+                    for &deh in &dblk.entity_handles {
+                        let Some(dsub) = doc.get_entity(deh) else {
+                            continue;
+                        };
+                        // Definition points are baked as POINTs on Defpoints —
+                        // grip markers, never drawn (matches the top-level path).
+                        if matches!(dsub, EntityType::Point(_)) {
+                            continue;
+                        }
+                        if dsub.common().invisible || layer_hidden(doc, &dsub.common().layer) {
+                            continue;
+                        }
+                        let mut placed = dsub.clone();
+                        placed.as_entity_mut().translate(ins);
+                        // An arrowhead is baked as a nested INSERT of an arrow
+                        // block — route it through the nested-ref machinery so
+                        // the arrow block expands (tessellate_sub_local doesn't
+                        // expand inserts).
+                        if let EntityType::Insert(arrow) = &placed {
+                            subs.push(LocalSub::Nested(build_nested_ref(
+                                arrow, doc, bg_color, depth_map,
+                            )));
+                        } else {
+                            for lw in tessellate_sub_local(
+                                doc, &placed, anno_scale, bg_color, depth_map,
+                            ) {
+                                subs.push(LocalSub::Wire(lw));
+                            }
+                        }
+                    }
+                }
+            }
+            // A table nested in a block bakes its geometry (gridlines, cell
+            // text, fills) into a `*T` block, laid out in block-LOCAL space with
+            // the table carrying the world placement in insertion_point +
+            // horizontal_direction (like an INSERT). The top-level path expands
+            // and places it in `tessellate_entity`; the block-expand path skips
+            // that, so a nested table drew nothing. Place each `*T` sub by the
+            // table's rotation+insertion here (defn-local), then tessellate — the
+            // parent insert transform composes on top at expand time.
+            EntityType::Table(tab) => {
+                let tblk = tab
+                    .block_record_handle
+                    .and_then(|h| doc.block_records.iter().find(|br| br.handle == h));
+                if let Some(tblk) = tblk {
+                    let ins = tab.insertion_point;
+                    let angle = tab.horizontal_direction.y.atan2(tab.horizontal_direction.x);
+                    for &teh in &tblk.entity_handles {
+                        let Some(tsub) = doc.get_entity(teh) else {
+                            continue;
+                        };
+                        if tsub.common().invisible || layer_hidden(doc, &tsub.common().layer) {
+                            continue;
+                        }
+                        let mut placed = tsub.clone();
+                        {
+                            let ent = placed.as_entity_mut();
+                            if angle.abs() > 1e-9 {
+                                ent.apply_rotation(
+                                    acadrust::types::Vector3::new(0.0, 0.0, 1.0),
+                                    angle,
+                                );
+                            }
+                            ent.translate(ins);
+                        }
+                        // A baked table can nest inserts too (block cells);
+                        // route those through the nested-ref path like the
+                        // dimension arrows above.
+                        if let EntityType::Insert(cell_ins) = &placed {
+                            subs.push(LocalSub::Nested(build_nested_ref(
+                                cell_ins, doc, bg_color, depth_map,
+                            )));
+                        } else {
+                            for lw in
+                                tessellate_sub_local(doc, &placed, anno_scale, bg_color, depth_map)
+                            {
+                                subs.push(LocalSub::Wire(lw));
+                            }
+                        }
+                    }
+                }
+            }
             _ => {
                 // A wide polyline inside a block carries its `world_width` on
                 // the LocalWire; `emit_wire` scales it by the insert transform

@@ -847,6 +847,52 @@ impl Scene {
         // at world position, like a block-internal hatch. (#222)
         let mut wide_block_memo: std::collections::HashMap<String, bool> =
             std::collections::HashMap::new();
+        // `explode_from_document` returns a Dimension child verbatim (it carries
+        // no fill of its own), so a filled arrowhead that lives as a nested
+        // Insert(hatch) inside the dimension's baked `*D` block never reaches
+        // this fill explosion. Expand each dimension child's `*D` content into
+        // the owning block's frame — translate by the dimension insertion_point
+        // (WCS → block-local) then apply the insert transform (block-local →
+        // world) — so its arrow inserts / hatches ride the normal walk. Only
+        // fill-bearing children (Insert / Hatch) are lifted; the dimension's
+        // lines and text still render through the wire path.
+        fn explode_including_dims(ins: &DxfInsert, doc: &CadDocument) -> Vec<EntityType> {
+            let mut out = ins.explode_from_document(doc);
+            let Some(br) = doc.block_records.get(&ins.block_name) else {
+                return out;
+            };
+            let xform = ins.get_transform();
+            for &beh in &br.entity_handles {
+                let Some(EntityType::Dimension(dim)) = doc.get_entity(beh) else {
+                    continue;
+                };
+                let bn = dim.base().block_name.clone();
+                if bn.trim().is_empty() {
+                    continue;
+                }
+                let ins_pt = dim.base().insertion_point;
+                let Some(dblk) = doc
+                    .block_records
+                    .iter()
+                    .find(|r| r.name.eq_ignore_ascii_case(&bn))
+                else {
+                    continue;
+                };
+                for &deh in &dblk.entity_handles {
+                    let Some(dsub) = doc.get_entity(deh) else {
+                        continue;
+                    };
+                    if !matches!(dsub, EntityType::Insert(_) | EntityType::Hatch(_)) {
+                        continue;
+                    }
+                    let mut placed = dsub.clone();
+                    placed.as_entity_mut().translate(ins_pt);
+                    placed.apply_transform(&xform);
+                    out.push(placed);
+                }
+            }
+            out
+        }
         for entity in self.document.entities() {
             let EntityType::Insert(ins) = entity else {
                 continue;
@@ -902,8 +948,7 @@ impl Scene {
                 [f32; 4],
                 crate::scene::view::render::InheritStyle,
                 (f32, f32),
-            )> = ins
-                .explode_from_document(&self.document)
+            )> = explode_including_dims(ins, &self.document)
                 .into_iter()
                 .map(|e| (normalize(e), 0usize, ins_color, l0, (base_depth, half_gap)))
                 .collect();
@@ -947,7 +992,7 @@ impl Scene {
                                 .map_or(0.0, |d| d[0])
                                 * d_half;
                         let nd_half = d_half / (block_count(&nins.block_name) as f32 + 1.0);
-                        for e in nins.explode_from_document(&self.document) {
+                        for e in explode_including_dims(&nins, &self.document) {
                             stack.push((
                                 normalize(e),
                                 depth + 1,

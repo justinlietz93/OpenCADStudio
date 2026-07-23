@@ -4092,6 +4092,14 @@ impl Scene {
                 br.entity_handles.iter().any(|&h| match self.document.get_entity(h) {
                     Some(EntityType::Hatch(_)) => true,
                     Some(EntityType::Insert(ins)) => self.block_has_hatch(&ins.block_name, memo),
+                    // A dimension bakes its geometry into a per-instance `*D`
+                    // block; a custom filled arrowhead lives there as a nested
+                    // Insert(hatch). Recurse so the fill explosion knows to
+                    // descend the dimension (see `explode_including_dims`).
+                    Some(EntityType::Dimension(dim)) => {
+                        !dim.base().block_name.trim().is_empty()
+                            && self.block_has_hatch(&dim.base().block_name, memo)
+                    }
                     _ => false,
                 })
             })
