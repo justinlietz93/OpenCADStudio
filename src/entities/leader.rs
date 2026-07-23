@@ -614,7 +614,6 @@ impl LeaderTess for Leader {
         let p3 = |v: &acadrust::types::Vector3| -> [f32; 3] {
             [(v.x) as f32, (v.y) as f32, (v.z) as f32]
         };
-        let nan = [f32::NAN; 3];
 
         let verts = &self.vertices;
 
@@ -648,10 +647,14 @@ impl LeaderTess for Leader {
             };
         }
 
-        let mut points: Vec<[f32; 3]> = verts.iter().map(|v| p3(v)).collect();
+        // Build all geometry in absolute f64 and RTE-split at the end. At UTM
+        // coordinates a raw `v.x as f32` quantises to ~0.5 units, which flattens
+        // the oblique arrow tick into a horizontal line and jitters the path.
+        let origin = [verts[0].x, verts[0].y, verts[0].z];
+        let mut points: Vec<[f64; 3]> = verts.iter().map(|v| [v.x, v.y, v.z]).collect();
         let mut tangents: Vec<TangentGeom> = Vec::new();
         let key_vertices: Vec<[f64; 3]> = verts.iter().map(|v| [v.x, v.y, v.z]).collect();
-        let mut fill_tris: Vec<[f32; 3]> = Vec::new();
+        let mut fill_tris: Vec<[f64; 3]> = Vec::new();
 
         for i in 0..verts.len().saturating_sub(1) {
             tangents.push(TangentGeom::Line {
@@ -698,19 +701,32 @@ impl LeaderTess for Leader {
             let dy = (next.y - tip.y) as f32;
             let len = (dx * dx + dy * dy).sqrt().max(1e-9);
             let dir = Vec3::new(dx / len, dy / len, 0.0);
-            let tip_f = p3(tip);
-            let tip_v = Vec3::new(tip_f[0], tip_f[1], tip_f[2]);
-            // Reuse the dim arrow emitter so the leader shape matches the
-            // DIMSTYLE in use (Closed Filled by default, Dot, Tick, …).
-            let mut arrow_pts: Vec<[f32; 3]> = Vec::new();
-            let mut arrow_geom = DimGeom::new();
-            append_arrow(&mut arrow_geom, tip_v, dir, &arrow);
-            if !arrow_geom.dim_lines.is_empty() {
-                arrow_pts.push(nan);
-                arrow_pts.extend(arrow_geom.dim_lines);
+            // Omit the arrowhead when it is larger than the first leader segment
+            // it would sit on: an oversized arrow on a short pointer is
+            // suppressed, not drawn overshooting the segment. Without this an
+            // annotation-scaled arrow (DIMASZ sized for a bigger plot) paints a
+            // stray stroke longer than the leader itself.
+            if arrow_size <= len {
+                // Emit the arrow around a local origin (the tip) so
+                // `append_arrow`'s f32 math stays precise, then lift each point
+                // back to absolute f64. Reuse the dim arrow emitter so the
+                // leader shape matches the DIMSTYLE in use (Closed Filled by
+                // default, Dot, Tick, …).
+                let mut arrow_geom = DimGeom::new();
+                append_arrow(&mut arrow_geom, Vec3::ZERO, dir, &arrow);
+                let lift = |p: &[f32; 3]| -> [f64; 3] {
+                    [
+                        p[0] as f64 + origin[0],
+                        p[1] as f64 + origin[1],
+                        p[2] as f64 + origin[2],
+                    ]
+                };
+                if !arrow_geom.dim_lines.is_empty() {
+                    points.push([f64::NAN; 3]);
+                    points.extend(arrow_geom.dim_lines.iter().map(&lift));
+                }
+                fill_tris.extend(arrow_geom.arrow_fill.iter().map(&lift));
             }
-            points.extend(arrow_pts);
-            fill_tris.extend(arrow_geom.arrow_fill);
         }
 
         if draws_hookline(self) {
@@ -755,15 +771,16 @@ impl LeaderTess for Leader {
                     }
                 }
             }
-            let last_f = p3(last);
-            points.push(nan);
-            points.push(last_f);
-            points.push([
-                last_f[0] + (sign * land_len) as f32,
-                last_f[1],
-                last_f[2],
-            ]);
+            points.push([f64::NAN; 3]);
+            points.push([last.x, last.y, last.z]);
+            points.push([last.x + sign * land_len, last.y, last.z]);
         }
+
+        // Split absolute f64 into the render/eye double-single so the GPU keeps
+        // full precision at UTM coordinates (empty low bufs = absolute f32).
+        let (points, points_low) = crate::scene::convert::tessellate::points_to_ds(points);
+        let (fill_tris, fill_tris_low) =
+            crate::scene::convert::tessellate::points_to_ds(fill_tris);
 
         WireModel {
             taper_widths: Vec::new(),
@@ -777,7 +794,7 @@ impl LeaderTess for Leader {
             text_verts: Vec::new(),
             name,
             points,
-            points_low: Vec::new(),
+            points_low,
             color,
             selected,
             aci: 0,
@@ -790,7 +807,7 @@ impl LeaderTess for Leader {
             aabb: WireModel::UNBOUNDED_AABB,
             plinegen: true,
             fill_tris,
-            fill_tris_low: Vec::new(),
+            fill_tris_low,
         }
     }
 }
