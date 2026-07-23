@@ -140,21 +140,28 @@ fn section_symbol_wires(
         [vx0 / vlen, vy0 / vlen]
     });
 
-    let (show_arrows, show_plane_line, show_end_lines, arrow_size, arrow_ext, label_h) =
-        match style {
-            Some(st) => (
-                st.show_arrows,
-                st.show_plane_line,
-                st.show_end_lines,
-                st.arrow_size,
-                st.arrow_extension,
-                st.label_height,
-            ),
-            None => {
-                let t = s.tick_a.abs().max(s.tick_b.abs());
-                (true, false, true, (t * 0.66).max(2.5), t.max(5.0), t.max(2.5))
-            }
-        };
+    let (show_arrows, show_plane_line, show_end_lines, arrow_size, arrow_ext, label_h) = match style
+    {
+        Some(st) => (
+            st.show_arrows,
+            st.show_plane_line,
+            st.show_end_lines,
+            st.arrow_size,
+            st.arrow_extension,
+            st.label_height,
+        ),
+        None => {
+            let t = s.tick_a.abs().max(s.tick_b.abs());
+            (
+                true,
+                false,
+                true,
+                (t * 0.66).max(2.5),
+                t.max(5.0),
+                t.max(2.5),
+            )
+        }
+    };
     // Arrowhead via the shared dimension/leader arrow table: the style's arrow
     // block handle (null → ClosedFilled), sized from the style.
     let arrow_kind = match style {
@@ -180,11 +187,14 @@ fn section_symbol_wires(
     }
 
     // Each end: (endpoint, tick length, outward sign along the cut).
-    for (ex, ey, tick, osign) in [(ax, ay, s.tick_a.abs(), 1.0), (bx, by, s.tick_b.abs(), -1.0)] {
+    for (ex, ey, tick, osign) in [
+        (ax, ay, s.tick_a.abs(), 1.0),
+        (bx, by, s.tick_b.abs(), -1.0),
+    ] {
         let (ox, oy) = (ux * osign, uy * osign); // outward along the cut
         let tip = [ex + ox * tick, ey + oy * tick, 0.0]; // outer tick tip
-        // End segment: the short drawn extension past the end (the "broken"
-        // section line when show_plane_line is off).
+                                                         // End segment: the short drawn extension past the end (the "broken"
+                                                         // section line when show_plane_line is off).
         if show_end_lines && tick > 1e-9 {
             lines.push(nan);
             lines.push([ex, ey, 0.0]);
@@ -563,7 +573,11 @@ pub(crate) fn tessellate_entity(
                 // Text labels: draw the glyph strokes (simplex.shx etc. are
                 // single-stroke fonts, so the outline is the character).
                 for t in &dec.texts {
-                    let font = t.font.trim().trim_end_matches(".shx").trim_end_matches(".SHX");
+                    let font = t
+                        .font
+                        .trim()
+                        .trim_end_matches(".shx")
+                        .trim_end_matches(".SHX");
                     let font = if font.is_empty() { "standard" } else { font };
                     let (strokes, _) = crate::scene::text::lff::tessellate_text_ex(
                         [0.0, 0.0],
@@ -674,10 +688,7 @@ pub(crate) fn tessellate_entity(
             line_weight_px: 1.0,
             snap_pts: vec![],
             tangent_geoms: vec![],
-            key_vertices: vec![
-                [x0, y0, 0.0],
-                [x1, y1, 0.0],
-            ],
+            key_vertices: vec![[x0, y0, 0.0], [x1, y1, 0.0]],
             aabb: [x0 as f32, y0 as f32, x1 as f32, y1 as f32],
             plinegen: true,
             fill_tris: vec![],
@@ -1547,34 +1558,43 @@ pub(crate) fn wire_points_aabb(w: &WireModel) -> [f32; 4] {
 }
 
 /// Assign `entity_box` as `w`'s cullable box, widened to cover the wire's
-/// pick-only geometry.
+/// actual tessellated geometry and pick-only geometry.
 ///
 /// `entity_aabb`'s box comes from acadrust's `bounding_box()`, which for a
-/// polyline is the box of its stored vertices — it knows nothing about the band
-/// a width paints around them, nor the wall a thickness extrudes. Hit-testing
-/// rejects on this box before it looks at `pick_tris`, so a box that stops short
-/// of them makes them silently unpickable: a donut's vertices are two points on
-/// one horizontal line, giving a zero-height box that rejects every click on the
-/// disc it draws.
-///
-/// A no-op for the entities that have no `pick_tris`, which is nearly all.
+/// polyline is often the box of its stored vertices — it may know nothing about
+/// bulge arcs between them, the band a width paints around them, or the wall a
+/// thickness extrudes. Hit-testing rejects on this box before it looks at the
+/// wire segments or `pick_tris`, so a box that stops short of the drawn geometry
+/// makes that geometry silently unpickable.
 pub(crate) fn set_wire_aabb(w: &mut WireModel, entity_box: [f32; 4]) {
-    if w.pick_tris.is_empty() || entity_box == WireModel::UNBOUNDED_AABB {
-        w.aabb = entity_box;
-        return;
-    }
-    let [mut x0, mut y0, mut x1, mut y1] = entity_box;
-    for (i, p) in w.pick_tris.iter().enumerate() {
-        let lo = w.pick_tris_low.get(i).copied().unwrap_or([0.0; 3]);
+    let mut out = if entity_box == WireModel::UNBOUNDED_AABB {
+        wire_points_aabb(w)
+    } else {
+        entity_box
+    };
+
+    let mut extend = |p: [f32; 3], lo: [f32; 3]| {
         let (x, y) = (p[0] + lo[0], p[1] + lo[1]);
         if x.is_finite() && y.is_finite() {
-            x0 = x0.min(x);
-            y0 = y0.min(y);
-            x1 = x1.max(x);
-            y1 = y1.max(y);
+            if out == WireModel::UNBOUNDED_AABB {
+                out = [x, y, x, y];
+            } else {
+                out[0] = out[0].min(x);
+                out[1] = out[1].min(y);
+                out[2] = out[2].max(x);
+                out[3] = out[3].max(y);
+            }
         }
+    };
+
+    for (i, &p) in w.points.iter().enumerate() {
+        extend(p, w.points_low.get(i).copied().unwrap_or([0.0; 3]));
     }
-    w.aabb = [x0, y0, x1, y1];
+    for (i, &p) in w.pick_tris.iter().enumerate() {
+        extend(p, w.pick_tris_low.get(i).copied().unwrap_or([0.0; 3]));
+    }
+
+    w.aabb = out;
 }
 
 pub(crate) fn entity_aabb(e: &acadrust::EntityType) -> [f32; 4] {
