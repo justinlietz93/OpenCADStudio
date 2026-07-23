@@ -140,7 +140,7 @@ pub fn fallback_properties(_handle: Handle, entity: &EntityType) -> PropSection 
         props: vec![Property {
             label: "Type".into(),
             field: "type",
-            value: PropValue::ReadOnly(crate::entities::names::ui_name(entity).into()),
+            value: PropValue::ReadOnly(crate::entities::names::ui_name_or_class(entity).into()),
         }],
     }
 }

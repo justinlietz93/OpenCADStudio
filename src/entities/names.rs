@@ -62,6 +62,34 @@ pub fn ui_name(e: &EntityType) -> &'static str {
     }
 }
 
+/// Display name that reports an Unknown/proxy entity's real class instead of
+/// the generic "Unknown" — an AEC object (Wall/Door/Window etc.) carries its
+/// DXF class name (e.g. "AEC_WALL") title-cased to "Aec Wall". Everything else
+/// defers to [`ui_name`]. Falls back to "Unknown" for a class we couldn't name
+/// (the numeric `DWG_TYPE_<n>` placeholder).
+pub fn ui_name_or_class(e: &EntityType) -> String {
+    if let EntityType::Unknown(u) = e {
+        let n = u.dxf_name.trim();
+        if !n.is_empty() && !n.starts_with("DWG_TYPE_") {
+            return n
+                .split('_')
+                .filter(|w| !w.is_empty())
+                .map(|w| {
+                    let mut c = w.chars();
+                    match c.next() {
+                        Some(f) => {
+                            f.to_uppercase().collect::<String>() + &c.as_str().to_lowercase()
+                        }
+                        None => String::new(),
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
+    }
+    ui_name(e).to_string()
+}
+
 /// Canonical DXF entity type record name (uppercase), as used by AutoCAD's
 /// command-line LIST output and the DXF file format. Variants without a
 /// well-defined DXF name fall back to "ENTITY".

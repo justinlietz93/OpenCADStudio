@@ -333,7 +333,7 @@ pub(super) fn next_group_auto_name(scene: &crate::scene::Scene) -> String {
 // ── Entity type labels ─────────────────────────────────────────────────────
 
 pub(super) fn entity_type_label(entity: &acadrust::EntityType) -> String {
-    crate::entities::names::ui_name(entity).to_string()
+    crate::entities::names::ui_name_or_class(entity)
 }
 
 pub(super) fn entity_type_key(entity: &acadrust::EntityType) -> String {
