@@ -104,9 +104,7 @@ pub fn edge_wires(solid: &Solid) -> Vec<acadrust::entities::Wire> {
     let mut wires = Vec::new();
     for shell in solid.boundaries() {
         for edge in shell.edge_iter() {
-            if let TruckTessResult::Lines(pts, pts_low) =
-                tessellate_edge(&edge)
-            {
+            if let TruckTessResult::Lines(pts, pts_low) = tessellate_edge(&edge) {
                 if pts.len() < 2 {
                     continue;
                 }

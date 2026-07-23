@@ -78,14 +78,23 @@ impl OpenCADStudio {
         }
     }
 
-    /// Copy is delta-safe only when no target is a Dimension: copying a
-    /// dimension clones a fresh anonymous `*D` block record (non-entity state a
-    /// pure-entity delta can't restore).
+    /// Copy is delta-safe only when no target is a Dimension and no complete
+    /// group is copied: dimensions clone fresh anonymous `*D` block records,
+    /// and complete group copies add Group objects / dictionary entries. Both
+    /// are non-entity state a pure-entity delta can't restore.
     pub(super) fn delta_copy_safe(&self, i: usize, handles: &[Handle]) -> bool {
+        use acadrust::objects::ObjectType;
         let doc = &self.tabs[i].scene.document;
-        !handles
+        let copies_dimension = handles
             .iter()
-            .any(|h| matches!(doc.get_entity(*h), Some(EntityType::Dimension(_))))
+            .any(|h| matches!(doc.get_entity(*h), Some(EntityType::Dimension(_))));
+        let copies_complete_group = doc.objects.values().any(|o| match o {
+            ObjectType::Group(g) => {
+                !g.entities.is_empty() && g.entities.iter().all(|h| handles.contains(h))
+            }
+            _ => false,
+        });
+        !copies_dimension && !copies_complete_group
     }
 
     /// Erase is delta-safe only when no target belongs to a group: erasing a
@@ -213,7 +222,9 @@ impl OpenCADStudio {
 
     pub(super) fn restore_history_snapshot(&mut self, i: usize, snapshot: FullSnapshot) {
         self.tabs[i].scene.document = snapshot.document;
-        self.tabs[i].scene.set_current_layout(snapshot.current_layout);
+        self.tabs[i]
+            .scene
+            .set_current_layout(snapshot.current_layout);
         // Force a re-tessellation: the cached wires were keyed against the
         // outgoing document / layout and would be returned unchanged
         // otherwise (`set_current_layout` only bumps on actual change).
@@ -278,7 +289,10 @@ impl OpenCADStudio {
                     // delta rides to the redo stack (it still holds the after
                     // side) — no current-state capture needed.
                     self.apply_delta(i, &d, true);
-                    self.tabs[i].history.redo_stack.push(HistorySnapshot::Delta(d));
+                    self.tabs[i]
+                        .history
+                        .redo_stack
+                        .push(HistorySnapshot::Delta(d));
                 }
             }
         }
@@ -309,7 +323,10 @@ impl OpenCADStudio {
                 }
                 HistorySnapshot::Delta(d) => {
                     self.apply_delta(i, &d, false);
-                    self.tabs[i].history.undo_stack.push(HistorySnapshot::Delta(d));
+                    self.tabs[i]
+                        .history
+                        .undo_stack
+                        .push(HistorySnapshot::Delta(d));
                 }
             }
         }

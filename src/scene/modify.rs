@@ -82,8 +82,11 @@ impl Scene {
     pub fn transform_entities(&mut self, handles: &[Handle], t: &EntityTransform) {
         // Never transform objects on a locked layer (defense-in-depth: the pick
         // path already excludes them, but programmatic callers may not).
-        let handles: Vec<Handle> =
-            handles.iter().copied().filter(|&h| !self.is_layer_locked(h)).collect();
+        let handles: Vec<Handle> = handles
+            .iter()
+            .copied()
+            .filter(|&h| !self.is_layer_locked(h))
+            .collect();
         let handles = &handles[..];
         // MIRRTEXT (header.mirror_text): when false AutoCAD positions text /
         // mtext / shape by the mirror but keeps the original rotation +
@@ -146,14 +149,10 @@ impl Scene {
             if self.hatches.contains_key(&h) {
                 let existing_color = self.hatches[&h].color;
                 let new_model = match self.document.get_entity(h) {
-                    Some(EntityType::Hatch(dxf)) => {
-                        Self::hatch_model_from_dxf(dxf, existing_color)
-                    }
+                    Some(EntityType::Hatch(dxf)) => Self::hatch_model_from_dxf(dxf, existing_color),
                     // A DXF SOLID renders as a solid-fill hatch; rebuild it from
                     // the moved corners so the fill follows the transform.
-                    Some(EntityType::Solid(s)) => {
-                        Some(Self::solid_hatch_model(s, existing_color))
-                    }
+                    Some(EntityType::Solid(s)) => Some(Self::solid_hatch_model(s, existing_color)),
                     _ => None,
                 };
                 if let Some(model) = new_model {
@@ -281,7 +280,9 @@ impl Scene {
         let mut block_end = BlockEnd::new();
         block_end.common.handle = end_handle;
         block_end.common.owner_handle = br_handle;
-        self.document.add_entity(EntityType::BlockEnd(block_end)).ok()?;
+        self.document
+            .add_entity(EntityType::BlockEnd(block_end))
+            .ok()?;
         for sub in subs {
             let mut sub = sub.clone();
             view::dispatch::apply_transform(&mut sub, t);
@@ -295,10 +296,10 @@ impl Scene {
 
     pub fn copy_entities(&mut self, handles: &[Handle], t: &EntityTransform) -> Vec<Handle> {
         // Objects on a locked layer can't be copied (they can't be selected).
-        let clones: Vec<EntityType> = handles
+        let clones: Vec<(Handle, EntityType)> = handles
             .iter()
             .filter(|&&h| !self.is_layer_locked(h))
-            .filter_map(|&h| self.document.get_entity(h).cloned())
+            .filter_map(|&h| self.document.get_entity(h).cloned().map(|e| (h, e)))
             .collect();
         // MIRRTEXT also governs the copy path (default MIRROR keeps the source
         // and adds a mirrored copy): keep the copied text right-reading when the
@@ -308,7 +309,8 @@ impl Scene {
         let mirror_true =
             matches!(t, EntityTransform::Mirror { .. }) && self.document.header.mirror_text;
         let mut new_handles = Vec::with_capacity(clones.len());
-        for mut entity in clones {
+        let mut handle_map = rustc_hash::FxHashMap::default();
+        for (src_handle, mut entity) in clones {
             let text_orient = if preserve_text_orientation {
                 capture_text_orient(&entity)
             } else {
@@ -362,12 +364,24 @@ impl Scene {
                 }
             }
             new_handles.push(h);
+            if !h.is_null() {
+                handle_map.insert(src_handle, h);
+            }
+        }
+
+        let copied_groups = self.copy_complete_groups(&handle_map);
+        if copied_groups > 0 && self.is_recording_undo() {
+            // Group copies add Group objects / dictionary entries, which a pure
+            // entity delta cannot restore.
+            self.poison_undo_recording();
         }
         // The copies are new handles (natural memo misses, tessellated fresh)
         // and reference only already-cached blocks — no block defn changes.
         // Report them as additions so derived caches patch in exactly the copies.
-        let changes: Vec<(Handle, ChangeKind)> =
-            new_handles.iter().map(|&h| (h, ChangeKind::Added)).collect();
+        let changes: Vec<(Handle, ChangeKind)> = new_handles
+            .iter()
+            .map(|&h| (h, ChangeKind::Added))
+            .collect();
         self.bump_entities(&changes);
         new_handles
     }
