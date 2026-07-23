@@ -1335,10 +1335,11 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
                 let wires: Vec<_> = scene
                     .entity_wires()
-                    .into_iter()
+                    .iter()
                     .filter(|w| {
                         w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0
                     })
+                    .cloned()
                     .collect();
                 let hatches = scene.paper_canvas_hatches();
                 let wipeouts = scene.paper_canvas_wipeouts();
@@ -1388,7 +1389,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     pub(super) fn layout_plot_params(
         &self,
     ) -> (
-        Vec<crate::scene::WireModel>,
+        std::sync::Arc<Vec<crate::scene::WireModel>>,
         Vec<crate::scene::model::hatch_model::HatchModel>,
         Vec<crate::scene::model::hatch_model::HatchModel>,
         f64,
@@ -1496,7 +1497,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
             let mut x1 = f32::NEG_INFINITY;
             let mut y1 = f32::NEG_INFINITY;
             let mut any = false;
-            for w in scene.entity_wires() {
+            for w in scene.entity_wires().iter() {
                 let picked = crate::scene::Scene::handle_from_wire_name(&w.name)
                     .is_some_and(|h| set.contains(&h));
                 if !picked {
@@ -2150,8 +2151,9 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         let (wx0, wy0, wx1, wy1) = (x0 as f32, y0 as f32, x1 as f32, y1 as f32);
         let wires: Vec<_> = scene
             .entity_wires()
-            .into_iter()
+            .iter()
             .filter(|w| w.aabb[0] <= wx1 && w.aabb[2] >= wx0 && w.aabb[1] <= wy1 && w.aabb[3] >= wy0)
+            .cloned()
             .collect();
         let hatches: Vec<_> = scene.paper_canvas_hatches().as_ref().clone();
         let wipeouts: Vec<_> = scene.paper_canvas_wipeouts().as_ref().clone();

@@ -1069,9 +1069,15 @@ pub struct Scene {
     /// [`WIRE_CONTENT_GEN`] id. `split_face3d_wires` is an O(N) per-wire
     /// handle lookup + clone that otherwise re-runs every frame. A map, not a
     /// slot: a paper frame walks several sources (sheet + viewports).
+    ///
+    /// `None` for the second element means "no Face3D wire in this set — use
+    /// the base set itself". The base `Arc` is deliberately NOT stored here:
+    /// `try_resident_patch` can only move a resident set out for an
+    /// incremental patch while its `Arc` is uniquely held, so pinning it in
+    /// this cache would silently force a full rebuild on every edit (#358).
     #[allow(clippy::type_complexity)]
     split_cache:
-        RefCell<HashMap<u64, (Arc<Vec<WireModel>>, Arc<Vec<WireModel>>)>>,
+        RefCell<HashMap<u64, (Arc<Vec<WireModel>>, Option<Arc<Vec<WireModel>>>)>>,
     /// Cached `selected ∪ hover` handle set for the GPU xray overlay, keyed by
     /// `selection_generation`. Rebuilt only when the selection changes so
     /// `build_primitive` doesn't clone the set every frame.
@@ -2870,9 +2876,9 @@ impl Scene {
     /// Collect closed polygon outlines (world XY) from the current layout.
     pub fn closed_outlines(&self) -> Vec<Vec<[f32; 2]>> {
         self.entity_wires()
-            .into_iter()
+            .iter()
             .filter_map(|wire| {
-                let pts = wire.points;
+                let pts = &wire.points;
                 if pts.len() < 4 {
                     return None;
                 }
@@ -2891,7 +2897,7 @@ impl Scene {
                 // boundary commands) see one vertex per corner — not the doubled
                 // ring that otherwise shows two grips at every corner.
                 let mut ring: Vec<[f32; 2]> = Vec::with_capacity(pts.len());
-                for p in &pts {
+                for p in pts {
                     if !p[0].is_finite() || !p[1].is_finite() {
                         continue;
                     }
@@ -3361,8 +3367,12 @@ impl Scene {
     }
 
     /// Build WireModels from all document entities + optional preview wire.
-    pub fn entity_wires(&self) -> Vec<WireModel> {
-        (*self.entity_wires_arc()).clone()
+    ///
+    /// Returns the memoized set by `Arc` — callers only ever iterate it, and
+    /// the previous per-call deep clone was a full copy of every wire buffer
+    /// (hundreds of MB on large mesh imports, #358).
+    pub fn entity_wires(&self) -> Arc<Vec<WireModel>> {
+        self.entity_wires_arc()
     }
 
     /// Per-entity normalized draw-order depth, keyed by entity handle value.

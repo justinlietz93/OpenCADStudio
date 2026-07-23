@@ -36,7 +36,7 @@ pub struct PrintOptions {
 // is native-only; the web build gets a stub so the call site still compiles.
 #[cfg(target_arch = "wasm32")]
 pub async fn print_wires(
-    _wires: Vec<WireModel>,
+    _wires: std::sync::Arc<Vec<WireModel>>,
     _hatches: Vec<HatchModel>,
     _wipeouts: Vec<HatchModel>,
     _paper_w: f64,
@@ -57,7 +57,7 @@ pub fn list_printers() -> Vec<String> {
 #[cfg(target_arch = "wasm32")]
 #[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    _wires: Vec<WireModel>,
+    _wires: std::sync::Arc<Vec<WireModel>>,
     _hatches: Vec<HatchModel>,
     _wipeouts: Vec<HatchModel>,
     _paper_w: f64,
@@ -87,7 +87,7 @@ pub fn print_existing_pdf(_path: &std::path::Path, _opts: &PrintOptions) -> Resu
 /// Returns `Ok(printer_name)` on success or `Err(message)` on failure.
 #[cfg(not(target_arch = "wasm32"))]
 pub async fn print_wires(
-    wires: Vec<WireModel>,
+    wires: std::sync::Arc<Vec<WireModel>>,
     hatches: Vec<HatchModel>,
     wipeouts: Vec<HatchModel>,
     paper_w: f64,
@@ -150,7 +150,7 @@ pub fn list_printers() -> Vec<String> {
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(clippy::too_many_arguments)]
 pub async fn print_wires_with(
-    wires: Vec<WireModel>,
+    wires: std::sync::Arc<Vec<WireModel>>,
     hatches: Vec<HatchModel>,
     wipeouts: Vec<HatchModel>,
     paper_w: f64,

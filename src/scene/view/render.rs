@@ -1251,9 +1251,18 @@ impl Scene {
         // each frame — for every source, since all ids are stable now.
         let (face3d_wires, other_arc) = {
             let cached = { self.split_cache.borrow().get(&wire_content_id).cloned() };
-            cached.unwrap_or_else(|| {
-                let (f, o) = split_face3d_wires(&base_arc, &self.document);
-                let (fa, oa) = (Arc::new(f), Arc::new(o));
+            let (fa, oa) = cached.unwrap_or_else(|| {
+                // No Face3D wire at all (pure 2-D drawings, mesh imports):
+                // "others" would be a wire-for-wire copy of the base set —
+                // mark it `None` and use the base set directly instead of
+                // duplicating it (#358). The base Arc itself must not be
+                // stored in the cache (see the `split_cache` field docs).
+                let (fa, oa) = if base_arc.iter().any(|w| is_face3d_wire(w, &self.document)) {
+                    let (f, o) = split_face3d_wires(&base_arc, &self.document);
+                    (Arc::new(f), Some(Arc::new(o)))
+                } else {
+                    (Arc::new(Vec::new()), None)
+                };
                 let mut c = self.split_cache.borrow_mut();
                 // Ids change on rebuild, so old keys die naturally; the cap
                 // just bounds pathological churn.
@@ -1262,7 +1271,8 @@ impl Scene {
                 }
                 c.insert(wire_content_id, (fa.clone(), oa.clone()));
                 (fa, oa)
-            })
+            });
+            (fa, oa.unwrap_or_else(|| Arc::clone(&base_arc)))
         };
         // Base wire set — the cached `other` Arc directly, never cloned to
         // append overlays. Preview / interim wires ride in their own small
@@ -1569,9 +1579,19 @@ pub(crate) fn resolve_pattern(
     (pat_len, pat)
 }
 
+/// Whether a wire belongs to a Face3D entity, by document handle lookup —
+/// so no changes to WireModel are needed.
+fn is_face3d_wire(w: &WireModel, document: &acadrust::CadDocument) -> bool {
+    w.name
+        .parse::<u64>()
+        .ok()
+        .and_then(|v| document.get_entity(Handle::new(v)))
+        .map(|e| matches!(e, EntityType::Face3D(_)))
+        .unwrap_or(false)
+}
+
 /// Partition a wire list into (face3d_wires, other_wires).
 ///
-/// Uses a document handle lookup so no changes to WireModel are needed.
 /// O(N) per geometry epoch — acceptable since it runs once per epoch.
 fn split_face3d_wires(
     wires: &[WireModel],
@@ -1580,14 +1600,7 @@ fn split_face3d_wires(
     let mut face3d = Vec::new();
     let mut others = Vec::new();
     for w in wires {
-        let is_face3d = w
-            .name
-            .parse::<u64>()
-            .ok()
-            .and_then(|v| document.get_entity(Handle::new(v)))
-            .map(|e| matches!(e, EntityType::Face3D(_)))
-            .unwrap_or(false);
-        if is_face3d {
+        if is_face3d_wire(w, document) {
             face3d.push(w.clone());
         } else {
             others.push(w.clone());
