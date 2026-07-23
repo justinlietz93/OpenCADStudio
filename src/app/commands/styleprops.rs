@@ -258,37 +258,112 @@ impl OpenCADStudio {
                         .filter(|s| !s.is_empty())
                         .collect();
 
-                    let mut used_blocks: rustc_hash::FxHashSet<String> = self.tabs[i]
-                        .scene
-                        .document
-                        .entities()
-                        .filter_map(|e| match e {
-                            acadrust::EntityType::Insert(ins) => Some(ins.block_name.clone()),
-                            acadrust::EntityType::Dimension(d) => {
-                                Some(d.base().block_name.clone())
-                            }
-                            _ => None,
-                        })
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    // Dimension-style arrowheads reference blocks by handle
-                    // (DIMBLK/DIMBLK1/DIMBLK2/DIMLDRBLK) — keep those too.
-                    {
+                    // Which block definitions are LIVE — reachable from a real
+                    // layout container by following every block reference. A
+                    // block nothing reachable inserts is dead and purges, even a
+                    // whole mutually-referencing subgraph (e.g. the dependent
+                    // blocks a detached xref leaves behind: they insert one
+                    // another but hang off no layout, so a flat "is it named by
+                    // any INSERT" scan keeps them alive forever). Roots:
+                    //   • *Model_Space / *Paper_Space(N),
+                    //   • any block whose layout handle resolves to a real Layout
+                    //     object — a DANGLING layout handle, as orphaned xref
+                    //     blocks carry, does NOT count, so is_layout() alone can't
+                    //     shield the dead subgraph it heads,
+                    //   • dimension-style arrowhead blocks (referenced by handle).
+                    // A block's out-edges: its members' INSERT names, dimension
+                    // *D blocks, table *T / cell blocks, and MultiLeader content.
+                    let live_blocks: rustc_hash::FxHashSet<String> = {
                         let doc = &self.tabs[i].scene.document;
-                        let arrow_handles: Vec<acadrust::Handle> = doc
-                            .dim_styles
+                        let by_handle: rustc_hash::FxHashMap<acadrust::Handle, String> = doc
+                            .block_records
                             .iter()
-                            .flat_map(|ds| [ds.dimblk, ds.dimblk1, ds.dimblk2, ds.dimldrblk])
-                            .filter(|h| !h.is_null())
+                            .map(|br| (br.handle, br.name.clone()))
                             .collect();
-                        if !arrow_handles.is_empty() {
-                            for br in doc.block_records.iter() {
-                                if arrow_handles.contains(&br.handle) {
-                                    used_blocks.insert(br.name.clone());
+                        let is_real_layout = |br: &acadrust::BlockRecord| -> bool {
+                            let up = br.name.to_ascii_uppercase();
+                            up.starts_with("*MODEL_SPACE")
+                                || up.starts_with("*PAPER_SPACE")
+                                || matches!(
+                                    doc.objects.get(&br.layout),
+                                    Some(acadrust::objects::ObjectType::Layout(_))
+                                )
+                        };
+                        let children = |name: &str| -> Vec<String> {
+                            let mut out = Vec::new();
+                            let Some(br) = doc.block_records.get(name) else {
+                                return out;
+                            };
+                            for &h in &br.entity_handles {
+                                match doc.get_entity(h) {
+                                    Some(acadrust::EntityType::Insert(ins))
+                                        if !ins.block_name.is_empty() =>
+                                    {
+                                        out.push(ins.block_name.clone());
+                                    }
+                                    Some(acadrust::EntityType::Dimension(d))
+                                        if !d.base().block_name.is_empty() =>
+                                    {
+                                        out.push(d.base().block_name.clone());
+                                    }
+                                    Some(acadrust::EntityType::Table(t)) => {
+                                        if let Some(bh) = t.block_record_handle {
+                                            if let Some(n) = by_handle.get(&bh) {
+                                                out.push(n.clone());
+                                            }
+                                        }
+                                        for row in &t.rows {
+                                            for cell in &row.cells {
+                                                for c in &cell.contents {
+                                                    if let Some(bh) = c.block_handle {
+                                                        if let Some(n) = by_handle.get(&bh) {
+                                                            out.push(n.clone());
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    Some(acadrust::EntityType::MultiLeader(ml)) => {
+                                        if let Some(bh) = ml.block_content_handle {
+                                            if let Some(n) = by_handle.get(&bh) {
+                                                out.push(n.clone());
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            out
+                        };
+                        let mut live = rustc_hash::FxHashSet::default();
+                        let mut stack: Vec<String> = doc
+                            .block_records
+                            .iter()
+                            .filter(|&br| is_real_layout(br))
+                            .map(|br| br.name.clone())
+                            .collect();
+                        for ds in doc.dim_styles.iter() {
+                            for h in [ds.dimblk, ds.dimblk1, ds.dimblk2, ds.dimldrblk] {
+                                if !h.is_null() {
+                                    if let Some(n) = by_handle.get(&h) {
+                                        stack.push(n.clone());
+                                    }
                                 }
                             }
                         }
-                    }
+                        while let Some(n) = stack.pop() {
+                            if !live.insert(n.clone()) {
+                                continue;
+                            }
+                            for c in children(&n) {
+                                if !live.contains(&c) {
+                                    stack.push(c);
+                                }
+                            }
+                        }
+                        live
+                    };
 
                     // Build removal lists (still immutable)
                     let layer_remove: Vec<String> = if do_layers {
@@ -334,9 +409,14 @@ impl OpenCADStudio {
                         vec![]
                     };
 
-                    // Blocks: definitions with no INSERT/Dimension reference.
-                    // Skip anonymous (*Model_Space/*Paper_Space/*U*/*D*…), layout,
-                    // and xref blocks — those are system- or reference-managed.
+                    // Blocks: everything the layout-reachability walk above did
+                    // NOT mark live. That covers unreferenced named blocks,
+                    // leftover anonymous blocks (*U hatch/unnamed, orphaned *D
+                    // dimension, *T table, dynamic-block variants — AutoCAD drops
+                    // these too), AND whole dead subgraphs a detached xref leaves
+                    // behind. Live xrefs stay (an attached xref's blocks are
+                    // reached from the layout that inserts them); the *Model_Space
+                    // / *Paper_Space containers are never removed.
                     let block_remove: Vec<String> = if do_blocks {
                         self.tabs[i]
                             .scene
@@ -344,11 +424,16 @@ impl OpenCADStudio {
                             .block_records
                             .iter()
                             .filter(|br| {
-                                !br.is_anonymous()
-                                    && !br.is_layout()
-                                    && !br.flags.is_xref
+                                let up = br.name.to_ascii_uppercase();
+                                // Never PURGE an xref *definition* — that is a
+                                // detach, not a purge. (Orphaned dependent blocks
+                                // a past detach left behind are is_xref=false and
+                                // still fall to the reachability test.)
+                                !br.flags.is_xref
                                     && !br.flags.is_xref_overlay
-                                    && !used_blocks.contains(&br.name)
+                                    && !up.starts_with("*MODEL_SPACE")
+                                    && !up.starts_with("*PAPER_SPACE")
+                                    && !live_blocks.contains(&br.name)
                             })
                             .map(|br| br.name.clone())
                             .collect()
@@ -406,8 +491,54 @@ impl OpenCADStudio {
                     n_blocks += block_remove.len();
                 }
 
+                // Draw-order cleanup. A SortEntitiesTable lists a block's
+                // entities in draw order; purging the block drops the entities
+                // and the block record, but this object lingers, still holding
+                // the (now dangling) handle of every deleted entity. On a
+                // detached-xref purge that is hundreds of thousands of stale
+                // handles — megabytes of dead weight the save re-emits, which is
+                // why an OCS-purged file stayed far larger than AutoCAD's.
+                // Drop every SortEntitiesTable whose owning block is gone
+                // (AutoCAD's "orphaned data").
+                let mut n_sortents = 0usize;
+                if do_blocks {
+                    let live_blocks: rustc_hash::FxHashSet<acadrust::Handle> = self.tabs[i]
+                        .scene
+                        .document
+                        .block_records
+                        .iter()
+                        .map(|br| br.handle)
+                        .collect();
+                    let orphans: Vec<acadrust::Handle> = self.tabs[i]
+                        .scene
+                        .document
+                        .objects
+                        .iter()
+                        .filter_map(|(h, o)| match o {
+                            acadrust::objects::ObjectType::SortEntitiesTable(s)
+                                if !live_blocks.contains(&s.block_owner_handle) =>
+                            {
+                                Some(*h)
+                            }
+                            _ => None,
+                        })
+                        .collect();
+                    if !orphans.is_empty() {
+                        // `snapshot_pushed` is this purge's last use — no
+                        // re-assignment needed (a block purge already snapshotted;
+                        // a snapshot here only matters when nothing else changed).
+                        if !snapshot_pushed {
+                            self.push_undo_snapshot(i, "PURGE");
+                        }
+                        for h in &orphans {
+                            self.tabs[i].scene.document.objects.remove(h);
+                        }
+                        n_sortents = orphans.len();
+                    }
+                }
+
                 let purged = n_layers + n_styles + n_lts + n_blocks;
-                if purged > 0 {
+                if purged > 0 || n_sortents > 0 {
                     self.tabs[i].dirty = true;
                     // Rebuild the layer/style/linetype panel + ribbon caches so
                     // the removed definitions disappear from the UI immediately.
@@ -426,9 +557,12 @@ impl OpenCADStudio {
                     if n_blocks > 0 {
                         parts.push(format!("{n_blocks} block(s)"));
                     }
+                    if n_sortents > 0 {
+                        parts.push(format!("{n_sortents} stale draw-order table(s)"));
+                    }
                     self.command_line.push_output(&format!(
-                        "PURGE: {} definition(s) removed — {}.",
-                        purged,
+                        "PURGE: {} item(s) removed — {}.",
+                        purged + n_sortents,
                         parts.join(", ")
                     ));
                 } else {
