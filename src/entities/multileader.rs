@@ -361,7 +361,7 @@ fn text_box_geom(ml: &MultiLeader) -> ([f64; 2], [f64; 3]) {
         ctx.text_flow_direction,
         acadrust::entities::multileader::FlowDirectionType::Vertical
     );
-    let h_anchor: f32 = match ml.text_attachment_point {
+    let h_anchor: f32 = match ctx.text_attachment_point {
         acadrust::entities::multileader::TextAttachmentPointType::Left => 0.0,
         acadrust::entities::multileader::TextAttachmentPointType::Center => 0.5,
         acadrust::entities::multileader::TextAttachmentPointType::Right => 1.0,
@@ -1673,7 +1673,9 @@ impl MultiLeaderTess for MultiLeader {
             use acadrust::entities::multileader::{
                 TextAttachmentDirectionType, TextAttachmentPointType,
             };
-            let h_anchor: f32 = match ml.text_attachment_point {
+            // The context's attachment point exists in every DWG version;
+            // the entity-level copy only exists from R2010 on.
+            let h_anchor: f32 = match ctx.text_attachment_point {
                 TextAttachmentPointType::Left => 0.0,
                 TextAttachmentPointType::Center => 0.5,
                 TextAttachmentPointType::Right => 1.0,
