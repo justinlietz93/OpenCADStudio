@@ -36,6 +36,85 @@ impl Scene {
         gh
     }
 
+    /// Recreate every group whose full membership was copied.
+    ///
+    /// Partial group copies intentionally remain ungrouped: copying one member
+    /// out of a group should not create a new one-member fragment. When the
+    /// whole source group is in `handle_map`, the new handles get their own
+    /// Group object so later selection/editing treats the copy as a group too.
+    pub fn copy_complete_groups(
+        &mut self,
+        handle_map: &rustc_hash::FxHashMap<Handle, Handle>,
+    ) -> usize {
+        if handle_map.is_empty() {
+            return 0;
+        }
+
+        let group_dict_handle = self.document.header.acad_group_dict_handle;
+        let sources: Vec<_> = self
+            .document
+            .objects
+            .values()
+            .filter_map(|obj| match obj {
+                ObjectType::Group(g)
+                    if !g.entities.is_empty()
+                        && g.entities.iter().all(|h| handle_map.contains_key(h)) =>
+                {
+                    Some(g.clone())
+                }
+                _ => None,
+            })
+            .collect();
+
+        let mut copied = 0;
+        for source in sources {
+            let name = self.unique_group_copy_name(&source.name);
+            let mut group = source;
+            group.handle = self.document.allocate_handle();
+            group.owner = group_dict_handle;
+            group.name = name.clone();
+            group.entities = group
+                .entities
+                .iter()
+                .filter_map(|h| handle_map.get(h).copied())
+                .collect();
+            let gh = group.handle;
+            self.document.objects.insert(gh, ObjectType::Group(group));
+            if let Some(ObjectType::Dictionary(dict)) =
+                self.document.objects.get_mut(&group_dict_handle)
+            {
+                dict.add_entry(&name, gh);
+            }
+            copied += 1;
+        }
+        copied
+    }
+
+    fn unique_group_copy_name(&self, source: &str) -> String {
+        let group_dict_handle = self.document.header.acad_group_dict_handle;
+        let exists = |name: &str| {
+            self.document
+                .objects
+                .get(&group_dict_handle)
+                .and_then(|obj| match obj {
+                    ObjectType::Dictionary(dict) => Some(
+                        dict.entries
+                            .iter()
+                            .any(|(entry, _)| entry.eq_ignore_ascii_case(name)),
+                    ),
+                    _ => None,
+                })
+                .unwrap_or(false)
+        };
+        for n in 1.. {
+            let candidate = format!("{source}_COPY{n}");
+            if !exists(&candidate) {
+                return candidate;
+            }
+        }
+        unreachable!()
+    }
+
     /// Dissolves all groups that contain any of the given handles.
     /// Returns the number of groups removed.
     pub fn delete_groups_containing(&mut self, handles: &[Handle]) -> usize {
@@ -80,5 +159,4 @@ impl Scene {
         }
         self.bump_selection();
     }
-
 }
