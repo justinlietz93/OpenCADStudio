@@ -749,9 +749,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
     /// Rasterize the current drawing into the document's DWG preview image, so
     /// a saved file shows a thumbnail in file browsers and other CAD apps.
     /// A degenerate/empty drawing clears any stale preview.
-    pub(super) fn stamp_thumbnail(&mut self, i: usize) {
+    /// `target` is the version the file is about to be written as — a PNG
+    /// preview (few KB vs a ~180 KB DIB) is only valid from R2013 (AC1027) on.
+    pub(super) fn stamp_thumbnail(&mut self, i: usize, target: acadrust::DxfVersion) {
+        let png = target >= acadrust::DxfVersion::AC1027;
+        // Frame the thumbnail exactly as the model pane shows it now (current
+        // pan/zoom/rotation, visible region only), so pass the pane pixel size.
         self.tabs[i].scene.document.preview =
-            crate::io::thumbnail::from_scene(&self.tabs[i].scene);
+            crate::io::thumbnail::from_scene(&self.tabs[i].scene, png, self.vp_size);
         // The on-disk thumbnail will change — drop the cached Start-page handle
         // so it re-reads the updated file on the next refresh.
         if let Some(p) = self.tabs[i].current_path.clone() {
@@ -784,7 +789,8 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                         crate::io::write_backup(&path);
                     }
                     self.sync_truck_solids_to_acis(i);
-                    self.stamp_thumbnail(i);
+                    let ver = self.tabs[i].scene.document.version;
+                    self.stamp_thumbnail(i, ver);
                     match crate::io::save(&self.tabs[i].scene.document, &path) {
                         Ok(()) => {
                             self.command_line
@@ -890,7 +896,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                     sync_annotation_scale_header(&mut self.tabs[i].scene);
                     self.stamp_header_sysvars(i);
                     self.sync_truck_solids_to_acis(i);
-                    self.stamp_thumbnail(i);
+                    self.stamp_thumbnail(i, version);
                     match crate::io::save_to_bytes(&self.tabs[i].scene.document, ext, version) {
                         Ok(bytes) => {
                             crate::sys::download_bytes(&filename, &bytes);
@@ -931,7 +937,7 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
         // Persist Ortho / running OSNAP into the header (Save-As path).
         self.stamp_header_sysvars(i);
         self.sync_truck_solids_to_acis(i);
-        self.stamp_thumbnail(i);
+        self.stamp_thumbnail(i, version);
         if self.backup_on_save {
             crate::io::write_backup(&path);
         }

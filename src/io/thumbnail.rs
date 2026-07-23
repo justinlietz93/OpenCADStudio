@@ -1,14 +1,16 @@
 //! DWG preview thumbnails.
 //!
-//! - [`from_scene`] / [`from_wires`] rasterize the current layout's wires into a
-//!   small DIB [`acadrust::Preview`], embedded on save so OCS drawings show a
-//!   thumbnail in file browsers and other CAD apps.
+//! - [`from_scene`] rasterizes the drawing exactly as it is framed on screen —
+//!   the live camera's pan / zoom / rotation, only the currently visible region,
+//!   not the whole extent — into a small [`acadrust::Preview`] embedded on save
+//!   so OCS drawings show a thumbnail in file browsers and other CAD apps.
 //! - [`read_handle`] / [`extract_to_png`] read a DWG's *embedded* preview back
 //!   for the Start page and the OS file-manager thumbnailer. Extraction lives in
 //!   the shared [`dwg_thumbnailer`] core crate (also used by the Windows/macOS
 //!   thumbnail handlers).
 
 use acadrust::{Preview, PreviewFormat};
+use iced::Rectangle;
 use image::{ImageFormat, Rgb, RgbImage};
 use std::io::Cursor;
 
@@ -16,61 +18,66 @@ use crate::scene::{Scene, WireModel};
 
 /// Longest edge of the generated thumbnail, in pixels.
 const MAX_DIM: u32 = 256;
-/// Blank border kept around the drawing, in pixels.
-const MARGIN: f64 = 6.0;
 
-/// Build a preview from the scene's current-layout wires. `None` when there is
-/// nothing finite to draw (empty or degenerate drawing).
-pub fn from_scene(scene: &Scene) -> Option<Preview> {
-    from_wires(&scene.entity_wires(), scene.bg_color)
-}
-
-/// Rasterize `wires` (world XY) onto a `bg`-filled canvas and encode a DIB.
-pub fn from_wires(wires: &[WireModel], bg: [f32; 4]) -> Option<Preview> {
-    // ── World-XY bounds over every finite vertex ─────────────────────────────
-    let (mut min_x, mut min_y) = (f64::INFINITY, f64::INFINITY);
-    let (mut max_x, mut max_y) = (f64::NEG_INFINITY, f64::NEG_INFINITY);
-    for w in wires {
-        for (i, p) in w.points.iter().enumerate() {
-            if !p[0].is_finite() || !p[1].is_finite() {
-                continue;
-            }
-            let (x, y) = abs_xy(w, i, p);
-            min_x = min_x.min(x);
-            min_y = min_y.min(y);
-            max_x = max_x.max(x);
-            max_y = max_y.max(y);
-        }
+/// Build a preview matching what is currently on screen: the drawing's wires
+/// projected through the live camera into a `viewport`-aspect canvas, so the
+/// thumbnail is the visible framing (pan / zoom / rotation, only the on-screen
+/// region), not the whole extent. `viewport` is the model pane's pixel size.
+/// `None` when the drawing is empty (clears any stale preview).
+///
+/// `png` picks the encoding: a line drawing on a flat background is almost all
+/// one colour, so a **PNG** collapses to a few KB where the uncompressed
+/// **BMP/DIB** stays ~180 KB at 256². PNG previews are only valid from R2013
+/// (AC1027) on, so the caller passes `false` for older targets → BMP/DIB.
+pub fn from_scene(scene: &Scene, png: bool, viewport: (f32, f32)) -> Option<Preview> {
+    let wires = scene.entity_wires();
+    if wires.is_empty() {
+        return None;
     }
-    let (dw, dh) = (max_x - min_x, max_y - min_y);
-    if !dw.is_finite() || !dh.is_finite() || (dw <= 0.0 && dh <= 0.0) {
+    let (vw, vh) = viewport;
+    if !(vw > 0.0 && vh > 0.0) {
         return None;
     }
 
-    // ── Canvas sized to the drawing's aspect, longest edge = MAX_DIM ─────────
-    let aspect = if dh > 0.0 { dw / dh } else { f64::INFINITY };
-    let (cw, ch) = if aspect >= 1.0 {
+    // Canvas keeps the viewport's aspect so the framing is undistorted; longest
+    // edge = MAX_DIM. Projecting with the canvas rectangle as the camera bounds
+    // makes `project` return pixel coordinates already in canvas space.
+    let (cw, ch) = canvas_dims((vw / vh) as f64);
+    let bounds = Rectangle {
+        x: 0.0,
+        y: 0.0,
+        width: cw as f32,
+        height: ch as f32,
+    };
+    let cam = scene.camera.borrow();
+    rasterize(&wires, cw, ch, scene.bg_color, png, |x, y, z| {
+        cam.project(glam::DVec3::new(x, y, z), bounds)
+            .map(|s| (s.x.round() as i32, s.y.round() as i32))
+    })
+}
+
+/// Canvas dimensions for an aspect ratio, longest edge = [`MAX_DIM`].
+fn canvas_dims(aspect: f64) -> (u32, u32) {
+    if aspect >= 1.0 {
         (MAX_DIM, ((MAX_DIM as f64 / aspect).round() as u32).clamp(16, MAX_DIM))
     } else {
         (((MAX_DIM as f64 * aspect).round() as u32).clamp(16, MAX_DIM), MAX_DIM)
-    };
+    }
+}
 
-    // World → pixel: uniform scale to fit inside the margin, drawing centered,
-    // Y flipped (world up → image row 0 at top).
-    let sx = (cw as f64 - 2.0 * MARGIN) / dw.max(1e-9);
-    let sy = (ch as f64 - 2.0 * MARGIN) / dh.max(1e-9);
-    let scale = sx.min(sy);
-    let off_x = (cw as f64 - dw * scale) * 0.5;
-    let off_y = (ch as f64 - dh * scale) * 0.5;
-    let to_px = |x: f64, y: f64| -> (i32, i32) {
-        let px = off_x + (x - min_x) * scale;
-        let py = ch as f64 - (off_y + (y - min_y) * scale); // flip Y
-        (px.round() as i32, py.round() as i32)
-    };
-
-    // ── Rasterize ────────────────────────────────────────────────────────────
-    let bg_rgb = to_rgb(bg);
-    let mut img = RgbImage::from_pixel(cw, ch, Rgb(bg_rgb));
+/// Rasterize `wires` onto a `bg`-filled `cw`×`ch` canvas, placing each vertex
+/// with `project` (world XYZ → canvas pixel, `None` = not projectable), and
+/// encode the result. A `None` from `project` breaks the polyline run, as does a
+/// NaN separator, so off-screen / clipped segments simply don't draw.
+fn rasterize(
+    wires: &[WireModel],
+    cw: u32,
+    ch: u32,
+    bg: [f32; 4],
+    png: bool,
+    project: impl Fn(f64, f64, f64) -> Option<(i32, i32)>,
+) -> Option<Preview> {
+    let mut img = RgbImage::from_pixel(cw, ch, Rgb(to_rgb(bg)));
     for w in wires {
         let col = Rgb(to_rgb(w.color));
         let mut prev: Option<(i32, i32)> = None;
@@ -79,33 +86,120 @@ pub fn from_wires(wires: &[WireModel], bg: [f32; 4]) -> Option<Preview> {
                 prev = None; // NaN separator breaks the run
                 continue;
             }
-            let (x, y) = abs_xy(w, i, p);
-            let cur = to_px(x, y);
-            if let Some(p0) = prev {
-                draw_line(&mut img, p0, cur, col);
+            let (x, y, z) = abs_xyz(w, i, p);
+            let cur = project(x, y, z);
+            if let (Some(a), Some(b)) = (prev, cur) {
+                draw_line(&mut img, a, b, col);
             }
-            prev = Some(cur);
+            prev = cur;
         }
     }
+    encode(img, png)
+}
 
-    // ── Encode BMP, strip the 14-byte BITMAPFILEHEADER → DIB ─────────────────
+/// Encode the canvas. PNG for R2013+ targets (few KB); else a BMP → DIB (no
+/// 14-byte BITMAPFILEHEADER, which the DWG preview container doesn't carry).
+/// The BMP is an 8-bit **RLE8**-compressed DIB — a line drawing on a flat
+/// background is a few distinct colours with long single-colour runs, so it
+/// collapses from the ~180 KB of a 24-bit DIB to a handful of KB. A view with
+/// more than 256 distinct colours (rare) can't be palettised, so it falls back
+/// to the 24-bit uncompressed DIB.
+fn encode(img: RgbImage, png: bool) -> Option<Preview> {
+    if png {
+        let mut buf = Cursor::new(Vec::new());
+        img.write_to(&mut buf, ImageFormat::Png).ok()?;
+        let data = buf.into_inner();
+        return (!data.is_empty()).then_some(Preview { format: PreviewFormat::Png, data });
+    }
+    let data = rle8_dib(&img).or_else(|| bmp24_dib(&img))?;
+    Some(Preview { format: PreviewFormat::Bmp, data })
+}
+
+/// Build an 8-bit palettised, `BI_RLE8`-compressed DIB. `None` when the image
+/// holds more than 256 distinct colours (the caller then uses 24-bit).
+fn rle8_dib(img: &RgbImage) -> Option<Vec<u8>> {
+    let (w, h) = (img.width(), img.height());
+    // Exact palette + per-pixel index (top-to-bottom, left-to-right).
+    let mut palette: Vec<[u8; 3]> = Vec::new();
+    let mut lut: std::collections::HashMap<[u8; 3], u8> = std::collections::HashMap::new();
+    let mut idx = Vec::with_capacity((w * h) as usize);
+    for px in img.pixels() {
+        let c = [px.0[0], px.0[1], px.0[2]];
+        let i = if let Some(&i) = lut.get(&c) {
+            i
+        } else {
+            if palette.len() >= 256 {
+                return None;
+            }
+            let i = palette.len() as u8;
+            palette.push(c);
+            lut.insert(c, i);
+            i
+        };
+        idx.push(i);
+    }
+
+    // RLE8 body, rows bottom-up (BMP stores the last image row first). Encoded
+    // runs only: 2 bytes per single-colour run — ideal for flat-fill previews.
+    let mut rle = Vec::new();
+    for (n, row) in (0..h).rev().enumerate() {
+        let line = &idx[(row * w) as usize..(row * w + w) as usize];
+        let mut x = 0usize;
+        while x < line.len() {
+            let v = line[x];
+            let mut run = 1usize;
+            while x + run < line.len() && line[x + run] == v && run < 255 {
+                run += 1;
+            }
+            rle.push(run as u8);
+            rle.push(v);
+            x += run;
+        }
+        if n + 1 < h as usize {
+            rle.extend_from_slice(&[0, 0]); // end of line
+        }
+    }
+    rle.extend_from_slice(&[0, 1]); // end of bitmap
+
+    // BITMAPINFOHEADER (40) + full 256-entry palette (BGRA) + RLE body. The
+    // 256-entry palette is required: the reader derives the pixel-data offset as
+    // `(1 << bitCount) * 4`, so a short palette would misplace it.
+    let mut dib = Vec::with_capacity(40 + 1024 + rle.len());
+    dib.extend_from_slice(&40u32.to_le_bytes()); // biSize
+    dib.extend_from_slice(&(w as i32).to_le_bytes());
+    dib.extend_from_slice(&(h as i32).to_le_bytes()); // + = bottom-up
+    dib.extend_from_slice(&1u16.to_le_bytes()); // biPlanes
+    dib.extend_from_slice(&8u16.to_le_bytes()); // biBitCount
+    dib.extend_from_slice(&1u32.to_le_bytes()); // biCompression = BI_RLE8
+    dib.extend_from_slice(&(rle.len() as u32).to_le_bytes()); // biSizeImage
+    dib.extend_from_slice(&0i32.to_le_bytes()); // biXPelsPerMeter
+    dib.extend_from_slice(&0i32.to_le_bytes()); // biYPelsPerMeter
+    dib.extend_from_slice(&256u32.to_le_bytes()); // biClrUsed
+    dib.extend_from_slice(&0u32.to_le_bytes()); // biClrImportant
+    for i in 0..256 {
+        let c = palette.get(i).copied().unwrap_or([0, 0, 0]);
+        dib.extend_from_slice(&[c[2], c[1], c[0], 0]); // BGRA
+    }
+    dib.extend_from_slice(&rle);
+    Some(dib)
+}
+
+/// 24-bit uncompressed DIB (fallback): the `image` BMP minus its file header.
+fn bmp24_dib(img: &RgbImage) -> Option<Vec<u8>> {
     let mut buf = Cursor::new(Vec::new());
     img.write_to(&mut buf, ImageFormat::Bmp).ok()?;
     let bmp = buf.into_inner();
-    if bmp.len() <= 14 {
-        return None;
-    }
-    Some(Preview { format: PreviewFormat::Bmp, data: bmp[14..].to_vec() })
+    (bmp.len() > 14).then(|| bmp[14..].to_vec())
 }
 
-/// Absolute world XY of vertex `i`, reconstructing the double-single residual.
+/// Absolute world XYZ of vertex `i`, reconstructing the double-single residual.
 #[inline]
-fn abs_xy(w: &WireModel, i: usize, p: &[f32; 3]) -> (f64, f64) {
-    let (lx, ly) = w
+fn abs_xyz(w: &WireModel, i: usize, p: &[f32; 3]) -> (f64, f64, f64) {
+    let (lx, ly, lz) = w
         .points_low
         .get(i)
-        .map_or((0.0, 0.0), |l| (l[0] as f64, l[1] as f64));
-    (p[0] as f64 + lx, p[1] as f64 + ly)
+        .map_or((0.0, 0.0, 0.0), |l| (l[0] as f64, l[1] as f64, l[2] as f64));
+    (p[0] as f64 + lx, p[1] as f64 + ly, p[2] as f64 + lz)
 }
 
 #[inline]
@@ -157,39 +251,84 @@ mod tests {
         }
     }
 
-    /// Prepend a `BITMAPFILEHEADER` to a 24-bit DIB so `image` can decode it.
+    /// Prepend a `BITMAPFILEHEADER` so `image` can decode the DIB. Mirrors the
+    /// palette-aware offset the shared `dwg_thumbnailer::dib_to_bmp` computes.
     fn dib_to_bmp(dib: &[u8]) -> Vec<u8> {
+        let bi_size = u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]]) as usize;
+        let bpp = u16::from_le_bytes([dib[14], dib[15]]) as usize;
+        let palette = if (1..=8).contains(&bpp) { (1usize << bpp) * 4 } else { 0 };
         let mut v = Vec::with_capacity(14 + dib.len());
         v.extend_from_slice(b"BM");
         v.extend_from_slice(&((14 + dib.len()) as u32).to_le_bytes());
         v.extend_from_slice(&0u32.to_le_bytes());
-        v.extend_from_slice(&54u32.to_le_bytes()); // 14 + 40, no palette (24-bit)
+        v.extend_from_slice(&((14 + bi_size + palette) as u32).to_le_bytes());
         v.extend_from_slice(dib);
         v
     }
 
     #[test]
-    fn empty_input_yields_none() {
-        assert!(from_wires(&[], [0.0, 0.0, 0.0, 1.0]).is_none());
+    fn canvas_keeps_aspect_with_max_dim_edge() {
+        assert_eq!(canvas_dims(1.0), (MAX_DIM, MAX_DIM));
+        assert_eq!(canvas_dims(2.0), (MAX_DIM, MAX_DIM / 2)); // wide
+        assert_eq!(canvas_dims(0.5), (MAX_DIM / 2, MAX_DIM)); // tall
     }
 
     #[test]
-    fn draws_a_valid_non_blank_dib() {
+    fn rasterize_draws_a_valid_non_blank_dib() {
         let bg = [0.1, 0.1, 0.1, 1.0];
         // A closed square (connected polyline) in a distinct colour.
-        let sq = wire(&[[0.0, 0.0], [10.0, 0.0], [10.0, 10.0], [0.0, 10.0], [0.0, 0.0]],
-            [1.0, 0.0, 0.0, 1.0]);
-        let p = from_wires(&[sq], bg).expect("some preview");
+        let sq = wire(
+            &[[10.0, 10.0], [90.0, 10.0], [90.0, 90.0], [10.0, 90.0], [10.0, 10.0]],
+            [1.0, 0.0, 0.0, 1.0],
+        );
+        // Trivial projector: world XY straight to pixels (Y flipped), z ignored.
+        let p = rasterize(&[sq], MAX_DIM, MAX_DIM, bg, false, |x, y, _| {
+            Some((x.round() as i32, (MAX_DIM as f64 - y).round() as i32))
+        })
+        .expect("some preview");
         assert_eq!(p.format, PreviewFormat::Bmp);
         // DIB starts with a 40-byte BITMAPINFOHEADER.
         assert_eq!(&p.data[0..4], &40u32.to_le_bytes());
-        // Decodes to a square canvas (drawing aspect 1:1 → MAX_DIM²).
         let img = image::load_from_memory(&dib_to_bmp(&p.data)).expect("decodes").to_rgb8();
         assert_eq!((img.width(), img.height()), (MAX_DIM, MAX_DIM));
-        // At least one red pixel was drawn (not a blank fill).
         let bg_px = to_rgb(bg);
         assert!(img.pixels().any(|px| px.0 != bg_px), "nothing drawn");
         assert!(img.pixels().any(|px| px.0[0] > 128 && px.0[1] < 64), "square not red");
+    }
+
+    #[test]
+    fn rle8_bmp_is_8bit_compressed_and_round_trips() {
+        let bg = [1.0, 1.0, 1.0, 1.0];
+        let sq = wire(&[[10.0, 10.0], [90.0, 90.0]], [0.0, 0.0, 0.0, 1.0]);
+        let proj = |x: f64, y: f64, _z: f64| Some((x.round() as i32, y.round() as i32));
+        let bmp = rasterize(&[sq], MAX_DIM, MAX_DIM, bg, false, proj).unwrap();
+        assert_eq!(bmp.format, PreviewFormat::Bmp);
+        // 8-bit, BI_RLE8.
+        assert_eq!(u16::from_le_bytes([bmp.data[14], bmp.data[15]]), 8, "bitcount");
+        assert_eq!(
+            u32::from_le_bytes([bmp.data[16], bmp.data[17], bmp.data[18], bmp.data[19]]),
+            1,
+            "compression = BI_RLE8"
+        );
+        // Far under a 24-bit DIB of the same canvas (256·256·3 = 196 608).
+        assert!(bmp.data.len() < 196_608 / 10, "rle8 {} not << 24-bit", bmp.data.len());
+        // Decodes through the exact path the reader uses, line preserved.
+        let img = image::load_from_memory(&dib_to_bmp(&bmp.data)).expect("rle8 decodes").to_rgb8();
+        assert_eq!((img.width(), img.height()), (MAX_DIM, MAX_DIM));
+        assert!(img.pixels().any(|px| px.0 == [0, 0, 0]), "black line missing");
+    }
+
+    #[test]
+    fn png_preview_decodes() {
+        let bg = [1.0, 1.0, 1.0, 1.0];
+        let sq = wire(&[[10.0, 10.0], [90.0, 90.0]], [0.0, 0.0, 0.0, 1.0]);
+        let p = rasterize(&[sq], MAX_DIM, MAX_DIM, bg, true, |x, y, _| {
+            Some((x.round() as i32, y.round() as i32))
+        })
+        .unwrap();
+        assert_eq!(p.format, PreviewFormat::Png);
+        let img = image::load_from_memory_with_format(&p.data, ImageFormat::Png).expect("png decodes");
+        assert_eq!((img.width(), img.height()), (MAX_DIM, MAX_DIM));
     }
 }
 
