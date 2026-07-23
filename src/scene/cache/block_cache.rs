@@ -342,6 +342,12 @@ fn build_defn(
         if layer_hidden(doc, &entity.common().layer) {
             continue;
         }
+        // Annotative scale representation: bake only the current scale's copy
+        // into the defn so off-scale representations don't stack (e.g. a 1×
+        // copy under a 10×). See `annotative::annotative_offscale`.
+        if crate::scene::annotative::annotative_offscale(doc, entity.common()) {
+            continue;
+        }
         match entity {
             EntityType::Block(_) | EntityType::BlockEnd(_) => continue,
             // A non-constant ATTDEF is only a template — the insert supplies an

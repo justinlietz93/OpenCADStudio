@@ -325,6 +325,7 @@ pub(crate) fn tessellate_entity_dim_text(
         None,
         view_aabb,
         world_per_pixel,
+        false,
     );
     for w in &mut wires {
         // Synth dim text carries no real entity colour — paint everything
@@ -351,6 +352,11 @@ pub(crate) fn tessellate_entity(
     view_aabb: Option<[f32; 4]>,
     // World units per screen pixel for LOD culling. `None` = no LOD.
     world_per_pixel: Option<f32>,
+    // True only when tessellating content shown INSIDE a paper-space viewport,
+    // where PSLTSCALE scales linetypes by the viewport scale. Model-space (and
+    // paper-sheet) rendering passes false: a drawing's annotation scale must
+    // not resize model-space linetypes (that is MSLTSCALE, off here).
+    paper_space: bool,
 ) -> Vec<WireModel> {
     let h = e.common().handle;
     let sel = selected.contains(&h);
@@ -501,8 +507,12 @@ pub(crate) fn tessellate_entity(
     let entity_color = fade_if_locked(document, e, entity_color, bg_color);
     let lt_scale = document.header.linetype_scale as f32 * e.common().linetype_scale as f32;
     let lt_name = view::render::linetype_name_for(document, e);
-    // PSLTSCALE: scale linetype dashes by viewport anno_scale so they appear uniform in paper space.
-    let pslt_factor = if document.header.paper_space_linetype_scaling {
+    // PSLTSCALE: scale linetype dashes by the viewport scale so they appear
+    // uniform in paper space. Only applies to content shown inside a paper-space
+    // viewport (`paper_space`); model space uses LTSCALE × CELTSCALE unscaled by
+    // the annotation scale, otherwise a drawing at e.g. CANNOSCALE 10:1 draws
+    // its linetypes 10× off.
+    let pslt_factor = if paper_space && document.header.paper_space_linetype_scaling {
         anno_scale
     } else {
         1.0
@@ -760,6 +770,7 @@ pub(crate) fn tessellate_entity(
                             block_cache,
                             view_aabb,
                             world_per_pixel,
+                            paper_space,
                         );
                         for mut w in sub_wires {
                             w.name = h.value().to_string();
@@ -921,6 +932,7 @@ pub(crate) fn tessellate_entity(
                             block_cache,
                             view_aabb,
                             world_per_pixel,
+                            paper_space,
                         );
                         for mut w in sub_wires {
                             w.name = h.value().to_string();

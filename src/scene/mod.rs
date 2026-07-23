@@ -3212,6 +3212,7 @@ impl Scene {
                 Some(&blk),
                 None,
                 None,
+                anno_scale_override.is_some(),
             );
             memo_updates.push((*h, Arc::new(raw.clone())));
             let mut faded = raw;
@@ -4541,6 +4542,16 @@ impl Scene {
                 }
             }
         }
+        // Annotative scale representation: draw only the current scale's copy.
+        // Model-space only (`frozen_layers` is None): a paper-space viewport
+        // renders at its own annotation scale and already hides the off-scale
+        // representations through its per-viewport frozen "0 @ <scale>" layers,
+        // so applying the model-space scale here would fight that.
+        if frozen_layers.is_none()
+            && crate::scene::annotative::annotative_offscale(&self.document, c)
+        {
+            return false;
+        }
         self.belongs_to_visible_block(c.handle, c.owner_handle, block_handle)
     }
 
@@ -4674,6 +4685,9 @@ impl Scene {
         } else {
             1.0
         };
+        // Content shown inside a paper-space viewport carries a scale override;
+        // only there does PSLTSCALE resize linetypes by the viewport scale.
+        let paper = anno_scale_override.is_some();
         let blk_cache = self.block_cache_arc();
         let blk_ref: &cache::block_cache::BlockCache = &blk_cache;
         // Zoom-adaptive curve sampling for top-level Edge tessellation. Target
@@ -4776,6 +4790,7 @@ impl Scene {
                     let e: &EntityType = e;
                     let w = tessellate_entity(
                         doc, sel, avp, bg, anno, e, Some(blk_ref), view_aabb, wpp,
+                        paper,
                     );
                     (e.common().handle, Arc::new(w))
                 })
@@ -4795,6 +4810,7 @@ impl Scene {
                 .flat_map(|e| {
                     tessellate_entity(
                         doc, sel, avp, bg, anno, e, Some(blk_ref), view_aabb, wpp,
+                        paper,
                     )
                 })
                 .collect()
@@ -5055,6 +5071,7 @@ impl Scene {
             Some(&blk_cache),
             None,
             None,
+            self.current_layout != "Model",
         )
     }
 

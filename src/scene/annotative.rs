@@ -222,6 +222,59 @@ pub fn create_annotation_context(
     true
 }
 
+/// True when `common` belongs to an annotative object whose per-object scale
+/// contexts are *all* bound to scales other than the current one — an
+/// off-scale representation that must stay hidden. A drawing may materialise
+/// each annotation scale as its own object (e.g. a block insert per scale on a
+/// "0 @ <scale>" layer); only the current scale's representation should draw.
+///
+/// False for non-annotative objects (no per-object context — the vast
+/// majority) and for objects whose contexts include the current scale. Gated
+/// on an extension dictionary so non-annotative entities skip the lookup.
+pub fn annotative_offscale(doc: &CadDocument, common: &EntityCommon) -> bool {
+    if !common
+        .xdictionary_handle
+        .map(|h| !h.is_null())
+        .unwrap_or(false)
+    {
+        return false;
+    }
+    let scales = object_scale_memberships(doc, common.handle);
+    if scales.is_empty() {
+        return false;
+    }
+    let cur = &doc.header.current_annotation_scale;
+    if scales.iter().any(|(name, _)| name.eq_ignore_ascii_case(cur)) {
+        return false;
+    }
+    // Off-scale (no context for the current scale). If some representation in
+    // the drawing DOES provide the current scale, hide this one — the matching
+    // representation is the one to show.
+    if current_scale_provided(doc) {
+        return true;
+    }
+    // The current scale is unsupported by any representation. Fall back to the
+    // base "1:1" representation: keep it, hide the enlarged copies — otherwise
+    // every scale representation stacks (or, if all were hidden, the object
+    // vanishes). Without this, opening at e.g. CANNOSCALE 10:1 shows both a 1×
+    // and a 10× copy of the same block.
+    !scales.iter().any(|(name, _)| name.eq_ignore_ascii_case("1:1"))
+}
+
+/// Whether any annotative representation in the drawing targets the current
+/// annotation scale.
+fn current_scale_provided(doc: &CadDocument) -> bool {
+    let cur = &doc.header.current_annotation_scale;
+    doc.objects.values().any(|o| {
+        if let ObjectType::ObjectContextData(cd) = o {
+            if let Some(ObjectType::Scale(s)) = doc.objects.get(&cd.scale) {
+                return s.name.eq_ignore_ascii_case(cur);
+            }
+        }
+        false
+    })
+}
+
 /// The annotation scales an object currently carries a per-object context for,
 /// as `(scale name, scale handle)` pairs (one per representation). Empty when
 /// the object has no per-object context chain.

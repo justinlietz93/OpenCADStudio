@@ -912,6 +912,14 @@ impl Scene {
             ) {
                 continue;
             }
+            // Off-scale annotative representation (model space only — paper
+            // viewports use their per-viewport frozen scale layers). Skips its
+            // whole fill subtree, matching the wire path.
+            if frozen.is_none()
+                && crate::scene::annotative::annotative_offscale(&self.document, &ins.common)
+            {
+                continue;
+            }
             if !self.block_has_hatch(&ins.block_name, &mut hatch_block_memo)
                 && !self.block_has_wide_poly(&ins.block_name, &mut wide_block_memo)
             {
@@ -942,6 +950,17 @@ impl Scene {
                 .get(&ins.common.handle.value())
                 .copied()
                 .unwrap_or([0.0, 0.0]);
+            // Drop off-scale annotative representations (e.g. a 10× copy on
+            // layer "0 @ 10" when the current scale is 1:1) before `normalize`
+            // strips their handle — otherwise their whole fill subtree stacks
+            // under the current-scale copy. Model space only; paper viewports
+            // use their per-viewport frozen scale layers. `explode` preserves
+            // the child handle, so the membership lookup still resolves here.
+            let offscale = |e: &EntityType| -> bool {
+                frozen.is_none()
+                    && matches!(e, EntityType::Insert(ni)
+                        if crate::scene::annotative::annotative_offscale(&self.document, &ni.common))
+            };
             let mut stack: Vec<(
                 EntityType,
                 usize,
@@ -950,6 +969,7 @@ impl Scene {
                 (f32, f32),
             )> = explode_including_dims(ins, &self.document)
                 .into_iter()
+                .filter(|e| !offscale(e))
                 .map(|e| (normalize(e), 0usize, ins_color, l0, (base_depth, half_gap)))
                 .collect();
             while let Some((sub, depth, sub_ins_color, sub_l0, (d_base, d_half))) = stack.pop() {
@@ -993,6 +1013,9 @@ impl Scene {
                                 * d_half;
                         let nd_half = d_half / (block_count(&nins.block_name) as f32 + 1.0);
                         for e in explode_including_dims(&nins, &self.document) {
+                            if offscale(&e) {
+                                continue;
+                            }
                             stack.push((
                                 normalize(e),
                                 depth + 1,
