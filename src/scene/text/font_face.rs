@@ -236,6 +236,10 @@ mod tests {
                     // they should resolve to Ttf. If they aren't installed, Lff fallback is accepted.
                     eprintln!("Font {} resolved to Lff (probably not installed)", test_name);
                 }
+                Face::Shx { .. } => {
+                    // A system TTF name never resolves to an SHX shape font.
+                    eprintln!("Font {} resolved to Shx (unexpected)", test_name);
+                }
             }
         }
     }
