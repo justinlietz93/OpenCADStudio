@@ -74,7 +74,7 @@ pub(crate) fn points_to_ds(
 /// The MLINE complex-linetype path uses this because `apply_along` lays out its
 /// dashes and glyphs in f32, which would otherwise quantise fine spacing far
 /// from the origin.
-fn shift_wire_to_world(w: &mut WireModel, origin: [f64; 3]) {
+pub(crate) fn shift_wire_to_world(w: &mut WireModel, origin: [f64; 3]) {
     if !w.points.is_empty() {
         let mut hi = Vec::with_capacity(w.points.len());
         let mut lo = Vec::with_capacity(w.points.len());

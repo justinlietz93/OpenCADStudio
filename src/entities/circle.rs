@@ -1,5 +1,4 @@
 use acadrust::entities::Circle;
-use truck_modeling::{builder, Point3, Wire};
 
 use crate::command::EntityTransform;
 use crate::entities::common::{
@@ -19,20 +18,6 @@ fn to_truck(circle: &Circle) -> TruckEntity {
 
     let (ax, ay) = crate::scene::view::transform::ocs_axes(normal);
     let (cwx, cwy, cwz) = crate::scene::view::transform::ocs_point_to_wcs((cx, cy, cz), normal);
-
-    // Circle points in WCS: centre_wcs ± r * Ax  and  centre_wcs ± r * Ay
-    let pt = |da: (f64, f64, f64), db: (f64, f64, f64), s: f64| {
-        Point3::new(
-            cwx + s * da.0 + s * db.0,
-            cwy + s * da.1 + s * db.1,
-            cwz + s * da.2 + s * db.2,
-        )
-    };
-    // right: centre + r*Ax, left: centre - r*Ax, top: centre + r*Ay, bot: centre - r*Ay
-    let p_right = pt(ax, (0.0, 0.0, 0.0), r);
-    let p_left = pt((ax.0 * -1.0, ax.1 * -1.0, ax.2 * -1.0), (0.0, 0.0, 0.0), r);
-    let p_top = pt(ay, (0.0, 0.0, 0.0), r);
-    let p_bot = pt((ay.0 * -1.0, ay.1 * -1.0, ay.2 * -1.0), (0.0, 0.0, 0.0), r);
 
     let cv = glam::DVec3::new(cwx, cwy, cwz);
     let rf = r as f32;
@@ -95,14 +80,37 @@ fn to_truck(circle: &Circle) -> TruckEntity {
         };
     }
 
-    let right = builder::vertex(p_right);
-    let left = builder::vertex(p_left);
-    let upper = builder::circle_arc(&right, &left, p_top);
-    let lower = builder::circle_arc(&left, &right, p_bot);
-    let wire: Wire = [upper, lower].into_iter().collect();
+    // Tessellate directly as a cos/sin polyline rather than a truck
+    // `circle_arc` (arc-through-three-points). At large WCS coordinates
+    // (e.g. −1.2M UTM) the three-point fit cancels catastrophically — the
+    // circle comes back with a ~3% radius wobble and uneven segment lengths,
+    // which then throws off a dashed linetype's dash spacing. Direct
+    // evaluation only adds a small ±r term to the centre, so it stays precise;
+    // the `Lines` path RTE-splits the absolute-f64 points into the
+    // double-single the shader reconstructs.
+    let tol = crate::scene::convert::truck_tess::current_curve_tol();
+    // Chord-height tolerance → segment count: sag = r·(1 − cos(π/N)).
+    let n = if r > tol {
+        (std::f64::consts::PI / (1.0 - tol / r).clamp(-1.0, 1.0).acos())
+            .ceil()
+            .clamp(16.0, 4096.0) as usize
+    } else {
+        16
+    };
+    let tau = std::f64::consts::TAU;
+    let mut pts: Vec<[f64; 3]> = Vec::with_capacity(n + 1);
+    for i in 0..=n {
+        let a = i as f64 * tau / n as f64;
+        let (s, c) = a.sin_cos();
+        pts.push([
+            cwx + r * (c * ax.0 + s * ay.0),
+            cwy + r * (c * ax.1 + s * ay.1),
+            cwz + r * (c * ax.2 + s * ay.2),
+        ]);
+    }
     TruckEntity {
         pick_tris: Vec::new(),
-        object: TruckObject::Contour(wire),
+        object: TruckObject::Lines(pts),
         snap_pts,
         tangent_geoms: vec![tangent],
         key_vertices: vec![],

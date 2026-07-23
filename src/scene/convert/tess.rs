@@ -1227,9 +1227,47 @@ pub(crate) fn tessellate_entity(
     // this path.
     if let Some(clt) = crate::io::linetypes::resolve_complex_lt(document, lt_name) {
         if let Some(base) = bases.first() {
+            // Walk the dash / glyph layout in a local frame so `apply_along`'s
+            // f32 math stays precise, then lift each wire back to world DS.
+            // `base.points` is the double-single HIGH half; at UTM coordinates
+            // (−1.2M) that alone quantises to ~0.1, which jitters the complex
+            // linetype's shapes and dashes. Reconstruct the absolute f64 path
+            // (high + low) and re-origin it at the first vertex before walking.
+            let abs = |i: usize| -> [f64; 3] {
+                let p = base.points[i];
+                let l = base.points_low.get(i).copied().unwrap_or([0.0; 3]);
+                [
+                    p[0] as f64 + l[0] as f64,
+                    p[1] as f64 + l[1] as f64,
+                    p[2] as f64 + l[2] as f64,
+                ]
+            };
+            let origin = base
+                .points
+                .iter()
+                .position(|p| !p[0].is_nan())
+                .map(&abs)
+                .unwrap_or([0.0; 3]);
+            let local: Vec<[f32; 3]> = base
+                .points
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    if p[0].is_nan() {
+                        [f32::NAN; 3]
+                    } else {
+                        let a = abs(i);
+                        [
+                            (a[0] - origin[0]) as f32,
+                            (a[1] - origin[1]) as f32,
+                            (a[2] - origin[2]) as f32,
+                        ]
+                    }
+                })
+                .collect();
             let mut wires = text::complex_lt::apply_along(
                 &base.name,
-                &base.points,
+                &local,
                 &clt,
                 (lt_scale * pslt_factor).max(1e-4),
                 entity_color,
@@ -1241,6 +1279,7 @@ pub(crate) fn tessellate_entity(
             );
             if !wires.is_empty() {
                 for w in &mut wires {
+                    convert::tessellate::shift_wire_to_world(w, origin);
                     set_wire_aabb(w, aabb);
                 }
                 return wires;
