@@ -292,6 +292,9 @@ impl OpenCADStudio {
                     .collect(),
                 limit: self.recent_limit,
             },
+            start: crate::app::config::StartConfig {
+                section: self.start_section,
+            },
             statusbar: self.statusbar_config.clone(),
             ribbon: crate::app::config::RibbonConfig {
                 collapse: self.ribbon.collapse_mode(),
@@ -317,6 +320,7 @@ impl OpenCADStudio {
         self.recent_limit_input = self.recent_limit.to_string();
         // Thumbnails are decoded by a background task queued at boot
         // (`refresh_recent_thumbs`) — never here on the boot path.
+        self.start_section = cfg.start.section;
         self.statusbar_config = cfg.statusbar;
         self.ribbon.set_collapse_mode(cfg.ribbon.collapse);
         self.plot_dialog = cfg.plot;
@@ -952,9 +956,14 @@ pub(super) fn on_open_file(&mut self) -> Task<Message> {
                 self.tabs[i].current_path = Some(path.clone());
                 self.tabs[i].dirty = false;
                 let _ = std::fs::remove_file(path.with_extension("sv$"));
+                let recent = self.push_recent(path.clone());
                 if self.save_dialog_for_unsaved {
-                    return self.update(Message::UnsavedPickedSavePath(Some(path)));
+                    return Task::batch([
+                        recent,
+                        self.update(Message::UnsavedPickedSavePath(Some(path))),
+                    ]);
                 }
+                return recent;
             }
             Err(e) => self.command_line.push_error(&format!("Save failed: {e}")),
         }

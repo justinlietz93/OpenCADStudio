@@ -20,6 +20,8 @@ pub struct AppConfig {
     pub settings: UserSettings,
     /// Recent-files list + retained count.
     pub recent: RecentConfig,
+    /// Last selected section on the tabbed Start page.
+    pub start: StartConfig,
     /// Which status-bar pills the user has hidden.
     pub statusbar: StatusBarConfig,
     /// Ribbon collapse density.
@@ -34,6 +36,7 @@ impl Default for AppConfig {
         Self {
             settings: UserSettings::default(),
             recent: RecentConfig::default(),
+            start: StartConfig::default(),
             statusbar: StatusBarConfig::default(),
             ribbon: RibbonConfig::default(),
             plot: PlotDialogState::default(),
@@ -57,6 +60,12 @@ impl Default for RecentConfig {
             limit: super::recent::RECENT_DEFAULT,
         }
     }
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct StartConfig {
+    pub section: super::StartSection,
 }
 
 #[derive(Clone, PartialEq, Serialize, Deserialize, Default)]

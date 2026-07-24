@@ -115,18 +115,21 @@ impl OpenCADStudio {
         // viewport draws the layout's own geometry (white sheet + entities +
         // borders) and the floating content viewports blit on top.
         let viewport_3d: Element<'_, Message> = if tab.is_start {
-            start_page_view(
-                &self.patrons,
-                &self.videos,
-                self.videos_loading,
-                &self.video_thumbs,
-                &self.recent_files,
-                &self.recent_thumbs,
-                self.recent_limit,
-                &self.recent_limit_input,
-                self.win_size.0,
-                self.start_section,
-            )
+            responsive(|size| {
+                start_page_view(
+                    &self.patrons,
+                    &self.videos,
+                    self.videos_loading,
+                    &self.video_thumbs,
+                    &self.recent_files,
+                    &self.recent_thumbs,
+                    self.recent_limit,
+                    &self.recent_limit_input,
+                    size.width,
+                    self.start_section,
+                )
+            })
+            .into()
         } else if is_paper {
             shader(ViewportPane::model(
                 &tab.scene,
@@ -2504,7 +2507,17 @@ pub(super) fn start_page_view<'a>(
     let fits_all = avail
         >= recent_w + sup_w + 2.0 * 16.0 + welcome_min + 2.0 * (videos_w + 16.0);
 
-    let recent = recent_files_panel(recents, thumbs, recent_limit, recent_limit_input);
+    let recent = recent_files_panel(
+        recents,
+        thumbs,
+        recent_limit,
+        recent_limit_input,
+        if fits_all {
+            iced::Length::Fixed(recent_w)
+        } else {
+            iced::Length::Fill
+        },
+    );
     let welcome = container(content).width(Fill).height(Fill);
 
     // Tutorial-videos rail: the official playlist, fetched at boot (cached on
@@ -2593,7 +2606,11 @@ pub(super) fn start_page_view<'a>(
             Space::new().height(iced::Length::Fixed(12.0)),
             playlist_btn,
         ])
-        .width(iced::Length::Fixed(videos_w))
+        .width(if fits_all {
+            iced::Length::Fixed(videos_w)
+        } else {
+            iced::Length::Fill
+        })
         .height(Fill)
         .padding(16)
         .style(|_: &Theme| container::Style {
@@ -2672,7 +2689,11 @@ pub(super) fn start_page_view<'a>(
             Space::new().height(iced::Length::Fixed(12.0)),
             support_btn,
         ])
-        .width(iced::Length::Fixed(240.0))
+        .width(if fits_all {
+            iced::Length::Fixed(sup_w)
+        } else {
+            iced::Length::Fill
+        })
         .height(Fill)
         .padding(20)
         .style(|_: &Theme| container::Style {
@@ -2804,6 +2825,7 @@ pub(super) fn recent_files_panel<'a>(
     >,
     limit: usize,
     limit_input: &'a str,
+    width: iced::Length,
 ) -> Element<'a, Message> {
     // Card chrome matches the Supporters rail (the canonical start-page card).
     const PANEL_BG: Color = Color {
@@ -2993,7 +3015,7 @@ pub(super) fn recent_files_panel<'a>(
         ]
         .width(Fill),
     )
-    .width(iced::Length::Fixed(280.0))
+    .width(width)
     .height(Fill)
     .padding(20)
     .style(|_: &Theme| container::Style {
@@ -3007,4 +3029,3 @@ pub(super) fn recent_files_panel<'a>(
     })
     .into()
 }
-

@@ -211,7 +211,9 @@ struct AddSelectedRestore {
 }
 
 /// Which Start-page section a narrow (tabbed) Start page is showing.
-#[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Default, Debug, serde::Serialize, serde::Deserialize,
+)]
 pub enum StartSection {
     Recent,
     Videos,

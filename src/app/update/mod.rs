@@ -224,6 +224,7 @@ impl OpenCADStudio {
 
             Message::StartSectionSelect(section) => {
                 self.start_section = section;
+                self.save_config();
                 Task::none()
             }
 
