@@ -63,32 +63,69 @@ fn shx_polylines(
     shape: &Shape,
     document: &acadrust::CadDocument,
 ) -> Option<crate::scene::text::shx::ShapePolylines> {
-    let style = shape
-        .style_handle
-        .and_then(|h| document.text_styles.iter().find(|s| s.handle == h))
-        .or_else(|| {
-            let name = shape.style_name.trim();
-            (!name.is_empty())
-                .then(|| {
-                    document
-                        .text_styles
-                        .iter()
-                        .find(|s| s.name.eq_ignore_ascii_case(name))
-                })
-                .flatten()
-        })?;
-    let font = style.font_file.trim();
-    if font.is_empty() {
-        return None;
-    }
     let base = document
         .source_path
         .as_deref()
         .map(std::path::Path::new)
         .and_then(|p| p.parent());
-    let resolved = crate::io::resolve_image_file(font, base)?;
-    let num = u16::try_from(shape.shape_number).ok()?;
-    crate::scene::text::shx::shape_polylines(&resolved, num)
+    let name = shape.shape_name.trim();
+
+    // Resolve the glyph from one style's shape (.shx) file, preferring the
+    // shape NUMBER but falling back to the NAME — a DXF SHAPE carries only the
+    // name (code 2), so its `shape_number` is 0.
+    let try_style = |style: &acadrust::tables::TextStyle| {
+        let font = style.font_file.trim();
+        if font.is_empty() {
+            return None;
+        }
+        let resolved = crate::io::resolve_image_file(font, base)?;
+        if let Ok(num) = u16::try_from(shape.shape_number) {
+            if num != 0 {
+                if let Some(p) = crate::scene::text::shx::shape_polylines(&resolved, num) {
+                    return Some(p);
+                }
+            }
+        }
+        if !name.is_empty() {
+            return crate::scene::text::shx::shape_polylines_by_name(&resolved, name);
+        }
+        None
+    };
+
+    // 1. Direct style referenced by the SHAPE (handle, then name).
+    let direct = shape
+        .style_handle
+        .and_then(|h| document.text_styles.iter().find(|s| s.handle == h))
+        .or_else(|| {
+            let sn = shape.style_name.trim();
+            (!sn.is_empty())
+                .then(|| {
+                    document
+                        .text_styles
+                        .iter()
+                        .find(|s| s.name.eq_ignore_ascii_case(sn))
+                })
+                .flatten()
+        });
+    if let Some(style) = direct {
+        if let Some(p) = try_style(style) {
+            return Some(p);
+        }
+    }
+
+    // 2. No usable style reference (the DXF case): search every shape-file
+    //    style — one with a real font file and an empty table name — for a
+    //    glyph named like this shape.
+    if !name.is_empty() {
+        for style in document.text_styles.iter() {
+            if style.name.is_empty() && !style.font_file.trim().is_empty() {
+                if let Some(p) = try_style(style) {
+                    return Some(p);
+                }
+            }
+        }
+    }
+    None
 }
 
 impl TruckConvertible for Shape {

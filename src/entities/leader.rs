@@ -761,14 +761,24 @@ impl LeaderTess for Leader {
                 .or_else(|| style.map(|s| s.dimtad))
                 .unwrap_or(0);
             if dimtad != 0 {
-                if let Some(acadrust::entities::EntityType::MText(mt)) =
-                    document.get_entity(self.annotation_handle)
-                {
-                    if mt.extents_width > 0.0 {
-                        let to_far_edge =
-                            sign * (mt.insertion_point.x - last.x) + mt.extents_width;
-                        land_len = land_len.max(to_far_edge);
+                let mt = match document.get_entity(self.annotation_handle) {
+                    Some(acadrust::entities::EntityType::MText(mt)) => {
+                        Some((mt.extents_width, mt.insertion_point.x))
                     }
+                    _ => None,
+                };
+                // Underline width: the annotation MTEXT's laid-out extents when
+                // known, otherwise the leader's own stored annotation width
+                // (DXF code 41) — a DXF-loaded MTEXT often has no computed
+                // extents (extents_width == 0), which left the hook too short.
+                let width = mt
+                    .map(|(w, _)| w)
+                    .filter(|w| *w > 0.0)
+                    .unwrap_or(self.text_width);
+                if width > 0.0 {
+                    let ins_x = mt.map(|(_, x)| x).unwrap_or(last.x);
+                    let to_far_edge = sign * (ins_x - last.x) + width;
+                    land_len = land_len.max(to_far_edge);
                 }
             }
             points.push([f64::NAN; 3]);

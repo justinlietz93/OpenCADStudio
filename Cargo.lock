@@ -74,7 +74,7 @@ checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
 [[package]]
 name = "acadrust"
 version = "0.4.0"
-source = "git+https://github.com/OpenAEC-Foundation/acadifc?branch=main#2e63e7053f0f245004b41c4b576a0529748f3f41"
+source = "git+https://github.com/OpenAEC-Foundation/acadifc?branch=main#379ce12e55a8b5f3c32b9678cc348f0b4dfb82c7"
 dependencies = [
  "ahash 0.8.12",
  "anyhow",
@@ -3180,7 +3180,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b577e2d69827c4740cba2b52efaad1c4cc7c73042860b199710b3575c68438d"
 dependencies = [
  "bytecount",
- "memchr 1.0.2",
+ "memchr 2.8.3",
  "nom 8.0.0",
 ]
 
