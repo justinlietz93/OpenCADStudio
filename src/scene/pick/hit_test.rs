@@ -4,7 +4,7 @@
 //! to 2-D pixel coordinates, then compared against the cursor or selection box.
 //! This matches the visual result the user sees.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use acadrust::Handle;
 use glam::Mat4;
@@ -13,6 +13,7 @@ use iced::{Point, Rectangle};
 use crate::scene::model::hatch_model::HatchModel;
 use crate::scene::model::mesh_model::MeshModel;
 use crate::scene::model::wire_model::WireModel;
+use crate::scene::pick::interaction_index::WireSource;
 
 /// Pixel radius used for single-click wire detection.
 pub const CLICK_THRESHOLD_PX: f32 = 8.0;
@@ -167,9 +168,9 @@ fn text_quad_hit_area(
 /// within that wire's [`pick_tolerance_px`] of `cursor`.
 ///
 /// Returns `None` when no wire is close enough.
-pub fn click_hit<'a>(
+pub fn click_hit<'a, W: WireSource + ?Sized>(
     cursor: Point,
-    wires: &'a [WireModel],
+    wires: &'a W,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -193,32 +194,69 @@ pub fn click_hit<'a>(
     // points (the dominant per-move cost on 100 k-wire drawings).
     let z_flat = view_rot.z_axis.x.abs() < 1e-9 && view_rot.z_axis.y.abs() < 1e-9;
 
-    // Q: lazy projection — no Vec allocation per wire; NaN resets the segment chain.
-    for wire in wires {
-        let tol = pick_tolerance_px(wire, lw_display);
-        // Cheap AABB pre-reject (flat view only; never for the unbounded
-        // sentinel used by previews / greeked text).
-        if z_flat
-            && wire.aabb != WireModel::UNBOUNDED_AABB
-            && aabb_rejects(wire.aabb, cursor, tol, view_rot, eye, bounds)
-        {
-            continue;
-        }
-        let mut prev: Option<Point> = None;
-        for (i, &[px, py, pz]) in wire.points.iter().enumerate() {
-            if px.is_nan() {
-                prev = None;
+    if let Some(segments) = wires.segments() {
+        // The interaction index already narrowed long/batched wires to segments
+        // touching the cursor aperture. Hover and click therefore project only
+        // those local edges, not every point of every candidate wire.
+        for segment in segments {
+            let Some(wire) = wires.source_wire(segment.wire) else {
+                continue;
+            };
+            let start = segment.start as usize;
+            if start + 1 >= wire.points.len() {
                 continue;
             }
-            let cur = world_to_screen(wp64([px, py, pz], &wire.points_low, i), view_rot, eye, bounds);
-            if let Some(p0) = prev {
-                let d = dist_point_to_segment(cursor, p0, cur);
-                if d < tol && d < best_dist {
-                    best_dist = d;
-                    best = Some(&wire.name);
-                }
+            let p0 = world_to_screen(
+                wp64(wire.points[start], &wire.points_low, start),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let p1 = world_to_screen(
+                wp64(wire.points[start + 1], &wire.points_low, start + 1),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let d = dist_point_to_segment(cursor, p0, p1);
+            if d < pick_tolerance_px(wire, lw_display) && d < best_dist {
+                best_dist = d;
+                best = Some(&wire.name);
             }
-            prev = Some(cur);
+        }
+    } else {
+        // Q: lazy projection — no Vec allocation per wire; NaN resets the segment chain.
+        for wire in wires.iter() {
+            let tol = pick_tolerance_px(wire, lw_display);
+            // Cheap AABB pre-reject (flat view only; never for the unbounded
+            // sentinel used by previews / greeked text).
+            if z_flat
+                && wire.aabb != WireModel::UNBOUNDED_AABB
+                && aabb_rejects(wire.aabb, cursor, tol, view_rot, eye, bounds)
+            {
+                continue;
+            }
+            let mut prev: Option<Point> = None;
+            for (i, &[px, py, pz]) in wire.points.iter().enumerate() {
+                if px.is_nan() {
+                    prev = None;
+                    continue;
+                }
+                let cur = world_to_screen(
+                    wp64([px, py, pz], &wire.points_low, i),
+                    view_rot,
+                    eye,
+                    bounds,
+                );
+                if let Some(p0) = prev {
+                    let d = dist_point_to_segment(cursor, p0, cur);
+                    if d < tol && d < best_dist {
+                        best_dist = d;
+                        best = Some(&wire.name);
+                    }
+                }
+                prev = Some(cur);
+            }
         }
     }
 
@@ -232,7 +270,7 @@ pub fn click_hit<'a>(
     // 3D solid is. Same projected-triangle containment as `mesh_click_hit`,
     // front-most wins.
     let mut best_fill: Option<(f32, &str)> = None;
-    for wire in wires {
+    for wire in wires.iter() {
         if wire.fill_tris.is_empty() {
             continue;
         }
@@ -263,7 +301,7 @@ pub fn click_hit<'a>(
     // surface — where the two overlap, the nearer thing to the eye is decided
     // by depth, but a wire that has a real fill should win on it first.
     let mut best_wall: Option<(f32, &str)> = None;
-    for wire in wires {
+    for wire in wires.iter() {
         if wire.pick_tris.is_empty() {
             continue;
         }
@@ -301,7 +339,7 @@ pub fn click_hit<'a>(
     // priority — real edges and fills above always win.
     let mut best_area = f32::MAX;
     let mut best_box: Option<&str> = None;
-    for wire in wires {
+    for wire in wires.iter() {
         if wire.text_verts.is_empty() {
             continue;
         }
@@ -318,9 +356,9 @@ pub fn click_hit<'a>(
 /// Like `click_hit` but returns every wire within the click threshold,
 /// nearest first. Used by selection cycling to step through overlapping
 /// objects under the cursor.
-pub fn click_hits_all<'a>(
+pub fn click_hits_all<'a, W: WireSource + ?Sized>(
     cursor: Point,
-    wires: &'a [WireModel],
+    wires: &'a W,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -330,28 +368,70 @@ pub fn click_hits_all<'a>(
         return Vec::new();
     }
     let mut hits: Vec<(f32, &str)> = Vec::new();
-    for wire in wires {
-        let tol = pick_tolerance_px(wire, lw_display);
-        let mut prev: Option<Point> = None;
-        let mut best_for_wire = tol;
-        let mut hit = false;
-        for (i, &[px, py, pz]) in wire.points.iter().enumerate() {
-            if px.is_nan() {
-                prev = None;
+    if let Some(segments) = wires.segments() {
+        let mut best_by_wire: HashMap<u32, f32> = HashMap::default();
+        for segment in segments {
+            let Some(wire) = wires.source_wire(segment.wire) else {
+                continue;
+            };
+            let start = segment.start as usize;
+            if start + 1 >= wire.points.len() {
                 continue;
             }
-            let cur = world_to_screen(wp64([px, py, pz], &wire.points_low, i), view_rot, eye, bounds);
-            if let Some(p0) = prev {
-                let d = dist_point_to_segment(cursor, p0, cur);
-                if d < best_for_wire {
-                    best_for_wire = d;
-                    hit = true;
-                }
+            let p0 = world_to_screen(
+                wp64(wire.points[start], &wire.points_low, start),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let p1 = world_to_screen(
+                wp64(wire.points[start + 1], &wire.points_low, start + 1),
+                view_rot,
+                eye,
+                bounds,
+            );
+            let d = dist_point_to_segment(cursor, p0, p1);
+            if d < pick_tolerance_px(wire, lw_display) {
+                best_by_wire
+                    .entry(segment.wire)
+                    .and_modify(|best| *best = best.min(d))
+                    .or_insert(d);
             }
-            prev = Some(cur);
         }
-        if hit {
-            hits.push((best_for_wire, &wire.name));
+        hits.extend(best_by_wire.into_iter().filter_map(|(wire_idx, distance)| {
+            wires
+                .source_wire(wire_idx)
+                .map(|wire| (distance, wire.name.as_str()))
+        }));
+    } else {
+        for wire in wires.iter() {
+            let tol = pick_tolerance_px(wire, lw_display);
+            let mut prev: Option<Point> = None;
+            let mut best_for_wire = tol;
+            let mut hit = false;
+            for (i, &[px, py, pz]) in wire.points.iter().enumerate() {
+                if px.is_nan() {
+                    prev = None;
+                    continue;
+                }
+                let cur = world_to_screen(
+                    wp64([px, py, pz], &wire.points_low, i),
+                    view_rot,
+                    eye,
+                    bounds,
+                );
+                if let Some(p0) = prev {
+                    let d = dist_point_to_segment(cursor, p0, cur);
+                    if d < best_for_wire {
+                        best_for_wire = d;
+                        hit = true;
+                    }
+                }
+                prev = Some(cur);
+            }
+            if hit {
+                hits.push((best_for_wire, &wire.name));
+            }
         }
     }
     // Thickness walls join the cycle so an extruded entity picked on its wall
@@ -360,7 +440,7 @@ pub fn click_hits_all<'a>(
     //
     // A wall's own edges live on the same wire, so skip any wire the loop above
     // already caught: cycling must not offer one entity twice.
-    for wire in wires {
+    for wire in wires.iter() {
         if wire.pick_tris.is_empty() || hits.iter().any(|&(_, n)| n == wire.name) {
             continue;
         }
@@ -380,7 +460,7 @@ pub fn click_hits_all<'a>(
     // SDF text: use the same exact glyph-quad test as `click_hit`; a batched
     // text wire's union AABB may cover empty space between distant runs (#438).
     // Ranked after real geometry (distance = the click threshold).
-    for wire in wires {
+    for wire in wires.iter() {
         if wire.text_verts.is_empty() || hits.iter().any(|&(_, name)| name == wire.name) {
             continue;
         }
@@ -418,12 +498,21 @@ pub fn aabb_under_cursor(
     if !min_x.is_finite() || !min_z.is_finite() {
         return true; // degenerate bound — don't cull
     }
-    let (mut sx0, mut sy0, mut sx1, mut sy1) =
-        (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    let (mut sx0, mut sy0, mut sx1, mut sy1) = (
+        f32::INFINITY,
+        f32::INFINITY,
+        f32::NEG_INFINITY,
+        f32::NEG_INFINITY,
+    );
     for &z in &[min_z, max_z] {
-        for &(x, y) in &[(min_x, min_y), (max_x, min_y), (min_x, max_y), (max_x, max_y)] {
-            let rel = glam::DVec3::new(x as f64 - eye.x, y as f64 - eye.y, z as f64 - eye.z)
-                .as_vec3();
+        for &(x, y) in &[
+            (min_x, min_y),
+            (max_x, min_y),
+            (min_x, max_y),
+            (max_x, max_y),
+        ] {
+            let rel =
+                glam::DVec3::new(x as f64 - eye.x, y as f64 - eye.y, z as f64 - eye.z).as_vec3();
             let clip = view_proj * rel.extend(1.0);
             if clip.w <= 1e-6 {
                 return true; // corner at/behind the camera — can't bound; keep it
@@ -493,7 +582,12 @@ fn mesh_vert(hi: [f32; 3], low: &[[f32; 3]], i: usize) -> glam::DVec3 {
 }
 
 /// Project a mesh's vertices to screen space.
-fn project_mesh_verts(mesh: &MeshModel, view_rot: Mat4, eye: glam::DVec3, bounds: Rectangle) -> Vec<Point> {
+fn project_mesh_verts(
+    mesh: &MeshModel,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Vec<Point> {
     mesh.verts
         .iter()
         .enumerate()
@@ -607,11 +701,11 @@ pub fn mesh_poly_hit<'a>(
 ///   ANY projected point inside the box, OR any wire segment crosses the box
 ///   boundary (so large entities like viewport frames are caught even when
 ///   no corner falls inside the selection rectangle).
-pub fn box_hit<'a>(
+pub fn box_hit<'a, W: WireSource + ?Sized>(
     corner_a: Point,
     corner_b: Point,
     crossing: bool,
-    wires: &'a [WireModel],
+    wires: &'a W,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -719,10 +813,10 @@ pub fn box_hit<'a>(
 /// - **Window mode** (`crossing = false`): ALL projected points inside polygon.
 /// - **Crossing mode** (`crossing = true`): ANY point inside OR any wire
 ///   segment crosses a polygon edge.
-pub fn poly_hit<'a>(
+pub fn poly_hit<'a, W: WireSource + ?Sized>(
     poly: &[Point],
     crossing: bool,
-    wires: &'a [WireModel],
+    wires: &'a W,
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
@@ -813,7 +907,12 @@ pub fn poly_hit<'a>(
 
 // ── Helpers ───────────────────────────────────────────────────────────────
 
-fn world_to_screen(world: glam::DVec3, view_rot: Mat4, eye: glam::DVec3, bounds: Rectangle) -> Point {
+fn world_to_screen(
+    world: glam::DVec3,
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Point {
     let ndc = view_rot.project_point3((world - eye).as_vec3());
     Point::new(
         (ndc.x + 1.0) * 0.5 * bounds.width,
@@ -845,9 +944,7 @@ fn wp64(hi: [f32; 3], low: &[[f32; 3]], i: usize) -> glam::DVec3 {
 fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     // Ray-cast crossing test for a single edge a→b.
     fn cross(p: Point, a: Point, b: Point, inside: &mut bool) {
-        if (a.y > p.y) != (b.y > p.y)
-            && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x
-        {
+        if (a.y > p.y) != (b.y > p.y) && p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x {
             *inside = !*inside;
         }
     }
@@ -861,13 +958,14 @@ fn point_in_polygon(p: Point, poly: &[Point]) -> bool {
     // sub-path that is a real ring (≥3 verts); closing a 2-point explicit edge
     // would add a degenerate back-edge that cancels its own crossing.
     let mut count = 0usize;
-    let close = |prev: Option<Point>, path_start: Option<Point>, count: usize, inside: &mut bool| {
-        if count >= 3 {
-            if let (Some(pv), Some(sv)) = (prev, path_start) {
-                cross(p, pv, sv, inside);
+    let close =
+        |prev: Option<Point>, path_start: Option<Point>, count: usize, inside: &mut bool| {
+            if count >= 3 {
+                if let (Some(pv), Some(sv)) = (prev, path_start) {
+                    cross(p, pv, sv, inside);
+                }
             }
-        }
-    };
+        };
     for &pt in poly {
         if !pt.x.is_finite() || !pt.y.is_finite() {
             close(prev, path_start, count, &mut inside);
@@ -928,8 +1026,12 @@ pub fn click_hit_hatch(
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
+    candidate_handles: Option<&HashSet<Handle>>,
 ) -> Option<Handle> {
     for (&handle, hatch) in hatches {
+        if candidate_handles.is_some_and(|handles| !handles.contains(&handle)) {
+            continue;
+        }
         if hatch_contains_screen_point(hatch, cursor, view_rot, eye, bounds) {
             return Some(handle);
         }
@@ -948,8 +1050,12 @@ pub fn click_hit_insert_hatch(
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
+    candidate_handles: Option<&HashSet<Handle>>,
 ) -> Option<Handle> {
     for (handle, hatch) in insert_hatches {
+        if candidate_handles.is_some_and(|handles| !handles.contains(handle)) {
+            continue;
+        }
         if hatch_contains_screen_point(hatch, cursor, view_rot, eye, bounds) {
             return Some(*handle);
         }
@@ -978,7 +1084,12 @@ fn hatch_contains_screen_point(
         .iter()
         .map(|&[x, y]| {
             if x.is_finite() && y.is_finite() {
-                world_to_screen(glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0), view_rot, eye, bounds)
+                world_to_screen(
+                    glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0),
+                    view_rot,
+                    eye,
+                    bounds,
+                )
             } else {
                 // Preserve path separators for the NaN-aware
                 // point_in_polygon ray-cast.
@@ -998,6 +1109,7 @@ pub fn box_hit_hatch(
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
+    candidate_handles: Option<&HashSet<Handle>>,
 ) -> Vec<Handle> {
     let min_x = corner_a.x.min(corner_b.x);
     let max_x = corner_a.x.max(corner_b.x);
@@ -1013,6 +1125,9 @@ pub fn box_hit_hatch(
     hatches
         .iter()
         .filter_map(|(&handle, hatch)| {
+            if candidate_handles.is_some_and(|handles| !handles.contains(&handle)) {
+                return None;
+            }
             if hatch.boundary.is_empty() {
                 return None;
             }
@@ -1020,7 +1135,14 @@ pub fn box_hit_hatch(
             let screen: Vec<Point> = hatch
                 .boundary
                 .iter()
-                .map(|&[x, y]| world_to_screen(glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0), view_rot, eye, bounds))
+                .map(|&[x, y]| {
+                    world_to_screen(
+                        glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0),
+                        view_rot,
+                        eye,
+                        bounds,
+                    )
+                })
                 .collect();
             let hit = if crossing {
                 screen.iter().any(|&sp| inside(sp))
@@ -1044,6 +1166,7 @@ pub fn poly_hit_hatch(
     view_rot: Mat4,
     eye: glam::DVec3,
     bounds: Rectangle,
+    candidate_handles: Option<&HashSet<Handle>>,
 ) -> Vec<Handle> {
     if poly.len() < 3 {
         return vec![];
@@ -1052,6 +1175,9 @@ pub fn poly_hit_hatch(
     hatches
         .iter()
         .filter_map(|(&handle, hatch)| {
+            if candidate_handles.is_some_and(|handles| !handles.contains(&handle)) {
+                return None;
+            }
             if hatch.boundary.is_empty() {
                 return None;
             }
@@ -1059,7 +1185,14 @@ pub fn poly_hit_hatch(
             let screen: Vec<Point> = hatch
                 .boundary
                 .iter()
-                .map(|&[x, y]| world_to_screen(glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0), view_rot, eye, bounds))
+                .map(|&[x, y]| {
+                    world_to_screen(
+                        glam::DVec3::new(x as f64 + ox, y as f64 + oy, 0.0),
+                        view_rot,
+                        eye,
+                        bounds,
+                    )
+                })
                 .collect();
             let hit = if crossing {
                 screen.iter().any(|&sp| point_in_polygon(sp, poly))
@@ -1113,16 +1246,38 @@ mod aabb_reject_tests {
     #[test]
     fn aabb_reject_keeps_near_wire_drops_far() {
         let vp = Mat4::IDENTITY;
-        let bounds = Rectangle { x: 0.0, y: 0.0, width: 200.0, height: 200.0 };
+        let bounds = Rectangle {
+            x: 0.0,
+            y: 0.0,
+            width: 200.0,
+            height: 200.0,
+        };
         let cursor = Point::new(100.0, 100.0); // world origin
 
-        let near = wire("5", vec![[-0.02, 0.0, 0.0], [0.02, 0.0, 0.0]], [-0.02, 0.0, 0.02, 0.0]);
-        let far = wire("9", vec![[0.9, 0.9, 0.0], [0.95, 0.9, 0.0]], [0.9, 0.9, 0.95, 0.9]);
+        let near = wire(
+            "5",
+            vec![[-0.02, 0.0, 0.0], [0.02, 0.0, 0.0]],
+            [-0.02, 0.0, 0.02, 0.0],
+        );
+        let far = wire(
+            "9",
+            vec![[0.9, 0.9, 0.0], [0.95, 0.9, 0.0]],
+            [0.9, 0.9, 0.95, 0.9],
+        );
 
         let eye = glam::DVec3::ZERO;
-        assert_eq!(click_hit(cursor, std::slice::from_ref(&near), vp, eye, bounds, true), Some("5"));
-        assert_eq!(click_hit(cursor, std::slice::from_ref(&far), vp, eye, bounds, true), None);
+        assert_eq!(
+            click_hit(cursor, std::slice::from_ref(&near), vp, eye, bounds, true),
+            Some("5")
+        );
+        assert_eq!(
+            click_hit(cursor, std::slice::from_ref(&far), vp, eye, bounds, true),
+            None
+        );
         // The far wire must be rejected without hiding the near one.
-        assert_eq!(click_hit(cursor, &[far, near], vp, eye, bounds, true), Some("5"));
+        assert_eq!(
+            click_hit(cursor, &[far, near], vp, eye, bounds, true),
+            Some("5")
+        );
     }
 }

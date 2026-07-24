@@ -214,7 +214,10 @@ impl OpenCADStudio {
             // UCS (relative offsets are rotated by the UCS axes), so a multi-
             // token `LINE 0,0 10,10` under a rotated UCS lands correctly.
             let ucs = self.tabs[i].active_ucs.clone();
-            let wcs = match (matches!(kind, super::helpers::CoordKind::Relative), self.last_point) {
+            let wcs = match (
+                matches!(kind, super::helpers::CoordKind::Relative),
+                self.last_point,
+            ) {
                 (true, Some(base)) => {
                     base + match &ucs {
                         Some(u) => super::helpers::ucs_rotate_vec(coord, u),
@@ -257,8 +260,7 @@ impl OpenCADStudio {
         {
             // Remember the working set for the "Previous" selection keyword
             // (#426) before dropping it.
-            self.tabs[i].prev_selection =
-                self.tabs[i].scene.selected.iter().copied().collect();
+            self.tabs[i].prev_selection = self.tabs[i].scene.selected.iter().copied().collect();
             self.tabs[i].scene.deselect_all();
             self.refresh_properties();
         }
@@ -549,8 +551,7 @@ impl OpenCADStudio {
                 // Same gate as COPY (dimension-free), sized by the total number
                 // of copies the array will add.
                 let delta_safe = self.delta_copy_safe(i, &handles);
-                let pending =
-                    self.begin_undo(i, label.clone(), handles.len() * count, delta_safe);
+                let pending = self.begin_undo(i, label.clone(), handles.len() * count, delta_safe);
                 for t in &transforms {
                     self.tabs[i].scene.copy_entities(&handles, t);
                 }
@@ -569,8 +570,7 @@ impl OpenCADStudio {
             }
             CmdResult::ReplaceMany(replacements, additions) => {
                 let label = self.history_label_from_active_cmd(i, "FILLET");
-                let was_catchment = self
-                    .tabs[i]
+                let was_catchment = self.tabs[i]
                     .active_cmd
                     .as_ref()
                     .is_some_and(|c| c.name() == "SS_CATCHMENT");
@@ -1161,7 +1161,9 @@ impl OpenCADStudio {
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
-                self.tabs[i].scene.zoom_to_window(p1.as_vec3(), p2.as_vec3());
+                self.tabs[i]
+                    .scene
+                    .zoom_to_window(p1.as_vec3(), p2.as_vec3());
                 self.command_line.push_output("Zoom Window");
             }
             CmdResult::Measurement(msg) => {
@@ -1335,10 +1337,8 @@ impl OpenCADStudio {
                             .and_then(convert_to_polyline);
                         match converted {
                             Some(pl) => {
-                                return self.apply_cmd_result(CmdResult::ReplaceEntity(
-                                    handle,
-                                    vec![pl],
-                                ));
+                                return self
+                                    .apply_cmd_result(CmdResult::ReplaceEntity(handle, vec![pl]));
                             }
                             None => self
                                 .command_line
@@ -1457,9 +1457,8 @@ impl OpenCADStudio {
                     let x1 = p1.x.max(p2.x);
                     let y1 = p1.y.max(p2.y);
                     self.plot_window = Some((x0, y0, x1, y1));
-                    self.command_line.push_output(&format!(
-                        "Plot window: {x0:.2},{y0:.2} to {x1:.2},{y1:.2}"
-                    ));
+                    self.command_line
+                        .push_output(&format!("Plot window: {x0:.2},{y0:.2} to {x1:.2},{y1:.2}"));
                     // Pick window closed the plot dialog so the viewport could
                     // receive the two clicks — bring the dialog back with the
                     // window now active.
@@ -1524,23 +1523,14 @@ impl OpenCADStudio {
                 let mut handles: Vec<Handle> = Vec::new();
                 {
                     let scene = &self.tabs[i].scene;
-                    let mut seen: rustc_hash::FxHashSet<Handle> = rustc_hash::FxHashSet::default();
-                    for w in scene.entity_wires().iter() {
-                        let Some(h) = crate::scene::Scene::handle_from_wire_name(&w.name) else {
-                            continue;
-                        };
-                        if !seen.insert(h) || scene.is_layer_locked(h) {
-                            continue;
-                        }
-                        let [ax, ay, bx, by] = w.aabb;
-                        if ax as f64 <= win_max.x
-                            && bx as f64 >= win_min.x
-                            && ay as f64 <= win_max.y
-                            && by as f64 >= win_min.y
-                        {
-                            handles.push(h);
-                        }
-                    }
+                    handles.extend(
+                        scene
+                            .interaction_handles_in_world_aabb([
+                                win_min.x, win_min.y, win_max.x, win_max.y,
+                            ])
+                            .into_iter()
+                            .filter(|&h| !scene.is_layer_locked(h)),
+                    );
                 }
                 if handles.is_empty() {
                     self.command_line
@@ -1797,7 +1787,10 @@ impl OpenCADStudio {
                     let color = [0.6f32, 0.6, 0.8, 1.0]; // default colour; command embedded it
                     let _ = color; // color is captured inside mesh_fn
                     if let Some(mesh) = mesh_fn(name) {
-                        self.tabs[i].scene.meshes.insert(handle, crate::scene::MeshLodSet::from_single(mesh));
+                        self.tabs[i]
+                            .scene
+                            .meshes
+                            .insert(handle, crate::scene::MeshLodSet::from_single(mesh));
                     }
                     self.tabs[i].dirty = true;
                     self.command_line.push_output("Solid created.");
@@ -1838,15 +1831,18 @@ impl OpenCADStudio {
                                         verts_low,
                                         normals,
                                         indices,
-                                    } => Some((crate::scene::model::mesh_model::MeshModel {
-                                        name: String::new(),
-                                        verts,
-                                        verts_low,
-                                        normals,
-                                        indices,
-                                        color,
-                                        selected: false,
-                                    }, solid)),
+                                    } => Some((
+                                        crate::scene::model::mesh_model::MeshModel {
+                                            name: String::new(),
+                                            verts,
+                                            verts_low,
+                                            normals,
+                                            indices,
+                                            color,
+                                            selected: false,
+                                        },
+                                        solid,
+                                    )),
                                     _ => None,
                                 }
                             }
@@ -1858,7 +1854,10 @@ impl OpenCADStudio {
                         let new_entity = empty_solid3d();
                         let new_handle = self.tabs[i].scene.add_entity(new_entity);
                         mesh.name = format!("{}", new_handle.value());
-                        self.tabs[i].scene.meshes.insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
+                        self.tabs[i]
+                            .scene
+                            .meshes
+                            .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
                         // Keep the truck B-rep so the save path can export exact
                         // ACIS geometry (else the solid is dropped by other CAD apps).
                         self.tabs[i].scene.solid_models.insert(new_handle, solid);
@@ -1937,7 +1936,10 @@ impl OpenCADStudio {
                         let new_entity = empty_solid3d();
                         let new_handle = self.tabs[i].scene.add_entity(new_entity);
                         mesh.name = format!("{}", new_handle.value());
-                        self.tabs[i].scene.meshes.insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
+                        self.tabs[i]
+                            .scene
+                            .meshes
+                            .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
                         self.tabs[i].dirty = true;
                         self.command_line
                             .push_output(&format!("REVOLVE: solid created ({:.0}°).", angle_deg));
@@ -2102,7 +2104,10 @@ impl OpenCADStudio {
                     let new_entity = empty_solid3d();
                     let new_handle = self.tabs[i].scene.add_entity(new_entity);
                     mesh.name = format!("{}", new_handle.value());
-                    self.tabs[i].scene.meshes.insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
+                    self.tabs[i]
+                        .scene
+                        .meshes
+                        .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
                     self.tabs[i].dirty = true;
                     self.command_line.push_output("SWEEP: solid created.");
                 } else {
@@ -2180,14 +2185,18 @@ impl OpenCADStudio {
                         }),
                         _ => None,
                     }
-                })();
+                })(
+                );
 
                 if let Some(mut mesh) = result {
                     self.push_undo_snapshot(i, "LOFT");
                     let new_entity = empty_solid3d();
                     let new_handle = self.tabs[i].scene.add_entity(new_entity);
                     mesh.name = format!("{}", new_handle.value());
-                    self.tabs[i].scene.meshes.insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
+                    self.tabs[i]
+                        .scene
+                        .meshes
+                        .insert(new_handle, crate::scene::MeshLodSet::from_single(mesh));
                     self.tabs[i].dirty = true;
                     self.command_line.push_output(&format!(
                         "LOFT: solid created from {} profiles.",
@@ -2275,9 +2284,11 @@ impl OpenCADStudio {
                 return self.begin_text_edit(handle);
             }
             CmdResult::SuspendForTextEdit { handle } => {
-                let is_editable = crate::app::text_inline::can_edit_text(handle, &self.tabs[i].scene.document);
+                let is_editable =
+                    crate::app::text_inline::can_edit_text(handle, &self.tabs[i].scene.document);
                 if !is_editable {
-                    self.command_line.push_error("TEXTEDIT: selected entity is not text.");
+                    self.command_line
+                        .push_error("TEXTEDIT: selected entity is not text.");
                     let prompt = self.tabs[i].active_cmd.as_ref().map(|c| c.prompt());
                     if let Some(p) = prompt {
                         self.command_line.push_info(&p);
@@ -2304,7 +2315,8 @@ impl OpenCADStudio {
             CmdResult::SetTexteditMode(val) => {
                 self.texteditmode = val;
                 let display_val = if val { 1 } else { 0 };
-                self.command_line.push_output(&format!("TEXTEDITMODE set to {display_val}"));
+                self.command_line
+                    .push_output(&format!("TEXTEDITMODE set to {display_val}"));
                 self.tabs[i].active_cmd = None;
                 self.tabs[i].snap_result = None;
                 self.tabs[i].scene.clear_preview_wire();
@@ -2430,7 +2442,13 @@ impl OpenCADStudio {
         }
         let blocks = self.clipboard_deps.blocks.clone();
         for def in blocks {
-            if self.tabs[i].scene.document.block_records.get(&def.name).is_some() {
+            if self.tabs[i]
+                .scene
+                .document
+                .block_records
+                .get(&def.name)
+                .is_some()
+            {
                 continue;
             }
             self.tabs[i]

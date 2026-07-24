@@ -1,6 +1,6 @@
-pub mod hit_test;
-pub mod selection_state;
 pub mod grip;
+pub mod hit_test;
+pub mod interaction_index;
 pub mod quadtree;
-pub mod wire_grid;
+pub mod selection_state;
 pub mod xclip;
