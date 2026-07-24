@@ -253,6 +253,10 @@ impl Scene {
             // ~6× the view height deep. Orthographic depth precision is linear,
             // so the wide range costs no z-fighting.
             depth_half_range: (view_height as f32 * 64.0).max(1.0),
+            // A restored view has no model AABB yet; `fit_depth_to_saved_extents`
+            // fills it in from $EXTMIN/$EXTMAX right after, so the near/far tracks
+            // the eye direction once the view is orbited.
+            model_bounds: None,
         })
     }
 

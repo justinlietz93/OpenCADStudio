@@ -48,7 +48,20 @@ pub struct Camera {
     /// as the user zooms. `0.0` means "unset" — the projection falls back to a
     /// distance-scaled range, whose precision collapses when zoomed out and
     /// makes coincident solids / meshes / wires flip draw order.
+    ///
+    /// Only a fallback now: when `model_bounds` is set, the near/far depth is
+    /// derived from it per frame (see [`Camera::ortho_depth_range`]).
     pub depth_half_range: f32,
+
+    /// Cached model AABB in world space, used to recompute the ortho near/far
+    /// depth for the CURRENT eye direction every frame. A frozen scalar range
+    /// (`depth_half_range`) is only correct for the orientation it was fitted
+    /// in: a 3-D drawing fitted straight-down (top view) has a shallow depth
+    /// span, but once orbited its width loads onto the eye axis and overruns
+    /// that span, clipping the drawing (#473). Re-projecting the box each frame
+    /// keeps near/far exactly as deep as the current view needs. `None` falls
+    /// back to `depth_half_range`.
+    pub model_bounds: Option<(Vec3, Vec3)>,
 }
 
 impl Default for Camera {
@@ -66,6 +79,7 @@ impl Default for Camera {
             yaw,
             pitch,
             depth_half_range: 0.0,
+            model_bounds: None,
         }
     }
 }
@@ -111,7 +125,14 @@ impl Camera {
         // `distance` the f32 depth buffer can no longer separate coincident
         // solids / meshes / wires, so they flip draw order (issue: meshes drew
         // in front of solids only when zoomed out).
-        let r = if self.depth_half_range > 0.0 {
+        let r = if let Some((min, max)) = self.model_bounds {
+            // Depth extent along the CURRENT eye direction, recomputed each
+            // frame so orbiting a 3-D drawing never clips it (#473): as the
+            // view tilts off top, the box's width rotates onto the eye axis and
+            // the span grows to match. Same tight, zoom-independent precision as
+            // a fitted scalar, but always oriented to the live view.
+            self.depth_extent_in_view(min, max)
+        } else if self.depth_half_range > 0.0 {
             self.depth_half_range
         } else {
             (self.distance * 1000.0).max(1.0)
@@ -387,6 +408,17 @@ impl Camera {
         out
     }
 
+    /// Half-extent of `min..max` along the current eye direction (with the
+    /// same 5% margin `ortho_depth_range` needs), measured from the target.
+    /// This is exactly what `distance ± r` has to contain to avoid clipping.
+    fn depth_extent_in_view(&self, min: Vec3, max: Vec3) -> f32 {
+        let depth_r = self
+            .bounds_in_view(min, max)
+            .iter()
+            .fold(0.0_f32, |m, c| m.max(c.z.abs()));
+        (depth_r * 1.05).max(1.0)
+    }
+
     /// Fit the camera to `min..max` — pose and depth both.
     ///
     /// Zoom and clipping are sized from DIFFERENT axes on purpose. The zoom must
@@ -421,16 +453,15 @@ impl Camera {
     /// saved view: that pose must not move, but its depth range still has to
     /// cover the model or geometry outside it is silently clipped away.
     pub fn fit_depth_to_bounds(&mut self, min: Vec3, max: Vec3) {
-        // Half-extent along the eye direction, measured from the target — that
-        // is exactly what `ortho_depth_range`'s `distance ± r` has to contain.
-        // Keeping it tied to the model (not to `distance`) also holds
-        // depth-buffer precision constant across zoom, so coincident solids /
-        // meshes / wires never flip draw order.
-        let depth_r = self
-            .bounds_in_view(min, max)
-            .iter()
-            .fold(0.0_f32, |m, c| m.max(c.z.abs()));
-        self.depth_half_range = (depth_r * 1.05).max(1.0);
+        // Cache the box so `ortho_depth_range` re-derives the near/far depth for
+        // the live eye direction every frame — orbiting off the fitted pose then
+        // never clips the drawing (#473). Keeping it tied to the model (not to
+        // `distance`) also holds depth-buffer precision constant across zoom, so
+        // coincident solids / meshes / wires never flip draw order.
+        self.model_bounds = Some((min, max));
+        // Also seed the scalar fallback for the fitted orientation, in case a
+        // later reader consults it before the next projection.
+        self.depth_half_range = self.depth_extent_in_view(min, max);
     }
 
     // ── ViewCube snap ─────────────────────────────────────────────────────
