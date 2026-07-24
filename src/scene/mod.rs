@@ -3973,9 +3973,11 @@ impl Scene {
     ) -> ([f32; 4], [f32; 4]) {
         use acadrust::types::Color;
         let bg = self.current_bg();
+        let on_l0 =
+            crate::scene::view::render::is_effective_layer_zero(&ins.common.layer);
         let child_ins_color = if ins.common.color == Color::ByBlock {
             parent_ins_color
-        } else if ins.common.layer == "0" && ins.common.color == Color::ByLayer {
+        } else if on_l0 && ins.common.color == Color::ByLayer {
             parent_l0
         } else {
             crate::scene::view::render::adapt_to_bg(
@@ -3987,7 +3989,7 @@ impl Scene {
                 bg,
             )
         };
-        let child_l0 = if ins.common.layer == "0" {
+        let child_l0 = if on_l0 {
             parent_l0
         } else {
             crate::scene::view::render::adapt_to_bg(
@@ -4013,9 +4015,10 @@ impl Scene {
         let (ins_color, l0_color) = inherit?;
         use acadrust::types::Color;
         let common = e.common();
+        let on_l0 = crate::scene::view::render::is_effective_layer_zero(&common.layer);
         let mut c = if common.color == Color::ByBlock {
             ins_color
-        } else if common.layer == "0" && common.color == Color::ByLayer {
+        } else if on_l0 && common.color == Color::ByLayer {
             // Inherit the insert layer's RGB but keep the solid's own alpha,
             // matching the wire/hatch path (render_style_for_block_sub).
             [l0_color[0], l0_color[1], l0_color[2], own_alpha]
@@ -5650,4 +5653,3 @@ mod delta_undo_tests {
         assert_eq!(ms_occurrences(&scene, copy_h), 1);
     }
 }
-

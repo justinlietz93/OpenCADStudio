@@ -756,7 +756,8 @@ pub(crate) fn tessellate_entity(
                         // they should inherit from the Dimension entity.
                         let sub_color_is_byblock =
                             sub.common().color == acadrust::types::Color::ByBlock;
-                        let sub_is_l0_bylayer = sub.common().layer == "0"
+                        let sub_is_l0_bylayer =
+                            view::render::is_effective_layer_zero(&sub.common().layer)
                             && sub.common().color == acadrust::types::Color::ByLayer;
                         let sub_wires = tessellate_entity(
                             document,
@@ -909,7 +910,8 @@ pub(crate) fn tessellate_entity(
                         };
                         let sub_color_is_byblock =
                             sub.common().color == acadrust::types::Color::ByBlock;
-                        let sub_is_l0_bylayer = sub.common().layer == "0"
+                        let sub_is_l0_bylayer =
+                            view::render::is_effective_layer_zero(&sub.common().layer)
                             && sub.common().color == acadrust::types::Color::ByLayer;
                         let mut placed = sub.clone();
                         {

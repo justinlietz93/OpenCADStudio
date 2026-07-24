@@ -918,6 +918,18 @@ pub(crate) fn layer_render_style(document: &CadDocument, layer_name: &str) -> In
     }
 }
 
+/// Whether a block child uses layer-0 inheritance semantics.
+///
+/// XREF merge keeps dependent layers distinct by namespacing them as
+/// `xref|layer`; its source layer `0` therefore becomes `xref|0` but must still
+/// inherit through the containing INSERT exactly like an unprefixed layer 0.
+pub(crate) fn is_effective_layer_zero(layer_name: &str) -> bool {
+    layer_name.eq_ignore_ascii_case("0")
+        || layer_name
+            .rsplit_once('|')
+            .is_some_and(|(_, dependent)| dependent.eq_ignore_ascii_case("0"))
+}
+
 /// Like `render_style_for` but resolves a block sub-entity's inherited
 /// properties: ByBlock inherits the INSERT's style, and (the layer-0 rule) a
 /// sub-entity on layer "0" with ByLayer properties inherits the INSERT's
@@ -934,7 +946,7 @@ pub(crate) fn render_style_for_block_sub(
 ) -> ([f32; 4], f32, [f32; 8], f32, u8) {
     let (color, pat_len, pat, lw_px, aci) = render_style_for(document, e);
     let common = e.common();
-    let on_l0 = common.layer == "0";
+    let on_l0 = is_effective_layer_zero(&common.layer);
 
     let final_color = if common.color == AcadColor::ByBlock {
         insert_color

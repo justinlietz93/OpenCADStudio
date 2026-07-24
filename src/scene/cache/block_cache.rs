@@ -531,7 +531,9 @@ fn build_nested_ref(
             nested_ins.common.line_weight,
             LineWeight::ByLayer | LineWeight::Default
         ),
-        layer_is_zero: nested_ins.common.layer == "0",
+        layer_is_zero: crate::scene::view::render::is_effective_layer_zero(
+            &nested_ins.common.layer,
+        ),
         l0,
         instance_offsets: array_offsets(nested_ins),
         clip_poly,
@@ -572,7 +574,7 @@ fn tessellate_sub_local(
     // Layer-0 rule: a child on layer "0" with ByLayer properties inherits the
     // INSERT's layer at expand time. Flag each ByLayer property so emit_wire
     // can override the cached (layer-0-resolved) value with the insert layer's.
-    let on_l0 = sub.common().layer == "0";
+    let on_l0 = crate::scene::view::render::is_effective_layer_zero(&sub.common().layer);
     let color_l0 = on_l0 && sub.common().color == AcadColor::ByLayer;
     let lt_l0 = on_l0 && {
         let lt = &sub.common().linetype;
@@ -1649,4 +1651,3 @@ fn array_offsets(ins: &acadrust::entities::Insert) -> Vec<[f64; 3]> {
     }
     offsets
 }
-

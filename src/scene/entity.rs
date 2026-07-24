@@ -983,11 +983,12 @@ impl Scene {
                         // mirroring expand_insert's nested resolution: ByBlock →
                         // parent source; layer-0 + ByLayer → parent layer-0
                         // target; else the nested insert's own resolved style.
+                        let on_l0 = crate::scene::view::render::is_effective_layer_zero(
+                            &nins.common.layer,
+                        );
                         let child_ins_color = if nins.common.color == Color::ByBlock {
                             sub_ins_color
-                        } else if nins.common.layer == "0"
-                            && nins.common.color == Color::ByLayer
-                        {
+                        } else if on_l0 && nins.common.color == Color::ByLayer {
                             sub_l0.color
                         } else {
                             crate::scene::view::render::render_style_for(
@@ -996,7 +997,7 @@ impl Scene {
                             )
                             .0
                         };
-                        let child_l0 = if nins.common.layer == "0" {
+                        let child_l0 = if on_l0 {
                             sub_l0
                         } else {
                             crate::scene::view::render::layer_render_style(
