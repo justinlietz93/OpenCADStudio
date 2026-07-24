@@ -120,6 +120,47 @@ fn tris_hit_depth(
     None
 }
 
+/// Screen-space area of the smallest SDF glyph quad containing `cursor`.
+///
+/// Block expansion batches same-style text runs into one [`WireModel`], so the
+/// wire AABB is the union of every run and may span large empty gaps (notably
+/// for XREFs). Glyph vertices retain the exact six-vertex quad boundaries after
+/// batching, letting picking stay tight without splitting the GPU batch.
+fn text_quad_hit_area(
+    cursor: Point,
+    verts: &[crate::scene::pipeline::text_gpu::TextVertex],
+    view_rot: Mat4,
+    eye: glam::DVec3,
+    bounds: Rectangle,
+) -> Option<f32> {
+    let mut best = f32::MAX;
+    for quad in verts.chunks_exact(6) {
+        // push_glyph_vertices emits BL, BR, TR, BL, TR, TL.
+        let mut screen = [Point::ORIGIN; 4];
+        for (dst, src) in screen.iter_mut().zip([0usize, 1, 2, 5]) {
+            let v = quad[src];
+            let world = glam::DVec3::new(
+                v.pos[0] as f64 + v.pos_low[0] as f64,
+                v.pos[1] as f64 + v.pos_low[1] as f64,
+                v.pos[2] as f64 + v.pos_low[2] as f64,
+            );
+            *dst = world_to_screen(world, view_rot, eye, bounds);
+        }
+        if point_in_polygon(cursor, &screen) {
+            let (mut min_x, mut min_y, mut max_x, mut max_y) =
+                (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+            for p in screen {
+                min_x = min_x.min(p.x);
+                min_y = min_y.min(p.y);
+                max_x = max_x.max(p.x);
+                max_y = max_y.max(p.y);
+            }
+            best = best.min((max_x - min_x) * (max_y - min_y));
+        }
+    }
+    (best < f32::MAX).then_some(best)
+}
+
 // ── Single-click hit test ─────────────────────────────────────────────────
 
 /// Return the `name` of the closest wire whose screen-space segments pass
@@ -254,34 +295,17 @@ pub fn click_hit<'a>(
         return Some(n);
     }
 
-    // SDF text renders as glyph quads, not strokes — its only pick target is
-    // the empty wire that carries the quads (`text_verts`) and the text's own
-    // tight AABB. Fall back to AABB containment so such text stays click-
-    // selectable, and use `text_verts` as the exact discriminator so only real
-    // text boxes qualify (never some other empty wire). Lowest priority — real
-    // edges and fills above always win. Prefer the tightest box so a click over
-    // overlapping text picks the smallest.
+    // SDF text renders as glyph quads, not strokes. Test those exact quads:
+    // block expansion may batch distant same-style text runs into one wire,
+    // whose union AABB includes empty space between them (#438). Lowest
+    // priority — real edges and fills above always win.
     let mut best_area = f32::MAX;
     let mut best_box: Option<&str> = None;
     for wire in wires {
-        if wire.text_verts.is_empty()
-            || !wire.points.is_empty()
-            || !wire.fill_tris.is_empty()
-            || wire.aabb == WireModel::UNBOUNDED_AABB
-        {
+        if wire.text_verts.is_empty() {
             continue;
         }
-        let [minx, miny, maxx, maxy] = wire.aabb;
-        let (mut sx0, mut sy0, mut sx1, mut sy1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for (cx, cy) in [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)] {
-            let s = world_to_screen(glam::DVec3::new(cx as f64, cy as f64, 0.0), view_rot, eye, bounds);
-            sx0 = sx0.min(s.x);
-            sx1 = sx1.max(s.x);
-            sy0 = sy0.min(s.y);
-            sy1 = sy1.max(s.y);
-        }
-        if cursor.x >= sx0 && cursor.x <= sx1 && cursor.y >= sy0 && cursor.y <= sy1 {
-            let area = (sx1 - sx0) * (sy1 - sy0);
+        if let Some(area) = text_quad_hit_area(cursor, &wire.text_verts, view_rot, eye, bounds) {
             if area < best_area {
                 best_area = area;
                 best_box = Some(wire.name.as_str());
@@ -353,33 +377,14 @@ pub fn click_hits_all<'a>(
             hits.push((CLICK_THRESHOLD_PX, &wire.name));
         }
     }
-    // SDF text: include a text whose box contains the cursor (an empty-stroke
-    // wire carrying glyph quads) so selection cycling steps through text too —
-    // the same discriminator/fallback `click_hit` uses. Ranked after real
-    // geometry (distance = the click threshold, above every proximity hit).
+    // SDF text: use the same exact glyph-quad test as `click_hit`; a batched
+    // text wire's union AABB may cover empty space between distant runs (#438).
+    // Ranked after real geometry (distance = the click threshold).
     for wire in wires {
-        if wire.text_verts.is_empty()
-            || !wire.points.is_empty()
-            || !wire.fill_tris.is_empty()
-            || wire.aabb == WireModel::UNBOUNDED_AABB
-        {
+        if wire.text_verts.is_empty() || hits.iter().any(|&(_, name)| name == wire.name) {
             continue;
         }
-        let [minx, miny, maxx, maxy] = wire.aabb;
-        let (mut sx0, mut sy0, mut sx1, mut sy1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for (cx, cy) in [(minx, miny), (maxx, miny), (maxx, maxy), (minx, maxy)] {
-            let s = world_to_screen(
-                glam::DVec3::new(cx as f64, cy as f64, 0.0),
-                view_rot,
-                eye,
-                bounds,
-            );
-            sx0 = sx0.min(s.x);
-            sx1 = sx1.max(s.x);
-            sy0 = sy0.min(s.y);
-            sy1 = sy1.max(s.y);
-        }
-        if cursor.x >= sx0 && cursor.x <= sx1 && cursor.y >= sy0 && cursor.y <= sy1 {
+        if text_quad_hit_area(cursor, &wire.text_verts, view_rot, eye, bounds).is_some() {
             hits.push((CLICK_THRESHOLD_PX, &wire.name));
         }
     }
