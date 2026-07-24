@@ -351,22 +351,94 @@ fn apply_grip(vp: &mut Viewport, grip_id: usize, apply: GripApply) {
             vp.center.z = p.z as f64;
         }
         (1..=4, GripApply::Absolute(p)) => {
-            let new_hw = (p.x as f64 - vp.center.x).abs();
-            let new_hh = (p.y as f64 - vp.center.y).abs();
-            if new_hw > 0.01 {
-                vp.width = new_hw * 2.0;
-            }
-            if new_hh > 0.01 {
-                let new_h = new_hh * 2.0;
-                // Keep scale constant: view_height must scale with the viewport height.
-                if vp.height > 1e-9 && vp.view_height.abs() > 1e-9 {
-                    vp.view_height = vp.view_height * (new_h / vp.height);
-                }
-                vp.height = new_h;
-            }
+            let hw = vp.width * 0.5;
+            let hh = vp.height * 0.5;
+            let opposite = match grip_id {
+                1 => (vp.center.x - hw, vp.center.y - hh),
+                2 => (vp.center.x + hw, vp.center.y - hh),
+                3 => (vp.center.x + hw, vp.center.y + hh),
+                4 => (vp.center.x - hw, vp.center.y + hh),
+                _ => unreachable!(),
+            };
+            resize_from_corners(vp, opposite, (p.x as f64, p.y as f64));
         }
         _ => {}
     }
+}
+
+/// Stretch a rectangular paper-space viewport by the corners captured by a
+/// crossing window. Bounds that have no captured corner stay anchored.
+pub fn stretch(
+    vp: &mut Viewport,
+    win_min: glam::DVec3,
+    win_max: glam::DVec3,
+    delta: glam::DVec3,
+) -> bool {
+    let hw = vp.width * 0.5;
+    let hh = vp.height * 0.5;
+    let (left, right) = (vp.center.x - hw, vp.center.x + hw);
+    let (bottom, top) = (vp.center.y - hh, vp.center.y + hh);
+    let inside =
+        |x: f64, y: f64| x >= win_min.x && x <= win_max.x && y >= win_min.y && y <= win_max.y;
+
+    let bottom_left = inside(left, bottom);
+    let bottom_right = inside(right, bottom);
+    let top_left = inside(left, top);
+    let top_right = inside(right, top);
+    if !(bottom_left || bottom_right || top_left || top_right) {
+        return false;
+    }
+
+    let moved_left = if bottom_left || top_left {
+        left + delta.x
+    } else {
+        left
+    };
+    let moved_right = if bottom_right || top_right {
+        right + delta.x
+    } else {
+        right
+    };
+    let moved_bottom = if bottom_left || bottom_right {
+        bottom + delta.y
+    } else {
+        bottom
+    };
+    let moved_top = if top_left || top_right {
+        top + delta.y
+    } else {
+        top
+    };
+    resize_from_corners(vp, (moved_left, moved_bottom), (moved_right, moved_top))
+}
+
+/// Rebuild center and size from two opposite corners while preserving viewport
+/// scale as its paper-space height changes.
+fn resize_from_corners(vp: &mut Viewport, a: (f64, f64), b: (f64, f64)) -> bool {
+    let new_width = (b.0 - a.0).abs();
+    let new_height = (b.1 - a.1).abs();
+    let mut changed = false;
+
+    if new_width > 0.01 {
+        let new_center_x = (a.0 + b.0) * 0.5;
+        changed |=
+            (vp.center.x - new_center_x).abs() > 1e-12 || (vp.width - new_width).abs() > 1e-12;
+        vp.center.x = new_center_x;
+        vp.width = new_width;
+    }
+    if new_height > 0.01 {
+        let old_height = vp.height;
+        let new_center_y = (a.1 + b.1) * 0.5;
+        changed |=
+            (vp.center.y - new_center_y).abs() > 1e-12 || (old_height - new_height).abs() > 1e-12;
+        vp.center.y = new_center_y;
+        if old_height > 1e-9 && vp.view_height.abs() > 1e-9 {
+            vp.view_height *= new_height / old_height;
+        }
+        vp.height = new_height;
+    }
+
+    changed
 }
 
 fn apply_transform(vp: &mut Viewport, t: &EntityTransform) {

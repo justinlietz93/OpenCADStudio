@@ -105,6 +105,18 @@ const SPREAD_UNITS: f32 = 1.5;
 /// built around. Scales with text height like the strokes themselves.
 const PEN_HALF_UNITS: f32 = 0.35;
 
+/// Nominal half-width of the SDF pen for a stroke glyph.
+///
+/// CPU exporters cannot sample the atlas, so they use this to stroke the same
+/// LFF/SHX centrelines at the thickness shown on screen.
+pub(crate) fn stroke_pen_half_units(bold: bool) -> f32 {
+    if bold {
+        PEN_HALF_UNITS * 1.7
+    } else {
+        PEN_HALF_UNITS
+    }
+}
+
 /// Upper bound on a single glyph tile's dimension (texels), a guard against a
 /// pathologically wide/tall glyph blowing up the atlas.
 const MAX_TILE_PX: u32 = 512;
@@ -264,11 +276,7 @@ impl GlyphAtlas {
             return *cached;
         }
         // Bold stroke glyphs bake with a wider pen band (same shapes, thicker).
-        let pen_half = if bold {
-            PEN_HALF_UNITS * 1.7
-        } else {
-            PEN_HALF_UNITS
-        };
+        let pen_half = stroke_pen_half_units(bold);
         let face = Face::resolve(family);
         let entry = face
             .glyph(ch)

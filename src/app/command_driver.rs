@@ -1677,6 +1677,10 @@ impl OpenCADStudio {
                                 stretched = true;
                             }
                         }
+                        acadrust::EntityType::Viewport(vp) => {
+                            stretched =
+                                crate::entities::viewport::stretch(vp, win_min, win_max, delta);
+                        }
                         acadrust::EntityType::Dimension(dim) => {
                             use acadrust::entities::Dimension;
                             // Move every definition point that falls inside the
