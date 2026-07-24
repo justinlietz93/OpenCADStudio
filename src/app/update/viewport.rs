@@ -981,7 +981,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     // to a tracking ray (and store the alignment so a typed
                     // distance can place a point along it — issue #69).
                     let otrack_hit = {
-                        let snap_world = self.tabs[i].snap_result.map(|s| s.world.as_vec3());
+                        let snap_world = self.tabs[i].snap_result.map(|s| s.world);
                         self.snapper.update_otrack_dwell(
                             snap_world,
                             &all_wires[..],
@@ -1009,16 +1009,17 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             } else {
                                 None
                             };
-                            let ucs = self.tabs[i].scene.viewcube_ucs_mat();
+                            let (_, ucs_x, ucs_y, _) = self.tabs[i].ucs_xform().axes();
                             self.snapper.otrack_snap(
-                                cursor_world.as_vec3(),
+                                cursor_world,
                                 view_rot,
                                 eye,
                                 bounds,
                                 step,
-                                self.last_point.map(|p| p.as_vec3()),
+                                self.last_point,
                                 self.ortho_mode && !is_window_corner,
-                                ucs,
+                                ucs_x,
+                                ucs_y,
                             )
                         } else {
                             None
@@ -1041,7 +1042,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             if let (Some(base), Some((dir, _))) =
                                 (self.last_point, self.snapper.parallel_ref)
                             {
-                                self.otrack_active = Some((base.as_vec3(), dir));
+                                self.otrack_active = Some((base, dir.as_dvec3()));
                             }
                             self.tabs[i].snap_result = Some(par);
                         }
@@ -1051,7 +1052,7 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                         let mut pt: glam::DVec3 = if let Some(h) = otrack_hit {
                             // Tracking alignment wins over the free cursor;
                             // ortho/polar don't re-constrain it.
-                            h.aligned.as_dvec3()
+                            h.aligned
                         } else {
                             // Snap runs in model space (viewport camera or the
                             // model/paper view), so the result is already model.
@@ -1364,39 +1365,21 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                     // point along the aligned direction (issue #69).
                     if let Some(h) = otrack_hit {
                         if !needs_entity {
-                            let far = 1e5_f32;
+                            let far = 1e5_f64;
                             let far_pos = h.base + h.dir * far;
                             let far_neg = h.base - h.dir * far;
-                            previews.push(crate::scene::WireModel {
-                                taper_widths: Vec::new(),
-                                world_width: 0.0,
-                                depth_override: None,
-                                fill_is_3d: false,
-                                pick_tris: Vec::new(),
-                                pick_tris_low: Vec::new(),
-            dash_from_start: false,
-            dash_align_end: None,
-            text_verts: Vec::new(),
-                                name: "__otrack_guide__".into(),
-                                points: vec![
+                            let mut guide = crate::scene::WireModel::solid_f64(
+                                "__otrack_guide__".into(),
+                                vec![
                                     [far_neg.x, far_neg.y, far_neg.z],
                                     [far_pos.x, far_pos.y, far_pos.z],
                                 ],
-                                points_low: Vec::new(),
-                                color: [0.2, 0.9, 0.5, 0.6],
-                                selected: false,
-                                aci: 0,
-                                pattern_length: 0.8,
-                                pattern: [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-                                line_weight_px: 1.0,
-                                snap_pts: vec![],
-                                tangent_geoms: vec![],
-                                key_vertices: vec![],
-                                aabb: crate::scene::WireModel::UNBOUNDED_AABB,
-                                plinegen: true,
-                                fill_tris: vec![],
-                                fill_tris_low: Vec::new(),
-                            });
+                                [0.2, 0.9, 0.5, 0.6],
+                                false,
+                            );
+                            guide.pattern_length = 0.8;
+                            guide.pattern = [0.5, -0.3, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+                            previews.push(guide);
                         }
                     }
                     self.tabs[i].scene.set_preview_wires(previews);
@@ -2056,14 +2039,23 @@ pub(super) fn on_tick(&mut self, t: Instant) -> Task<Message> {
                             } else {
                                 None
                             };
-                            let ucs = self.tabs[i].scene.viewcube_ucs_mat();
-                            self.snapper
-                                .otrack_snap(raw.as_vec3(), view_rot, eye, bounds, step, self.last_point.map(|p| p.as_vec3()), self.ortho_mode && !is_window_corner, ucs)
+                            let (_, ucs_x, ucs_y, _) = self.tabs[i].ucs_xform().axes();
+                            self.snapper.otrack_snap(
+                                raw,
+                                view_rot,
+                                eye,
+                                bounds,
+                                step,
+                                self.last_point,
+                                self.ortho_mode && !is_window_corner,
+                                ucs_x,
+                                ucs_y,
+                            )
                         } else {
                             None
                         };
                         if let Some(h) = otrack {
-                            pt = h.aligned.as_dvec3();
+                            pt = h.aligned;
                             if self.tabs[i].active_ucs.is_none() {
                                 pt.z = 0.0;
                             }

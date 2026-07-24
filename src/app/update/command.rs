@@ -295,10 +295,7 @@ pub(super) fn on_tab_close(&mut self, idx: usize) -> Task<Message> {
                     // (issue #69).
                     if let Some((base, dir)) = self.otrack_active {
                         if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
-                            // Typed distance along the tracking ray: keep the
-                            // magnitude exact in f64 (ray origin/dir are the
-                            // screen-space snapper's f32).
-                            let pt = base.as_dvec3() + dir.as_dvec3() * dist;
+                            let pt = base + dir * dist;
                             self.last_point = Some(pt);
                             self.dyn_user_reshaped = false;
                             self.sync_dyn_fields();

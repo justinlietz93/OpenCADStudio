@@ -483,10 +483,7 @@ impl OpenCADStudio {
                     .find_map(|f| f.buffer.clone())
                 {
                     if let Some(dist) = crate::app::expr_eval::eval_number(text.trim()) {
-                        // Distance is typed, so resolve in f64: the tracking ray
-                        // origin/dir come from the screen-space snapper (f32) but
-                        // the magnitude the user entered stays exact.
-                        let pt = base.as_dvec3() + dir.as_dvec3() * dist;
+                        let pt = base + dir * dist;
                         self.last_point = Some(pt);
                         for f in self.tabs[i].dyn_fields.iter_mut() {
                             f.buffer = None;

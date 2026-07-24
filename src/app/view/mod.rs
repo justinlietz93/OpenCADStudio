@@ -418,8 +418,8 @@ impl OpenCADStudio {
                     None
                 };
             let ost_project =
-                |w: glam::Vec3, view_rot: glam::Mat4, eye: glam::DVec3, ob: iced::Rectangle| {
-                    let ndc = view_rot.project_point3((w.as_dvec3() - eye).as_vec3());
+                |w: glam::DVec3, view_rot: glam::Mat4, eye: glam::DVec3, ob: iced::Rectangle| {
+                    let ndc = view_rot.project_point3((w - eye).as_vec3());
                     iced::Point::new(
                         ob.x + (ndc.x + 1.0) * 0.5 * ob.width,
                         ob.y + (1.0 - ndc.y) * 0.5 * ob.height,
@@ -446,7 +446,7 @@ impl OpenCADStudio {
                 match (otrack_proj, self.otrack_active) {
                     (Some((view_rot, eye, ob)), Some((base, _dir))) => {
                         let b = ost_project(base, view_rot, eye, ob);
-                        let a = ost_project(tab.last_cursor_world.as_vec3(), view_rot, eye, ob);
+                        let a = ost_project(tab.last_cursor_world, view_rot, eye, ob);
                         (b.x.is_finite() && a.x.is_finite()).then_some((b, a))
                     }
                     _ => None,
@@ -455,7 +455,7 @@ impl OpenCADStudio {
             let parallel_ref_marker: Option<iced::Point> =
                 match (otrack_proj, self.snapper.parallel_ref) {
                     (Some((view_rot, eye, ob)), Some((_, pt))) => {
-                        let s = ost_project(pt, view_rot, eye, ob);
+                        let s = ost_project(pt.as_dvec3(), view_rot, eye, ob);
                         (s.x.is_finite() && s.y.is_finite()).then_some(s)
                     }
                     _ => None,
