@@ -33,15 +33,15 @@ use iced::wgpu;
 /// `create_buffer_init` performs and avoids holding a second `Vec` worth of
 /// memory during upload — meaningful on cold open where wire buffers can run
 /// into the hundreds of MB.
-fn instance_buffer_mapped(
+fn instance_buffer_mapped<T: bytemuck::Pod>(
     device: &wgpu::Device,
     label: &str,
-    data: &[WireInstance],
+    data: &[T],
 ) -> wgpu::Buffer {
     let bytes: &[u8] = bytemuck::cast_slice(data);
     // wgpu rejects size-0 buffers; the renderer already guards `instance_count`
     // before issuing a draw, so a placeholder allocation is fine here.
-    let size = bytes.len().max(std::mem::size_of::<WireInstance>()) as u64;
+    let size = bytes.len().max(std::mem::size_of::<T>()) as u64;
     let buf = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some(label),
         size,
@@ -156,11 +156,13 @@ impl WireConst {
     }
 }
 
-// ── Web (WebGL2): self-contained fat instance (no vertex-stage storage) ─────
-#[cfg(target_arch = "wasm32")]
+// ── Packed compatibility instance (no vertex-stage storage) ────────────────
+//
+// Web always uses this layout. Native selects it at runtime for adapters whose
+// storage-buffer limits are insufficient, or when --compat-renderer is set.
 #[repr(C)]
 #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
-pub struct WireInstance {
+pub struct PackedWireInstance {
     pub pos_a: [f32; 3],
     pub pos_a_low: [f32; 3],
     pub pos_b: [f32; 3],
@@ -191,8 +193,7 @@ pub struct WireInstance {
     pub world_hw_b: f32,
 }
 
-#[cfg(target_arch = "wasm32")]
-impl WireInstance {
+impl PackedWireInstance {
     pub fn layout<'a>() -> wgpu::VertexBufferLayout<'a> {
         // Offsets come from the struct layout (must match the shader location
         // indices in wire.wgsl). Scalars ride in PACKED vec4/vec2 attributes —
@@ -201,24 +202,80 @@ impl WireInstance {
         // the web viewport drew no lines at all (#414). The struct fields are
         // laid out so each packed group is contiguous.
         const ATTRS: &[wgpu::VertexAttribute] = &[
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_a) as u64,          shader_location: 0,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_b) as u64,          shader_location: 1,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, color) as u64,          shader_location: 2,  format: wgpu::VertexFormat::Unorm8x4  },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_a) as u64,          shader_location: 0,  format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_b) as u64,          shader_location: 1,  format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, color) as u64,          shader_location: 2,  format: wgpu::VertexFormat::Unorm8x4  },
             // dists = (distance_a, distance_b, half_width, pattern_length)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, distance_a) as u64,     shader_location: 3,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pat0) as u64,           shader_location: 4,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pat1) as u64,           shader_location: 5,  format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, distance_a) as u64,     shader_location: 3,  format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pat0) as u64,           shader_location: 4,  format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pat1) as u64,           shader_location: 5,  format: wgpu::VertexFormat::Float32x4 },
             // misc = (draw_depth, align_end, align_total, world_half_width)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, draw_depth) as u64,     shader_location: 6,  format: wgpu::VertexFormat::Float32x4 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_a_low) as u64,      shader_location: 7,  format: wgpu::VertexFormat::Float32x3 },
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, pos_b_low) as u64,      shader_location: 8,  format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, draw_depth) as u64,     shader_location: 6,  format: wgpu::VertexFormat::Float32x4 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_a_low) as u64,      shader_location: 7,  format: wgpu::VertexFormat::Float32x3 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, pos_b_low) as u64,      shader_location: 8,  format: wgpu::VertexFormat::Float32x3 },
             // taper = (world_hw_a, world_hw_b)
-            wgpu::VertexAttribute { offset: std::mem::offset_of!(WireInstance, world_hw_a) as u64,     shader_location: 9,  format: wgpu::VertexFormat::Float32x2 },
+            wgpu::VertexAttribute { offset: std::mem::offset_of!(PackedWireInstance, world_hw_a) as u64,     shader_location: 9,  format: wgpu::VertexFormat::Float32x2 },
         ];
         wgpu::VertexBufferLayout {
-            array_stride: std::mem::size_of::<WireInstance>() as u64,
+            array_stride: std::mem::size_of::<PackedWireInstance>() as u64,
             step_mode: wgpu::VertexStepMode::Instance,
             attributes: ATTRS,
+        }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub type WireInstance = PackedWireInstance;
+
+/// Wire and hatch pipelines switch together: the fast path uses storage
+/// buffers; the compatibility path carries wire constants in packed vertex
+/// attributes and hatch data in a texture.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WirePipelineMode {
+    #[cfg(not(target_arch = "wasm32"))]
+    IndexedStorage,
+    Packed,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn select_native_pipeline(max_storage_buffers_per_stage: u32, forced: bool) -> WirePipelineMode {
+    const REQUIRED_STORAGE_BUFFERS_PER_STAGE: u32 = 5;
+    if forced || max_storage_buffers_per_stage < REQUIRED_STORAGE_BUFFERS_PER_STAGE {
+        WirePipelineMode::Packed
+    } else {
+        WirePipelineMode::IndexedStorage
+    }
+}
+
+impl WirePipelineMode {
+    pub fn select(device: &wgpu::Device) -> Self {
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = device;
+            Self::Packed
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            select_native_pipeline(
+                device.limits().max_storage_buffers_per_shader_stage,
+                crate::cli::gui_config().compat_renderer,
+            )
+        }
+    }
+
+    pub fn uses_storage(self) -> bool {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::IndexedStorage => true,
+            Self::Packed => false,
+        }
+    }
+
+    pub fn layout<'a>(self) -> wgpu::VertexBufferLayout<'a> {
+        match self {
+            #[cfg(not(target_arch = "wasm32"))]
+            Self::IndexedStorage => WireInstance::layout(),
+            Self::Packed => PackedWireInstance::layout(),
         }
     }
 }
@@ -244,7 +301,6 @@ pub struct WireGpu {
 /// finite segment). Pulled out so both the single-wire and batched paths share
 /// the same emission logic, and so the batched path can `par_iter` across
 /// wires on cold open.
-#[cfg(target_arch = "wasm32")]
 fn pack_color(color: [f32; 4]) -> [u8; 4] {
     [
         (color[0].clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
@@ -387,9 +443,12 @@ fn finite3(p: [f32; 3]) -> bool {
     p[0].is_finite() && p[1].is_finite() && p[2].is_finite()
 }
 
-/// Web: emit fat per-segment instances (each carries the wire's constants).
-#[cfg(target_arch = "wasm32")]
-fn emit_wire_instances(wire: &WireModel, color: [f32; 4], draw_depth: f32) -> Vec<WireInstance> {
+/// Emit packed per-segment instances (each carries the wire's constants).
+fn emit_wire_packed(
+    wire: &WireModel,
+    color: [f32; 4],
+    draw_depth: f32,
+) -> Vec<PackedWireInstance> {
     let color_u8 = pack_color(color);
     let pat0 = [wire.pattern[0], wire.pattern[1], wire.pattern[2], wire.pattern[3]];
     let pat1 = [wire.pattern[4], wire.pattern[5], wire.pattern[6], wire.pattern[7]];
@@ -402,14 +461,14 @@ fn emit_wire_instances(wire: &WireModel, color: [f32; 4], draw_depth: f32) -> Ve
     let (dists, align_end, align_total) = wire_distances(wire);
     let low = |i: usize| -> [f32; 3] { wire.points_low.get(i).copied().unwrap_or([0.0; 3]) };
     let tw = |i: usize| -> f32 { wire.taper_widths.get(i).copied().unwrap_or(0.0) * 0.5 };
-    let mut instances: Vec<WireInstance> = Vec::with_capacity(seg_count);
+    let mut instances: Vec<PackedWireInstance> = Vec::with_capacity(seg_count);
     for i in 0..seg_count {
         let a = wire.points[i];
         let b = wire.points[i + 1];
         if !finite3(a) || !finite3(b) {
             continue;
         }
-        instances.push(WireInstance {
+        instances.push(PackedWireInstance {
             pos_a: a,
             pos_a_low: low(i),
             pos_b: b,
@@ -556,9 +615,10 @@ impl WireGpu {
         mesh_edge: bool,
         const_bgl: Option<&wgpu::BindGroupLayout>,
     ) -> Vec<Self> {
-        const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if let Some(const_bgl) = const_bgl {
+            const MAX_INSTANCES: usize =
+                268_435_456 / std::mem::size_of::<WireInstance>();
             use crate::par::prelude::*;
             // Global `wire_id` = wire index; one shared WireConst buffer for all
             // chunks. Indexed `collect` preserves wire order (the pass relies on
@@ -585,8 +645,8 @@ impl WireGpu {
             if instances.is_empty() {
                 return vec![];
             }
-            let bg = const_bgl.map(|bgl| build_const_bind_group(device, bgl, &consts));
-            instances
+            let bg = build_const_bind_group(device, const_bgl, &consts);
+            return instances
                 .chunks(MAX_INSTANCES)
                 .map(|chunk| {
                     let buf = instance_buffer_mapped(device, "wire.run.ibuf", chunk);
@@ -594,42 +654,42 @@ impl WireGpu {
                         instance_buffer: buf,
                         instance_count: chunk.len() as u32,
                         is_3d_mesh_edge: mesh_edge,
-                        const_bind_group: bg.clone(),
+                        const_bind_group: Some(bg.clone()),
                     }
-                })
-                .collect()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = const_bgl;
-            let per: Vec<Vec<WireInstance>> = wires
-                .iter()
-                .map(|w| {
-                    let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
-                    emit_wire_instances(w, w.color, dd)
                 })
                 .collect();
-            let mut instances: Vec<WireInstance> =
-                Vec::with_capacity(per.iter().map(Vec::len).sum());
-            for mut v in per {
-                instances.append(&mut v);
-            }
-            if instances.is_empty() {
-                return vec![];
-            }
-            instances
-                .chunks(MAX_INSTANCES)
-                .map(|chunk| {
-                    let buf = instance_buffer_mapped(device, "wire.run.ibuf", chunk);
-                    Self {
-                        instance_buffer: buf,
-                        instance_count: chunk.len() as u32,
-                        is_3d_mesh_edge: mesh_edge,
-                        const_bind_group: None,
-                    }
-                })
-                .collect()
         }
+
+        let _ = const_bgl;
+        const MAX_PACKED_INSTANCES: usize =
+            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        let per: Vec<Vec<PackedWireInstance>> = wires
+            .iter()
+            .map(|w| {
+                let dd = if mesh_edge { 0.0 } else { wire_draw_depth(w, depth_map) };
+                emit_wire_packed(w, w.color, dd)
+            })
+            .collect();
+        let mut instances: Vec<PackedWireInstance> =
+            Vec::with_capacity(per.iter().map(Vec::len).sum());
+        for mut v in per {
+            instances.append(&mut v);
+        }
+        if instances.is_empty() {
+            return vec![];
+        }
+        instances
+            .chunks(MAX_PACKED_INSTANCES)
+            .map(|chunk| {
+                let buf = instance_buffer_mapped(device, "wire.run.compat.ibuf", chunk);
+                Self {
+                    instance_buffer: buf,
+                    instance_count: chunk.len() as u32,
+                    is_3d_mesh_edge: mesh_edge,
+                    const_bind_group: None,
+                }
+            })
+            .collect()
     }
 
     /// Merge multiple WireModels into GPU instance buffers, chunked to fit the
@@ -645,11 +705,11 @@ impl WireGpu {
         if total_segs == 0 {
             return vec![];
         }
-        // GPU max buffer size is 256 MB; chunk to stay within the limit.
-        const MAX_INSTANCES: usize = 268_435_456 / std::mem::size_of::<WireInstance>();
-
         #[cfg(not(target_arch = "wasm32"))]
-        {
+        if let Some(const_bgl) = const_bgl {
+            // GPU max buffer size is 256 MB; chunk to stay within the limit.
+            const MAX_INSTANCES: usize =
+                268_435_456 / std::mem::size_of::<WireInstance>();
             use crate::par::prelude::*;
             // `block_cache` groups wires by style upstream; order within a batch
             // doesn't affect correctness, but indexed `collect` gives each wire a
@@ -671,8 +731,8 @@ impl WireGpu {
             if instances.is_empty() {
                 return vec![];
             }
-            let bg = const_bgl.map(|bgl| build_const_bind_group(device, bgl, &consts));
-            instances
+            let bg = build_const_bind_group(device, const_bgl, &consts);
+            return instances
                 .chunks(MAX_INSTANCES)
                 .enumerate()
                 .map(|(i, chunk)| {
@@ -682,35 +742,35 @@ impl WireGpu {
                         instance_buffer,
                         instance_count: chunk.len() as u32,
                         is_3d_mesh_edge: false,
-                        const_bind_group: bg.clone(),
+                        const_bind_group: Some(bg.clone()),
                     }
                 })
-                .collect()
-        }
-        #[cfg(target_arch = "wasm32")]
-        {
-            let _ = const_bgl;
-            let instances: Vec<WireInstance> = wires
-                .iter()
-                .flat_map(|w| emit_wire_instances(w, w.color, wire_draw_depth(w, depth_map)))
                 .collect();
-            if instances.is_empty() {
-                return vec![];
-            }
-            instances
-                .chunks(MAX_INSTANCES)
-                .enumerate()
-                .map(|(i, chunk)| {
-                    let label = format!("wire.batch.ibuf.{i}");
-                    let instance_buffer = instance_buffer_mapped(device, &label, chunk);
-                    Self {
-                        instance_buffer,
-                        instance_count: chunk.len() as u32,
-                        is_3d_mesh_edge: false,
-                        const_bind_group: None,
-                    }
-                })
-                .collect()
         }
+
+        let _ = const_bgl;
+        const MAX_PACKED_INSTANCES: usize =
+            268_435_456 / std::mem::size_of::<PackedWireInstance>();
+        let instances: Vec<PackedWireInstance> = wires
+            .iter()
+            .flat_map(|w| emit_wire_packed(w, w.color, wire_draw_depth(w, depth_map)))
+            .collect();
+        if instances.is_empty() {
+            return vec![];
+        }
+        instances
+            .chunks(MAX_PACKED_INSTANCES)
+            .enumerate()
+            .map(|(i, chunk)| {
+                let label = format!("wire.batch.compat.ibuf.{i}");
+                let instance_buffer = instance_buffer_mapped(device, &label, chunk);
+                Self {
+                    instance_buffer,
+                    instance_count: chunk.len() as u32,
+                    is_3d_mesh_edge: false,
+                    const_bind_group: None,
+                }
+            })
+            .collect()
     }
 }

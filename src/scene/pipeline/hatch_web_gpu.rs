@@ -1,16 +1,14 @@
-// WebGL2 hatch renderer — texture-backed, UNCAPPED (wasm only).
+// Storage-free hatch renderer — texture-backed, UNCAPPED.
 //
-// WebGL2 has no storage buffers, so the batched storage-buffer renderer
-// (hatch_gpu.rs + hatch.wgsl) is disabled on wasm and real hatch fills never
-// rendered on the web build (issue #204). This per-hatch renderer reuses the
-// WebGL2-safe hatch algorithm (see wipeout.wgsl / hatch_web.wgsl) but packs the
+// WebGL2 has no storage buffers; some native adapters also expose insufficient
+// limits. This per-hatch renderer reuses the WebGL2-safe hatch algorithm (see
+// wipeout.wgsl / hatch_web.wgsl) but packs the
 // variable-length boundary / family / dash arrays into ONE RGBA32F data texture
 // read via textureLoad — removing the MAX_FAMILIES / MAX_HATCH_BOUNDARY_VERTS /
 // MAX_DASHES caps of the uniform (WipeoutGpu) path. Every hatch type — solid,
-// gradient, and arbitrarily complex line patterns — renders on the web.
+// gradient, and arbitrarily complex line patterns — renders in compat mode.
 //
-// Native (hatch_gpu.rs) and the wipeout mask renderer (wipeout_gpu.rs) are
-// untouched; this module is compiled only for wasm32.
+// The fast native path remains hatch_gpu.rs; wipeout masks use wipeout_gpu.rs.
 
 use crate::scene::model::hatch_model::{HatchModel, HatchPattern};
 use iced::wgpu;

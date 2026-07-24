@@ -50,6 +50,11 @@ pub struct Cli {
     #[arg(long, visible_alias = "no-gpu")]
     pub safe_mode: bool,
 
+    /// Force the packed renderer path that avoids shader storage buffers.
+    /// Normally selected automatically for adapters with insufficient limits.
+    #[arg(long)]
+    pub compat_renderer: bool,
+
     /// Run the headless JSON automation server (stdin/stdout, or --port).
     #[arg(long)]
     pub serve: bool,
@@ -90,6 +95,8 @@ pub struct GuiConfig {
     pub new: bool,
     /// Saving disabled for this session.
     pub read_only: bool,
+    /// Force storage-buffer-free wire and hatch pipelines.
+    pub compat_renderer: bool,
     /// Command lines to run once the editor is up.
     pub script_lines: Vec<String>,
 }
