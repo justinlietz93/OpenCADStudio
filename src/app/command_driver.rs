@@ -910,10 +910,10 @@ impl OpenCADStudio {
                 // style crosses Dimension / Leader / Tolerance.
                 let src_clone = self.tabs[i].scene.document.get_entity(src).cloned();
                 let transparency = src_clone.as_ref().map(|e| e.common().transparency.clone());
-                // Dimension-style OVERRIDES ride the ACAD_DSTYLE xdata record;
-                // matching replicates the source's record (or clears the
-                // destination's when the source has none).
-                let dstyle_xdata: Option<Vec<acadrust::xdata::XDataValue>> = src_clone
+                // Dimension-style overrides ride the ACAD record, identified
+                // by a leading DSTYLE string. Matching replicates that payload
+                // (or clears the destination when the source has none).
+                let dstyle_xdata: Option<Vec<(i16, acadrust::xdata::XDataValue)>> = src_clone
                     .as_ref()
                     .filter(|e| {
                         matches!(
@@ -921,8 +921,7 @@ impl OpenCADStudio {
                             acadrust::EntityType::Dimension(_) | acadrust::EntityType::Leader(_)
                         )
                     })
-                    .and_then(|e| e.common().extended_data.get_record("ACAD_DSTYLE"))
-                    .map(|r| r.values.clone());
+                    .map(|e| crate::entities::dim_override::pairs(&e.common().extended_data));
 
                 if let Some((layer, color, linetype, lt_scale, lw)) = props {
                     self.push_undo_snapshot(i, "MATCHPROP");
@@ -944,9 +943,9 @@ impl OpenCADStudio {
                                 match_special_props(se, e);
                             }
                         }
-                        // Dim-style overrides (ACAD_DSTYLE) follow the style
-                        // for dimension / leader destinations — through
-                        // set_entity_xdata so no stale raw record survives.
+                        // Dim-style overrides follow the style for dimension /
+                        // leader destinations — through set_entity_xdata so no
+                        // stale raw record survives.
                         if dstyle_xdata.is_some()
                             || matches!(
                                 self.tabs[i].scene.document.get_entity(*h),
@@ -969,11 +968,10 @@ impl OpenCADStudio {
                                         | acadrust::EntityType::Leader(_)
                                 )
                             ) {
-                                crate::scene::view::dispatch::set_entity_xdata(
+                                crate::entities::dim_override::replace(
                                     &mut self.tabs[i].scene.document,
                                     *h,
-                                    "ACAD_DSTYLE",
-                                    dstyle_xdata.clone(),
+                                    dstyle_xdata.clone().unwrap_or_default(),
                                 );
                             }
                         }
@@ -2931,4 +2929,3 @@ fn match_special_props(src: &acadrust::EntityType, dst: &mut acadrust::EntityTyp
         dm.property_override_flags = sm.property_override_flags;
     }
 }
-

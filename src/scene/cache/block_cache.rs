@@ -1306,6 +1306,49 @@ fn resolve_wire_color(lw: &LocalWire, ctx: &ExpandCtx) -> [f32; 4] {
     }
 }
 
+/// Effective linetype scale along this wire after an INSERT transform.
+///
+/// A non-uniform INSERT has no single global scale. Weight each segment by its
+/// local length, producing the exact factor for a line and a stable
+/// path-weighted approximation for a polyline or tessellated curve.
+fn transformed_wire_length_scale(lw: &LocalWire, xform: &Transform) -> f32 {
+    let mut local_length = 0.0_f64;
+    let mut transformed_length = 0.0_f64;
+    let mut previous: Option<Vector3> = None;
+
+    for (index, point) in lw.points.iter().enumerate() {
+        if !point.iter().all(|v| v.is_finite()) {
+            previous = None;
+            continue;
+        }
+        let low = lw.points_low.get(index).copied().unwrap_or([0.0; 3]);
+        let current = Vector3::new(
+            point[0] as f64 + low[0] as f64,
+            point[1] as f64 + low[1] as f64,
+            point[2] as f64 + low[2] as f64,
+        );
+        if let Some(prev) = previous {
+            let delta = current - prev;
+            let segment_length = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+            if segment_length > 1e-12 {
+                let transformed = xform.matrix.transform_direction(delta);
+                local_length += segment_length;
+                transformed_length += (transformed.x * transformed.x
+                    + transformed.y * transformed.y
+                    + transformed.z * transformed.z)
+                    .sqrt();
+            }
+        }
+        previous = Some(current);
+    }
+
+    if local_length > 1e-12 && transformed_length.is_finite() {
+        (transformed_length / local_length) as f32
+    } else {
+        1.0
+    }
+}
+
 fn emit_wire(
     lw: &LocalWire,
     accum_xform: &Transform,
@@ -1338,8 +1381,17 @@ fn emit_wire(
     } else {
         lw.line_weight_px
     };
-    let final_pat_len = final_pat_len * ctx.pslt_factor;
-    let final_pat = final_pat.map(|v| v * ctx.pslt_factor);
+
+    // Pattern distances are stored in block-local units. Scale them by the
+    // wire's actual path-length ratio so uniform and non-uniform INSERTs both
+    // stay dimensionally consistent with their transformed geometry.
+    let pattern_scale = if final_pat_len > 0.0 {
+        transformed_wire_length_scale(lw, accum_xform)
+    } else {
+        1.0
+    };
+    let final_pat_len = final_pat_len * ctx.pslt_factor * pattern_scale;
+    let final_pat = final_pat.map(|v| v * ctx.pslt_factor * pattern_scale);
 
     // A wide polyline's band width is baked in block-local units; scale it by
     // the insert transform so the shader band matches the scaled geometry.
